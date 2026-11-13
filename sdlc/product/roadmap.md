@@ -3,7 +3,7 @@ Updated: 2026-11-13 · Architecture lock: none · Schema lock: none
 
 | # | Feature slug | One-line intent | Product metric | Depends on | Touches (entities / screens / shared code) | Arch change? | Batch | Release | Status |
 |---|---|---|---|---|---|---|---|---|---|
-| 01 | walking-skeleton | Expo app (Android + web) with sign-in, a tenant-scoped home screen, base tenant/membership schema + RLS, CI + regression workflow + evidence, deployed to dev | — | — | tenants, memberships, auth, app shell, CI | yes | — | R1 | planned |
+| 01 | walking-skeleton | Expo app (Android + web) with sign-in, a tenant-scoped home screen, base tenant/membership schema + RLS, CI + regression workflow + evidence, deployed to dev | — | — | tenants, memberships, auth, app shell, CI | yes | — | R1 | in-progress |
 | 02 | tenancy-and-roles | Roles + RBAC; Unit Admin invites and deactivates supervisors; audit-event base; denied cross-tenant access is auditable (FR-02, AC-22) | enabler | 01 | users, memberships, audit_event, user-admin screens | yes | — | R1 | planned |
 | 03 | tenant-console | Super Admin web console: register/activate/suspend tenants, create the first Unit Admin, plan status, platform audit; no routine access to tenant operational data (FR-01) | enabler (pilot + tenants 2–3) | 02 | tenants, platform admin screens, audit_event | no | — | R1 | planned |
 | 04 | plant-masters | Unit Admin manages sites/lines, machines, products and benchmark targets with effective dates (FR-03). **Decides target basis + product changeover** | Target visibility | 02 | site, line, machine, product, benchmark, admin screens | no | — | R1 | planned |
