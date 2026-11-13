@@ -1,5 +1,5 @@
 # Roadmap: MouldTrack
-Updated: 2026-11-13 · Architecture lock: none · Schema lock: none
+Updated: 2026-11-13 · Architecture lock: 01-walking-skeleton · Schema lock: 01-walking-skeleton
 
 | # | Feature slug | One-line intent | Product metric | Depends on | Touches (entities / screens / shared code) | Arch change? | Batch | Release | Status |
 |---|---|---|---|---|---|---|---|---|---|
