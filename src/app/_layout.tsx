@@ -3,10 +3,12 @@ import { ActivityIndicator, Text } from 'react-native';
 import { Button, Screen, colors } from '@/components/ui';
 import { getEnv } from '@/lib/env';
 import { MESSAGES } from '@/lib/errors';
+import { initSentry } from '@/lib/sentry';
 import { SessionProvider, useSession } from '@/lib/session-provider';
 import { supabase } from '@/lib/supabase';
 
 const env = getEnv();
+initSentry(env);
 
 function Gate() {
   const { status, refresh } = useSession();

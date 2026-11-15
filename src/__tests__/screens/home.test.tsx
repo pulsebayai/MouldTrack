@@ -3,6 +3,8 @@ import Home from '@/app/(app)/home';
 import NoAccess from '@/app/no-access';
 import { renderWithSession } from '@/test/render-with-session';
 
+jest.mock('@/lib/sentry', () => ({ sendTestError: jest.fn() }));
+
 const ctx = { user: { id: 'u1', email: 'e2e-sup-a@example.test' }, tenant: { name: 'e2e org A' }, role: 'supervisor' as const };
 
 describe('Home screen', () => {
@@ -28,6 +30,19 @@ describe('Home screen', () => {
     await fireEvent.press(screen.getByTestId('sign-out'));
     await waitFor(() => expect(value.client.auth.signOut).toHaveBeenCalled());
     await waitFor(() => expect(value.refresh).toHaveBeenCalled());
+  });
+});
+
+describe('Sentry test button (AC-13)', () => {
+  it('is shown only in development and reports a test error', async () => {
+    const { sendTestError } = jest.requireMock('@/lib/sentry');
+    await renderWithSession(<Home />, { ctx, appEnv: 'development' });
+    await fireEvent.press(screen.getByTestId('send-test-error'));
+    expect(sendTestError).toHaveBeenCalled();
+  });
+  it.each(['local', 'staging', 'production'] as const)('is hidden in %s', async (appEnv) => {
+    await renderWithSession(<Home />, { ctx, appEnv });
+    expect(screen.queryByTestId('send-test-error')).toBeNull();
   });
 });
 

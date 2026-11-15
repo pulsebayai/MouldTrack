@@ -1,8 +1,9 @@
 import Constants from 'expo-constants';
 import { Text, View } from 'react-native';
 import { SignOutButton } from '@/components/sign-out-button';
-import { Screen, colors } from '@/components/ui';
+import { Button, Screen, colors } from '@/components/ui';
 import type { AppEnv } from '@/lib/env';
+import { sendTestError } from '@/lib/sentry';
 import { roleLabel } from '@/lib/session';
 import { useSession } from '@/lib/session-provider';
 
@@ -34,6 +35,9 @@ export default function Home() {
       </Text>
       <Text style={{ fontSize: 15, color: colors.muted }}>{ctx.user.email}</Text>
       <SignOutButton />
+      {appEnv === 'development' ? (
+        <Button title="Send test error" variant="secondary" testID="send-test-error" onPress={sendTestError} />
+      ) : null}
       <Text style={{ fontSize: 12, color: colors.muted }}>Version {Constants.expoConfig?.version ?? '0.0.0'}</Text>
     </Screen>
   );
