@@ -1,0 +1,14 @@
+# AC-3 (Android): sign-out returns to sign-in.
+appId: com.pulsebayai.mouldtrack
+name: sign-out
+---
+- launchApp: { clearState: true }
+- tapOn: { id: "email" }
+- inputText: "e2e-admin-a@example.test"
+- tapOn: { id: "password" }
+- inputText: ${PASSWORD}
+- hideKeyboard
+- tapOn: { id: "sign-in-submit" }
+- assertVisible: "Role: Unit Admin"
+- tapOn: { id: "sign-out" }
+- assertVisible: { id: "sign-in-submit" }

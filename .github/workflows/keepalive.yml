@@ -1,0 +1,22 @@
+# Keeps the Free-plan STAGING project from pausing (7 days idle). Read-only; skips if staging secrets are absent.
+name: keepalive
+
+on:
+  schedule:
+    - cron: '30 3 * * 1' # Mondays 09:00 IST
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    env:
+      URL: ${{ secrets.STAGING_SUPABASE_URL }}
+      KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+    steps:
+      - run: |
+          if [ -z "$URL" ] || [ -z "$KEY" ]; then echo "staging secrets not set yet; skipping"; exit 0; fi
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H "apikey: $KEY" "$URL/auth/v1/health")
+          echo "staging auth health: HTTP $code"; [ "$code" = "200" ]
