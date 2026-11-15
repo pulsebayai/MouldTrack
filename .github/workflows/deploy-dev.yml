@@ -73,5 +73,5 @@ jobs:
           done
           echo "HTTP $code"
           { echo '### Response headers (step 9 decision input)'; echo '```'; curl -sI "$url" | grep -iE '^(HTTP|content-security-policy|x-content-type-options|referrer-policy|strict-transport-security|x-frame-options|permissions-policy|server|cache-control)'; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-          curl -sI "$url" | grep -iE '^(HTTP|content-security-policy|x-content-type-options|referrer-policy|strict-transport-security|x-frame-options|permissions-policy|server)'
+          for p in / /sign-in /home /_expo/.routes.json; do echo "--- $p"; curl -sI "$url$p" | grep -viE '^(date|cf-ray|alt-svc|nel|report-to|set-cookie):'; done
           [ "$code" = "200" ]

@@ -46,6 +46,12 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "owner": "mouldtrack",
+    "extra": {
+      "eas": {
+        "projectId": "5783caa9-ede2-4e2e-b7b6-258727f59dfa"
+      }
     }
   }
 }
