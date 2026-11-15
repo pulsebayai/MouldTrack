@@ -1,0 +1,147 @@
+# PR CI — full suite except Android e2e (owner exception, architecture.md §Release & regression policy 1).
+# Uses NO secrets: every DB/e2e job runs its own ephemeral Supabase built only from supabase/migrations.
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+  # Local Supabase only (CLI defaults); never hosted values here.
+  SUPABASE_EXCLUDE: studio,imgproxy,edge-runtime,logflare,vector,realtime,storage-api,postgres-meta
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          predicate-quantifier: every
+          filters: |
+            code:
+              - '**'
+              - '!sdlc/**'
+              - '!**/*.md'
+
+  static:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      EXPO_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
+      EXPO_PUBLIC_SUPABASE_ANON_KEY: build-only-placeholder
+      EXPO_PUBLIC_APP_ENV: local
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '${{ env.NODE_VERSION }}', cache: npm }
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-static
+          path: test-results/
+          retention-days: 90
+          if-no-files-found: warn
+
+  db:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '${{ env.NODE_VERSION }}', cache: npm }
+      - run: npm ci
+      - name: Start ephemeral Supabase (migrations + seed only)
+        run: npx supabase start -x "$SUPABASE_EXCLUDE"
+      - name: pgTAP (RLS / tenant isolation)
+        run: |
+          mkdir -p test-results
+          set -o pipefail
+          npx supabase test db 2>&1 | tee test-results/db.tap
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-db
+          path: test-results/
+          retention-days: 90
+          if-no-files-found: warn
+
+  e2e-web:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '${{ env.NODE_VERSION }}', cache: npm }
+      - run: npm ci
+      - name: Start ephemeral Supabase (migrations + seed only)
+        run: npx supabase start -x "$SUPABASE_EXCLUDE"
+      - run: bash scripts/ci-supabase-env.sh
+      - name: Build web
+        run: npx expo export -p web --output-dir dist
+      - run: npx playwright install --with-deps chromium
+      - name: Playwright (e2e + smoke)
+        env:
+          CI: 'true'
+          BASE_URL: http://localhost:8081
+        run: npx playwright test
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-e2e-web
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 90
+          if-no-files-found: warn
+
+  summary:
+    needs: [changes, static, db, e2e-web]
+    if: always() && needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '${{ env.NODE_VERSION }}', cache: npm }
+      - run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@v4
+        with: { path: evidence, pattern: 'results-*' }
+      - run: node scripts/regression-summary.mjs evidence --title "PR CI evidence" --env ci-ephemeral >> "$GITHUB_STEP_SUMMARY"
+
+  # Single required check for branch protection. Skipped suites (docs-only) count as success.
+  ci-ok:
+    needs: [changes, static, db, e2e-web]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required jobs
+        run: |
+          echo '${{ toJSON(needs) }}' > needs.json
+          if grep -Eq '"result": "(failure|cancelled)"' needs.json; then
+            echo "A required job failed or was cancelled"; cat needs.json; exit 1
+          fi
+          echo "ok (code changed: ${{ needs.changes.outputs.code }})"
