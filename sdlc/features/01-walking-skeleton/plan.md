@@ -71,6 +71,7 @@ All AC-1..13 mapped to green tests/runs in the PR table; full PR CI green; one d
 - Step 6: screen tests live in `src/__tests__/screens/` (files under `src/app/` become routes). Session state via `SessionProvider` (`src/lib/session-provider.tsx`) driven by Supabase `onAuthStateChange` incl. `INITIAL_SESSION` (lint rule forbids setState directly in effects; deferred with setTimeout per Supabase guidance). Scaffold placeholder test `harness.test.tsx` removed because the placeholder screen it rendered no longer exists; superseded by screen tests (no behaviour test was weakened).
 - Step 6 (device): the MouldTrack folder appears to be iCloud-synced (a `dist 2` conflict copy appeared and empty `dist/` cannot be removed). `build` now takes `WEB_DIST` (default `dist`); local runs export outside the folder. `dist*/` gitignored.
 - Step 7: smoke proven early in the cloud workspace against the real web export (system Chrome; Playwright CDN blocked): 2 passed, header test `fixme` until step 9. `auth.spec.ts` (8 tests) needs local Supabase → proven in CI step 8. Added devDependency `serve` and script `serve:web`; Playwright `webServer` starts it for localhost targets.
+- Owner decision (2026-11-15): project stays in `~/Documents/Projects/MouldTrack` (iCloud-synced, same as CA Document Vault). Mitigations: build output goes outside the folder (`WEB_DIST`), `node_modules` and `dist*/` gitignored; on the Mac use `node_modules.nosync` + symlink `node_modules` → it if installing locally (iCloud skips `.nosync`).
 
 ## Session log
 ### 2026-11-13
