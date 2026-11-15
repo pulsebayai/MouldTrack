@@ -28,7 +28,8 @@ test.describe('Smoke (prod-safe)', () => {
     expect(h['content-security-policy']).toContain("default-src 'self'");
     expect(h['content-security-policy']).toContain("frame-ancestors 'none'");
     expect(h['referrer-policy']).toBe('strict-origin-when-cross-origin');
-    expect(h['x-frame-options']).toBe('DENY');
+    // EAS Hosting converts X-Frame-Options into the CSP frame-ancestors directive (asserted above).
+    expect(h['permissions-policy']).toContain('microphone=()');
     expect(h['strict-transport-security']).toContain('max-age=');
   });
 });
