@@ -5,10 +5,6 @@ name: deploy-dev
 on:
   push:
     branches: [main]
-  # TEMPORARY (plan step 9 proof before merge; remove in step 13): workflow_dispatch only works once the file is on main.
-  pull_request:
-    branches: [main]
-    paths: ['.github/workflows/deploy-dev.yml', 'eas.json', 'app.json']
   workflow_dispatch:
 
 permissions:
