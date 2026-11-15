@@ -12,3 +12,5 @@ test-results/
 playwright-report/
 supabase/.temp/
 Requirment desciption/
+dist*/
+.dist-stale/

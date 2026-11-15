@@ -47,7 +47,7 @@
     "test:db": "supabase test db",
     "test:e2e": "playwright test",
     "test:e2e:android": "maestro test e2e/maestro",
-    "build": "expo export -p web && bash scripts/android-prebuild-check.sh",
+    "build": "expo export -p web --output-dir ${WEB_DIST:-dist} && bash scripts/android-prebuild-check.sh",
     "fixtures:reset": "tsx scripts/fixtures-reset.ts"
   },
   "private": true,

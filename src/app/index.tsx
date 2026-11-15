@@ -1,9 +1,7 @@
-import { Text, View } from 'react-native';
+import { Redirect } from 'expo-router';
+import { routeFor, useSession } from '@/lib/session-provider';
 
 export default function Index() {
-  return (
-    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-      <Text>MouldTrack</Text>
-    </View>
-  );
+  const { ctx } = useSession();
+  return <Redirect href={routeFor(ctx)} />;
 }
