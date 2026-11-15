@@ -18,13 +18,17 @@ test.describe('Smoke (prod-safe)', () => {
     await expect(page).toHaveURL(/\/sign-in$/);
   });
 
-  // Header expectations depend on what EAS Hosting supports (plan step 9 decision point).
-  test.fixme('security headers are present (enabled after plan step 9)', async ({ request }) => {
+  // Security headers come from EAS Hosting (expo-router plugin `headers` in app.json, static output).
+  // The local static server used in PR CI doesn't send them, so this runs against hosted targets only.
+  test('security headers are present on hosted targets', async ({ request, baseURL }) => {
+    test.skip(/localhost|127\.0\.0\.1/.test(baseURL ?? ''), 'headers are set by EAS Hosting, not the local static server');
     const res = await request.get('/');
     const h = res.headers();
     expect(h['x-content-type-options']).toBe('nosniff');
-    expect(h['content-security-policy']).toBeTruthy();
-    expect(h['referrer-policy']).toBeTruthy();
-    expect(h['strict-transport-security']).toBeTruthy();
+    expect(h['content-security-policy']).toContain("default-src 'self'");
+    expect(h['content-security-policy']).toContain("frame-ancestors 'none'");
+    expect(h['referrer-policy']).toBe('strict-origin-when-cross-origin');
+    expect(h['x-frame-options']).toBe('DENY');
+    expect(h['strict-transport-security']).toContain('max-age=');
   });
 });

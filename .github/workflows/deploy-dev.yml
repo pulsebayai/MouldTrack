@@ -42,6 +42,7 @@ jobs:
         run: |
           if [ -z "$(jq -r '.expo.extra.eas.projectId // empty' app.json)" ]; then
             npx --yes $EAS_CLI init --non-interactive --force
+            echo "EAS_PROJECT_ID=$(jq -r '.expo.extra.eas.projectId' app.json) OWNER=$(jq -r '.expo.owner // "n/a"' app.json)"
             echo "### EAS projectId (commit into app.json → expo.extra.eas.projectId)" >> "$GITHUB_STEP_SUMMARY"
             echo "\`$(jq -r '.expo.extra.eas.projectId' app.json)\` owner: \`$(jq -r '.expo.owner // "n/a"' app.json)\`" >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -58,6 +59,7 @@ jobs:
         id: deploy
         run: |
           npx --yes $EAS_CLI deploy --non-interactive --export-dir dist --alias dev --json > deploy.json 2> deploy.err || { cat deploy.err; exit 1; }
+          echo "--- deploy.json"; cat deploy.json; echo "--- deploy.err (tail)"; tail -5 deploy.err
           url=$(jq -r '.aliases[0]?.url // .url // .deploymentUrl // empty' deploy.json 2>/dev/null)
           [ -n "$url" ] || url=$(grep -Eo 'https://[a-z0-9.-]+\.expo\.app[^" ]*' deploy.json deploy.err | head -1 | cut -d: -f2-)
           echo "url=$url" >> "$GITHUB_OUTPUT"
@@ -66,7 +68,9 @@ jobs:
       - name: Record response headers
         run: |
           url="${{ steps.deploy.outputs.url }}"
-          code=$(curl -s -o /dev/null -w '%{http_code}' "$url")
+          for i in $(seq 1 12); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "$url"); [ "$code" = "200" ] && break; sleep 5
+          done
           echo "HTTP $code"
           { echo '### Response headers (step 9 decision input)'; echo '```'; curl -sI "$url" | grep -iE '^(HTTP|content-security-policy|x-content-type-options|referrer-policy|strict-transport-security|x-frame-options|permissions-policy|server|cache-control)'; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           curl -sI "$url" | grep -iE '^(HTTP|content-security-policy|x-content-type-options|referrer-policy|strict-transport-security|x-frame-options|permissions-policy|server)'
