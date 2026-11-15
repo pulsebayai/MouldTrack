@@ -37,8 +37,10 @@ describe('Sentry test button (AC-13)', () => {
   it('is shown only in development and reports a test error', async () => {
     const { sendTestError } = jest.requireMock('@/lib/sentry');
     await renderWithSession(<Home />, { ctx, appEnv: 'development' });
+    expect(screen.queryByTestId('test-error-sent')).toBeNull();
     await fireEvent.press(screen.getByTestId('send-test-error'));
     expect(sendTestError).toHaveBeenCalled();
+    expect(screen.getByTestId('test-error-sent')).toHaveTextContent('Test error sent to Sentry');
   });
   it.each(['local', 'staging', 'production'] as const)('is hidden in %s', async (appEnv) => {
     await renderWithSession(<Home />, { ctx, appEnv });

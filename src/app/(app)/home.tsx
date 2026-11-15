@@ -1,4 +1,5 @@
 import Constants from 'expo-constants';
+import { useState } from 'react';
 import { Text, View } from 'react-native';
 import { SignOutButton } from '@/components/sign-out-button';
 import { Button, Screen, colors } from '@/components/ui';
@@ -16,6 +17,7 @@ const ENV_LABEL: Record<AppEnv, string | null> = {
 
 export default function Home() {
   const { ctx, appEnv } = useSession();
+  const [testErrorSent, setTestErrorSent] = useState(false);
   if (!ctx || 'noAccess' in ctx) return null; // the (app) layout redirects; nothing tenant-scoped renders here
   const banner = ENV_LABEL[appEnv];
   return (
@@ -36,7 +38,22 @@ export default function Home() {
       <Text style={{ fontSize: 15, color: colors.muted }}>{ctx.user.email}</Text>
       <SignOutButton />
       {appEnv === 'development' ? (
-        <Button title="Send test error" variant="secondary" testID="send-test-error" onPress={sendTestError} />
+        <>
+          <Button
+            title="Send test error"
+            variant="secondary"
+            testID="send-test-error"
+            onPress={() => {
+              sendTestError();
+              setTestErrorSent(true);
+            }}
+          />
+          {testErrorSent ? (
+            <Text testID="test-error-sent" accessibilityLiveRegion="polite" style={{ fontSize: 14, color: colors.text }}>
+              Test error sent to Sentry
+            </Text>
+          ) : null}
+        </>
       ) : null}
       <Text style={{ fontSize: 12, color: colors.muted }}>Version {Constants.expoConfig?.version ?? '0.0.0'}</Text>
     </Screen>
