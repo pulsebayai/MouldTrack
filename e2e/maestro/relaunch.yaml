@@ -1,0 +1,15 @@
+# AC-5 (Android): session survives an app restart.
+appId: com.pulsebayai.mouldtrack
+name: relaunch
+---
+- launchApp: { clearState: true }
+- tapOn: { id: "email" }
+- inputText: "e2e-sup-b@example.test"
+- tapOn: { id: "password" }
+- inputText: ${PASSWORD}
+- hideKeyboard
+- tapOn: { id: "sign-in-submit" }
+- assertVisible: { id: "home-tenant", text: "e2e org B" }
+- stopApp
+- launchApp: { clearState: false }
+- assertVisible: { id: "home-tenant", text: "e2e org B" }

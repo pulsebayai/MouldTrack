@@ -8,14 +8,15 @@ Requirements baseline: `Requirment desciption/MouldTrack_High_Level_PRD.docx`. T
 ## Active feature
 Determined by branch: a branch containing <NN-slug> → `sdlc/features/<NN-slug>/`. At session start, read its plan.md (checkboxes + latest session log). On main: product-level work only.
 
-## Verification commands (must all pass before a step is done; scripts added in 01-walking-skeleton)
+## Verification commands (must all pass before a step is done)
 - `npm run lint` → 0 errors
 - `npm run typecheck` → 0 errors
 - `npm run test` → all pass (Jest + RNTL)
-- `npm run test:db` → all pass (pgTAP / RLS, local Supabase)
+- `npm run test:db` → all pass (pgTAP / RLS, local Supabase; needs Docker — on the owner's Mac it runs in CI)
 - `npm run test:e2e` → all pass (Playwright on the web build)
-- `npm run test:e2e:android` → all pass (Maestro, Android emulator)
-- `npm run build` → exits 0 (`expo export` web + Android prebuild check)
+- `npm run test:e2e:android` → all pass (Maestro, Android emulator; nightly + release only, not on PRs)
+- `npm run build` → exits 0 (`expo export` web + Android prebuild check on a throwaway copy; set `WEB_DIST` outside the iCloud folder for local runs)
+- Hosted checks (GitHub Actions only): `secrets-check`, `deploy-dev`, `regression` (dispatch: target dev | staging | prod-smoke)
 
 ## Model routing
 Opus: intent, spec, plan, architecture, security/RLS design, blockers, review. Sonnet: executing approved plan steps. Sonnet escalates design questions (logs `Blocked - needs Opus` in plan.md) instead of deciding them. Handoff = plan.md.

@@ -1,12 +1,12 @@
 # Architecture: MouldTrack
-Status: approved · Updated: 2026-11-13
+Status: approved · Updated: 2026-11-15
 
 ## Stack
 - **App:** Expo (React Native) + TypeScript + Expo Router, one codebase for Android (supervisors) and web (admins and Super Admin, via react-native-web). Android first; iOS later. Exact Expo SDK version pinned in 01.
 - **Backend:** Supabase. Postgres with row-level security (RLS) for tenant isolation, Auth (email/password; phone OTP later), Storage for photos, Postgres functions (RPC) for workflow transitions so the rules and idempotency sit on the server.
-- **Builds/deploy:** EAS Build (Android) + EAS Update channels `development` / `staging` / `production`. Web build (`expo export`) on Vercel.
+- **Builds/deploy:** EAS Build (Android, distributable builds only) + EAS Update channels `development` / `preview` (staging) / `production`. Web: `expo export` with `web.output: "static"` on **EAS Hosting** (Vercel Hobby forbids commercial use). CI/nightly Android APKs are built on the GitHub runner (`scripts/build-android-ci.sh`), not EAS (Free ≈ 15 Android builds/month).
 - **Quality:** ESLint · `tsc` · Jest + React Native Testing Library (unit) · pgTAP via `supabase test db` (DB/RLS) · Playwright against the web build (e2e) · Maestro on an Android emulator (mobile e2e) · GitHub Actions.
-- **Monitoring:** Sentry (app + web), Supabase logs.
+- **Monitoring:** Sentry Free/Developer (errors only: no tracing, no replay, `sendDefaultPii: false`; 1 user, ~5k errors/month), Supabase logs.
 
 ## Core entities
 Tenant → Site → Line → Machine · Product · MachineProductBenchmark (machine/product/shift, effective dates) · Shift (+ schedule) · ShiftAssignment (shift × machine × supervisor) · ProductionReading · ProductionSummary (versioned calculation) · MachineIssue → IssueAction, IssueOwnershipHistory · ShiftHandover · Attachment · AuditEvent · User/Membership (user × tenant × role).
@@ -24,20 +24,25 @@ Tenant → Site → Line → Machine · Product · MachineProductBenchmark (mach
 - Photos live in tenant-prefixed Storage paths with RLS. Database rows hold metadata, checksum and the storage key only.
 - Accessibility: WCAG AA contrast, touch targets ≥ 48dp, status shown as a label and not by colour alone.
 - Connectivity: [Assumed] reliable Wi-Fi/4G. Each form keeps a local draft and retries submission; there is no offline sync.
+- Web security headers come from the `expo-router` plugin `headers` in app.json (EAS Hosting applies them for static/server output): CSP `default-src 'self'`, `script-src 'self'` + sha256 of Expo's single inline hydration script, `style-src 'unsafe-inline'` (react-native-web), `connect-src` Supabase + Sentry, `frame-ancestors 'none'`; nosniff; Referrer-Policy; Permissions-Policy; HSTS (EAS default). EAS converts X-Frame-Options into `frame-ancestors`. An Expo upgrade that changes the hydration script breaks the hash → caught by the smoke console-error check.
+- Identity: one tenant per user in MVP (`membership.user_id` unique). Platform Super Admin is not a tenant member (separate model, feature 03).
 
 ## External integrations
 None in MVP. Notifications are in-app (R3). Push/email/WhatsApp come later.
 
 ## Environments & deploy
-- Three Supabase projects: **dev**, **staging**, **prod**. Region: ap-south-1 (Mumbai) for all three, for India data residency (owner-confirmed).
+- Supabase, all ap-south-1 (Mumbai, India data residency): org **MouldTrack** (Free) holds **dev** and **staging**; **prod** goes in a second Free org, created at the R1 release (Free = 2 active projects per org). Separate from the owner's Pulsebay account. Staging is kept from pausing by `keepalive.yml` (weekly, read-only); dev by the nightly run.
+- **Prod on Free until pilot completion (owner).** Free has no backups → R1 release blockers: nightly **encrypted** `pg_dump` + Storage export (key held only by the owner; this repo is public, so artifacts are public) and one recorded restore drill.
+- Web: dev = https://mouldtrack--dev.expo.app (alias `dev`), staging alias `staging`, prod = production deployment. CI talks to hosted dev only through GitHub Actions secrets; the database is reached via the **session pooler** (GitHub runners are IPv4-only).
 - Real plant data only in **prod**. dev and staging hold fixture tenants only.
-- Path to prod: PR → main (deploys to dev: migrations + web preview + EAS Update `development`) → release Rn to **staging** → gate → prod (migrations, web prod, EAS Update/Build `production`). Every prod step is behind the production-gate hook.
+- Path to prod: PR → main (`deploy-dev.yml`: migrations + web on EAS Hosting alias `dev`) → release Rn to **staging** → gate → prod (migrations, web prod, EAS Update/Build `production`). Every prod step is behind the production-gate hook and the owner's explicit OK.
+- Repo is **public** (`pulsebayai/MouldTrack`, free Actions minutes): requirement docs stay local-only (gitignored); no secrets in git; `pull_request` workflows get no secrets (PR CI needs none); hosted secrets are used only by `deploy-dev`, `regression`, `secrets-check`, `keepalive`. The owner's Mac and the Claude workspace cannot reach Expo's servers, so every EAS command runs in GitHub Actions.
 
 ## Release & regression policy (every release)
 Regression = the whole suite (unit, DB/RLS, web e2e, Android e2e). Tests accumulate and are never edited to pass.
 1. **Every PR:** the full suite runs in CI, and a PR merges only when green. The PR carries the AC → test → result table. Target is about 10 min or less: lint/typecheck/unit/build, DB tests and e2e shards run as parallel jobs. Each DB/e2e job gets its **own ephemeral Supabase (`supabase start`) built only from migration files**, with no shared database and no secrets. A schema change that works only on dev fails PR CI; that is intended.
    - **Accepted exception (owner, 2026-11-13):** Android Maestro e2e runs **only nightly and at the release gate, not on PRs**. PRs still compile the Android build (`npm run build`). Risk: a bug specific to native rendering can reach main and is caught at the next nightly. Mitigation: all workflow logic sits in the shared TS + RPC layer that the web e2e covers on every PR; a red nightly is the top priority the next day.
-2. **Nightly:** full suite against dev, and the owner is notified on failure. It also covers what PR CI can't: (a) dev has every migration (apply, then diff the live schema against the files); (b) dashboard and query speed on a seeded volume tenant (e.g. 200 machines × 90 days); (c) hosted-only behaviour (Auth settings, Storage policies, EAS Update channel reachable).
+2. **Nightly** (`regression.yml`, 02:30 IST): full suite against dev incl. Android Maestro on an API 34 emulator; failure opens/updates a GitHub issue "Nightly regression failing" for the owner. Shared-DB isolation: N = 1 lane — one run per target (concurrency group); PR CI never touches hosted databases; fixtures reset by `scripts/fixtures-reset.ts` (refuses anything but local/dev). It also covers what PR CI can't: (a) dev has every migration (apply, then diff the live schema against the files); (b) dashboard and query speed on a seeded volume tenant (e.g. 200 machines × 90 days); (c) hosted-only behaviour (Auth settings, Storage policies, EAS Update channel reachable).
    - **Docs-only skip:** PRs or pushes touching only `sdlc/**` or `*.md` run a "what changed" job and skip the suites. A code PR's last commit before merge must have a full green run. Release evidence cites a code commit's green run only.
 3. **Every release (R1, R2 …), gate before prod:** (a) main green · (b) regression passes against **staging** (web URL + staging EAS channel build) · (c) manual checklist signed off on staging, including one real Android device · (d) owner approval. After the prod deploy: **smoke tests only**, read-only. Data-writing tests never run against prod.
 4. **Evidence:** every CI or regression run uploads JUnit XML, Playwright JSON/HTML and Maestro reports, kept ≥ 90 days. Each release commits `sdlc/releases/<Rn>.md` and copies the summaries to `sdlc/releases/<Rn>/evidence/`.
@@ -57,3 +62,9 @@ None yet (greenfield).
 | 2026-11-13 | Supabase with RLS for tenant isolation; workflow transitions as RPC | Server-side enforcement (PRD §15); atomic audit | — |
 | 2026-11-13 | English only; no offline sync; in-app notifications only in MVP | PRD scope + owner answers | — |
 | 2026-11-13 | Model routing: Opus plans/designs/reviews; Sonnet executes approved plan steps and escalates design questions | AI-native SDLC default | — |
+| 2026-11-15 | Web hosting on EAS Hosting, `web.output: static`, security headers via expo-router plugin | Vercel Hobby forbids commercial use; static is the simplest mode that supports headers | 01 |
+| 2026-11-15 | Supabase: own MouldTrack org (dev+staging), prod in a 2nd Free org at R1; prod Free until pilot end with encrypted backups + restore drill as R1 blockers | Owner: free tiers until pilot completion | 01 |
+| 2026-11-15 | Android CI/nightly APKs built on GitHub runners; EAS Build only for distributable builds | EAS Free build quota | 01 |
+| 2026-11-15 | Public repo; requirement docs local-only; secrets only in Actions secrets | Owner: free Actions minutes | 01 |
+| 2026-11-15 | One tenant per user (MVP); Super Admin modelled separately (03) | Simplest correct isolation rule; PRD: no routine platform access to tenant data | 01 |
+| 2026-11-15 | Sentry errors only (no tracing/replay/PII) | Free quota (5k errors/mo, 1 user) + privacy | 01 |

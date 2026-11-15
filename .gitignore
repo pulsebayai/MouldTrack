@@ -1,5 +1,5 @@
 .DS_Store
-node_modules/
+node_modules
 .env*
 !.env.example
 .expo/
@@ -12,3 +12,5 @@ test-results/
 playwright-report/
 supabase/.temp/
 Requirment desciption/
+dist*/
+.dist-stale/

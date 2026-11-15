@@ -1,0 +1,187 @@
+# Regression (architecture.md §Release & regression policy 2–3).
+# Nightly 02:30 IST against DEV: drift check + full web suite + Android Maestro on an emulator.
+# Manual: target dev | staging (full suite) | prod (SMOKE ONLY, read-only). One run per target at a time.
+name: regression
+
+on:
+  schedule:
+    - cron: '0 21 * * *' # 02:30 IST
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Environment'
+        type: choice
+        options: [dev, staging, prod]
+        default: dev
+      base_url:
+        description: 'Web URL (defaults per target)'
+        required: false
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: regression-${{ inputs.target || 'dev' }}
+  cancel-in-progress: false
+
+env:
+  TARGET: ${{ inputs.target || 'dev' }}
+  NODE_VERSION: '22'
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      target: ${{ steps.t.outputs.target }}
+      base_url: ${{ steps.t.outputs.base_url }}
+      full: ${{ steps.t.outputs.full }}
+    steps:
+      - id: t
+        run: |
+          t="$TARGET"
+          case "$t" in
+            dev) def="https://mouldtrack--dev.expo.app"; full=true ;;
+            staging) def="https://mouldtrack--staging.expo.app"; full=true ;;
+            prod) def="https://mouldtrack.expo.app"; full=false ;;
+            *) echo "unknown target $t"; exit 1 ;;
+          esac
+          url="${{ inputs.base_url }}"; url="${url:-$def}"
+          echo "target=$t" >> "$GITHUB_OUTPUT"; echo "base_url=$url" >> "$GITHUB_OUTPUT"; echo "full=$full" >> "$GITHUB_OUTPUT"
+          echo "Target: $t · URL: $url · full suite: $full"
+
+  drift:
+    needs: setup
+    if: needs.setup.outputs.target == 'dev'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '${{ env.NODE_VERSION }}', cache: npm }
+      - run: npm ci
+      - name: Dev has exactly the repo's migrations (AC-12)
+        env: { DEV_SUPABASE_DB_URL: '${{ secrets.DEV_SUPABASE_DB_URL }}' }
+        run: |
+          mkdir -p test-results
+          if bash scripts/drift-check.sh; then r=0; else r=1; fi
+          printf 'TAP version 13\n%s 1 - dev migrations match repo\n1..1\n' "$([ $r = 0 ] && echo ok || echo 'not ok')" > test-results/drift.tap
+          exit $r
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: 'regression-drift', path: test-results/, retention-days: 90, if-no-files-found: warn }
+
+  web:
+    needs: setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      BASE_URL: ${{ needs.setup.outputs.base_url }}
+      E2E_FIXTURE_PASSWORD: ${{ secrets.E2E_FIXTURE_PASSWORD }}
+      CI: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '${{ env.NODE_VERSION }}', cache: npm }
+      - run: npm ci
+      - name: Reset fixtures (dev only; script refuses any other project)
+        if: needs.setup.outputs.target == 'dev'
+        env:
+          APP_ENV: development
+          SUPABASE_URL: ${{ secrets.DEV_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.DEV_SUPABASE_SERVICE_ROLE_KEY }}
+          DEV_SUPABASE_PROJECT_REF: ${{ secrets.DEV_SUPABASE_PROJECT_REF }}
+        run: npm run fixtures:reset
+      - run: npx playwright install --with-deps chromium
+      - name: Playwright (full on dev/staging, smoke only on prod)
+        run: |
+          if [ "${{ needs.setup.outputs.full }}" = "true" ]; then npx playwright test; else npx playwright test --project smoke; fi
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regression-web
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 90
+          if-no-files-found: warn
+
+  android:
+    needs: [setup, web] # web resets the fixtures first
+    if: always() && needs.setup.outputs.full == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      EXPO_PUBLIC_SUPABASE_URL: ${{ needs.setup.outputs.target == 'dev' && secrets.DEV_SUPABASE_URL || secrets.STAGING_SUPABASE_URL }}
+      EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ needs.setup.outputs.target == 'dev' && secrets.DEV_SUPABASE_ANON_KEY || secrets.STAGING_SUPABASE_ANON_KEY }}
+      EXPO_PUBLIC_APP_ENV: ${{ needs.setup.outputs.target == 'dev' && 'development' || 'staging' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '${{ env.NODE_VERSION }}', cache: npm }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      - run: npm ci
+      - name: Build release APK on the runner (no EAS credits)
+        run: bash scripts/build-android-ci.sh
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+      - name: Install Maestro
+        run: |
+          curl -fsSL "https://get.maestro.mobile.dev" | bash
+          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+      - name: Maestro on emulator (AC-1, 2, 3, 5)
+        uses: reactivecircus/android-emulator-runner@v2
+        env:
+          PASSWORD: ${{ secrets.E2E_FIXTURE_PASSWORD }}
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-boot-timeout: 600
+          script: |
+            adb install -r android/app/build/outputs/apk/release/app-release.apk
+            mkdir -p test-results && maestro test e2e/maestro --env PASSWORD="$PASSWORD" --format junit --output test-results/junit-android.xml
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: 'regression-android', path: test-results/, retention-days: 90, if-no-files-found: warn }
+
+  evidence:
+    needs: [setup, drift, web, android]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '${{ env.NODE_VERSION }}', cache: npm }
+      - run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@v4
+        with: { path: evidence, pattern: 'regression-*' }
+      - name: Summary
+        run: |
+          node scripts/regression-summary.mjs evidence --title "Regression — ${{ needs.setup.outputs.target }}" \
+            --env "${{ needs.setup.outputs.target }}" --target-url "${{ needs.setup.outputs.base_url }}" | tee summary.md >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p evidence && cp summary.md evidence/SUMMARY.md
+      - uses: actions/upload-artifact@v4
+        with: { name: 'regression-evidence-${{ needs.setup.outputs.target }}', path: evidence/, retention-days: 90 }
+      - name: Fail if any suite failed
+        run: |
+          r='${{ needs.drift.result }} ${{ needs.web.result }} ${{ needs.android.result }}'
+          echo "results: $r"; ! echo "$r" | grep -Eq 'failure|cancelled'
+
+  notify:
+    needs: [evidence]
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open or update "Nightly regression failing" issue
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: |
+          run="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          n=$(gh issue list -R "${{ github.repository }}" --state open --search 'in:title "Nightly regression failing"' --json number --jq '.[0].number')
+          if [ -n "$n" ]; then gh issue comment "$n" -R "${{ github.repository }}" --body "Failed again: $run"
+          else gh issue create -R "${{ github.repository }}" --title "Nightly regression failing" --assignee "${{ github.repository_owner }}" --body "Nightly regression against dev failed: $run. Fixing this is the top priority for the next session (AI-native SDLC Stage 6)." || \
+               gh issue create -R "${{ github.repository }}" --title "Nightly regression failing" --body "Nightly regression against dev failed: $run"; fi

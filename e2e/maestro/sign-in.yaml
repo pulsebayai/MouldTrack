@@ -1,0 +1,13 @@
+# AC-1 (Android): member signs in and sees tenant + role.
+appId: com.pulsebayai.mouldtrack
+name: sign-in
+---
+- launchApp: { clearState: true }
+- tapOn: { id: "email" }
+- inputText: "e2e-sup-a@example.test"
+- tapOn: { id: "password" }
+- inputText: ${PASSWORD}
+- hideKeyboard
+- tapOn: { id: "sign-in-submit" }
+- assertVisible: { id: "home-tenant", text: "e2e org A" }
+- assertVisible: "Role: Supervisor"
