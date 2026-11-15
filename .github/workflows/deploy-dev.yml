@@ -1,0 +1,73 @@
+# Deploys main to DEV: applies migrations, publishes the web build on EAS Hosting (alias "dev"),
+# and records the response headers (plan step 9 decision point). Never touches staging/prod.
+name: deploy-dev
+
+on:
+  push:
+    branches: [main]
+  # TEMPORARY (plan step 9 proof before merge; remove in step 13): workflow_dispatch only works once the file is on main.
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/deploy-dev.yml', 'eas.json', 'app.json']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+env:
+  EAS_CLI: eas-cli@27.10.0
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: development
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      DEV_SUPABASE_DB_URL: ${{ secrets.DEV_SUPABASE_DB_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22', cache: npm }
+      - run: npm ci
+
+      - name: Apply migrations to dev
+        run: npx supabase db push --db-url "$DEV_SUPABASE_DB_URL" --include-all --yes
+
+      - name: Ensure EAS project exists (first run prints the projectId to commit)
+        run: |
+          if [ -z "$(jq -r '.expo.extra.eas.projectId // empty' app.json)" ]; then
+            npx --yes $EAS_CLI init --non-interactive --force
+            echo "### EAS projectId (commit into app.json → expo.extra.eas.projectId)" >> "$GITHUB_STEP_SUMMARY"
+            echo "\`$(jq -r '.expo.extra.eas.projectId' app.json)\` owner: \`$(jq -r '.expo.owner // "n/a"' app.json)\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Build web (development)
+        env:
+          EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.DEV_SUPABASE_URL }}
+          EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.DEV_SUPABASE_ANON_KEY }}
+          EXPO_PUBLIC_APP_ENV: development
+          EXPO_PUBLIC_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+        run: npx expo export -p web --output-dir dist
+
+      - name: Deploy to EAS Hosting (alias dev)
+        id: deploy
+        run: |
+          npx --yes $EAS_CLI deploy --non-interactive --export-dir dist --alias dev --json > deploy.json 2> deploy.err || { cat deploy.err; exit 1; }
+          url=$(jq -r '.aliases[0]?.url // .url // .deploymentUrl // empty' deploy.json 2>/dev/null)
+          [ -n "$url" ] || url=$(grep -Eo 'https://[a-z0-9.-]+\.expo\.app[^" ]*' deploy.json deploy.err | head -1 | cut -d: -f2-)
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "### Dev web URL: $url" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Record response headers
+        run: |
+          url="${{ steps.deploy.outputs.url }}"
+          code=$(curl -s -o /dev/null -w '%{http_code}' "$url")
+          echo "HTTP $code"
+          { echo '### Response headers (step 9 decision input)'; echo '```'; curl -sI "$url" | grep -iE '^(HTTP|content-security-policy|x-content-type-options|referrer-policy|strict-transport-security|x-frame-options|permissions-policy|server|cache-control)'; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          curl -sI "$url" | grep -iE '^(HTTP|content-security-policy|x-content-type-options|referrer-policy|strict-transport-security|x-frame-options|permissions-policy|server)'
+          [ "$code" = "200" ]

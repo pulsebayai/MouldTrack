@@ -75,6 +75,7 @@ All AC-1..13 mapped to green tests/runs in the PR table; full PR CI green; one d
 - Step 8 proof (AC-7): PR #1 run https://github.com/pulsebayai/MouldTrack/actions/runs/43683452044 — all jobs green, wall clock ≈ 3 min 50 s (changes 06:00:15 → summary 06:04:02 UTC). db: pgTAP `Files=1, Tests=18, Result: PASS` on real local Supabase; e2e-web: 10 passed, 1 skipped (header fixme); static: 58 unit passed + android prebuild OK.
 - Step 8 (AC-8) deviation: a docs-only PR can't be proven before 01 merges, because `main` has no `ci.yml` yet and any PR from this branch contains code. Proof moves to the post-merge roadmap PR ("roadmap: 01 shipped"), which is docs-only by design; 01 isn't marked shipped until that PR shows only `changes` + `ci-ok` ran.
 - GitHub: default branch is `feat/01-walking-skeleton` (first push); repo-settings writes are blocked from this session → owner switches the default to `main` (Settings → General → Default branch).
+- Step 9: `deploy-dev.yml` also applies migrations to dev (plan had that in step 10). Reason: the dev web app is meaningless without its schema; still dev-only. Temporary `pull_request` trigger (paths: deploy-dev.yml, eas.json, app.json) to prove the deploy before merge — **remove in step 13**. Expo servers are unreachable from both the device and the cloud workspace, so every EAS command runs in GitHub Actions.
 
 ## Session log
 ### 2026-11-13
