@@ -18,7 +18,7 @@ export function tabFor(pathname: string): PlantTab {
 
 export function PlantTabs({ active }: { active: PlantTab }) {
   return (
-    <View accessibilityRole="tablist" style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+    <View accessibilityRole="navigation" accessibilityLabel="Plant sections" style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
       {TABS.map((t) => (
         <Chip key={t.key} testID={`plant-tab-${t.key}`} label={t.label} selected={active === t.key} onPress={() => router.replace(t.href)} />
       ))}
