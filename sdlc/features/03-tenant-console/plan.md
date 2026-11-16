@@ -1,0 +1,59 @@
+# Plan: Tenant console (Platform Super Admin)
+Spec: ./spec.md · Status: approved · Date: 2026-11-16
+Batch A with 04 (03 merges **after** 04). Locks: **architecture: 03**; schema split — 03 owns `tenant` changes, `platform_admin`, `phone_claim` (logged in roadmap at launch). Prerequisite: the audit-action format PR (see 04 plan) is merged before step 1.
+
+## Decisions (Opus)
+- D1 Files: migration `20261117100000_platform_admin.sql` (timestamp after 04's, matching merge order); pgTAP `020_platform_admin.test.sql`, `021_platform_functions.test.sql`, `022_platform_boundary.test.sql` (04 uses 01x).
+- D2 SQL: `app.pa_*` service-only functions (same shape as 02's `app.ua_*`, D13 denials, idempotent request ids); authorisation helper `app._pa_authorise(p_actor)` (active SA, not must-change) with denial reasons `not_platform_admin|inactive|must_change_password`. Wrappers are named **`public.psvc_*`** (service_role only) so 02's pinned "8 `svc_*` wrappers" test stays true and unchanged; `022` asserts every `psvc_*` is service-only.
+- D3 `phone_claim` (phone_e164 pk, user_id unique, kind) kept by `after insert/update/delete` triggers on `membership` and `platform_admin` (security definer); migration backfills from membership. A duplicate raises `23505` → mapped to 409 `phone` exactly like 02.
+- D4 Edge Functions: `platform` (verify_jwt true) and `platform-setup` (verify_jwt false). Reuse `_shared/*` from 02 (identity, http/CORS, clients, errors, temp password). Two-step Auth/DB writes and compensation exactly as 02 D4 (create SA/UA; status = SQL then ban/unban; reset revokes sessions in SQL). `platform-setup`: reject unless `PLATFORM_SETUP_TOKEN` is set and equals `x-setup-token` (constant-time compare via `crypto.subtle.timingSafeEqual` or a manual XOR loop); SQL `app.pa_setup_first(...)` locks a singleton row and refuses when any SA exists (committed `access.denied`, reason `setup_closed`).
+- D5 `account` (02): when the caller has no membership, look up `platform_admin` and use `app.pa_password_changed` (same D14 behaviour). No change for tenant users (02 tests must pass unchanged).
+- D6 Reads: `public.pa_tenant_summaries(p_search, p_status, p_plan, p_page)`, `public.pa_tenant_unit_admins(p_tenant)`, `public.pa_audit(p_page)` — `security definer`, callable by `authenticated`, return empty + audit denial unless `app.is_platform_admin()`. `tenant` RLS gains `select` for platform admins. **No other policy grants SAs anything.**
+- D7 Client routing: `getSessionContext` returns `{kind:'platform', ...}` when there is no membership but an own active `platform_admin` row; `(app)/_layout.tsx` sends platform users to `/console`, tenant users away from `/console`. New route group `src/app/(console)/` (`_layout.tsx` with left nav on wide screens, `tenants/index.tsx`, `tenants/[id].tsx`, `tenants/new.tsx`, `admins.tsx`, `audit.tsx`); forms in `src/components/console/*`; data layer `src/lib/platform.ts`.
+- D8 Fixtures: fixture SA `+91 90000 00090` (canonical block), a second SA `+91 90000 00091` for guard tests, plan labels on fixture tenants. Mutating tests create throwaway tenants `e2e t3 <random>` (fixtures-reset suspends them; tenants are never deleted).
+- D9 Setup-endpoint behaviour tests run on the local stack only (spec); the hosted check asserts dev's `platform-setup` refuses (SA exists) — no token is configured on dev.
+- D10 Prod runbook in `sdlc/releases/README.md`: set `PLATFORM_SETUP_TOKEN` on prod via `supabase secrets set` from the owner's terminal, one `curl`, then `supabase secrets unset`; record the audit event id in the release record.
+
+## Files that change
+- `supabase/migrations/20261117100000_platform_admin.sql`; `supabase/tests/020–022_*.test.sql` — new
+- `supabase/functions/platform/index.ts`, `supabase/functions/platform-setup/index.ts` — new; `supabase/functions/account/index.ts` — modified (D5); `supabase/functions/_shared/*` — additions only; `supabase/config.toml` — function entries
+- `src/lib/session.ts`, `session-provider.tsx`, `src/app/(app)/_layout.tsx` (+ tests) — modified (D7); `src/lib/platform.ts` (+ test) — new
+- `src/app/(console)/**`, `src/components/console/**`, `src/__tests__/screens/console-*.test.tsx` — new
+- `supabase/seed.sql`, `scripts/fixtures-reset.ts` (+ tests, additions only) — modified
+- `e2e/api/platform.spec.ts`, `e2e/api/platform-setup.spec.ts`, `e2e/web/console.spec.ts` — new; `e2e/web/fixtures.ts` — additions
+- `.github/workflows/deploy-dev.yml` (deploy `platform`, `platform-setup`), `regression.yml` + `scripts/hosted-checks.sh` (functions list; setup refuses) — modified; temporary dev-only triggers for the proof only
+- `sdlc/product/architecture.md` (lock), `sdlc/releases/README.md` (runbook) — modified
+
+## Migrations
+`20261117100000_platform_admin.sql`. Additive except the `tenant` columns (defaults) and the `phone_claim` backfill.
+
+## Steps
+- [ ] 1. **Schema + SA identity (tests first).** `020`: platform_admin RLS (own row only), phone_claim uniqueness across membership ↔ platform_admin both directions incl. updates and phone changes, backfill complete, `is_platform_admin()` gate (inactive/must-change false), tenant plan_label default + unique lower(name), SA `select` on tenant only. Then the migration (tables, triggers, helpers, tenant columns, policies). — proof: CI `db`
+- [ ] 2. **Platform SQL functions (tests first).** `021`: each `pa_*` (tenant create/update/set_status with reason, SA create/status/reset with self + last-SA guards, UA create, UA reset refusing supervisors, setup_first refusing when an SA exists) — success + one audit row (tenant-scoped where it acts on a tenant, `actor_role='platform_admin'`), denials audited for tenant users / inactive / must-change SA, idempotent repeats; read functions return nothing for non-SAs. — proof: CI `db`
+- [ ] 3. **Boundary tests.** `022`: an SA reads 0 rows from membership, audit_event (tenant users' rows), and every tenant-owned table present on the branch; SA calls to 02 `svc_ua_*` paths / `pm_*` (after rebase) are denied + audited; every `psvc_*` is service-only. Add a reusable pgTAP helper query listing tenant-owned tables (`tenant_id` column) so new tables are covered automatically. — proof: CI `db`
+- [ ] 4. **Edge Functions + API tests (tests first).** `e2e/api/platform.spec.ts` (every action, 403 for UA/SUP + audit row, compensation, idempotency, suspended tenant → its UA's next RLS read is empty and `pm_*`/user-admin writes denied, activation restores) and `platform-setup.spec.ts` (local only: no token configured → 403; wrong token → 403; right token → SA + temp password; second call → 403 `setup_closed`). Then implement D4–D5. — proof: CI `e2e-web` (api project) green; 02's API suite unchanged and green
+- [ ] 5. **Fixtures** per D8 (+ tests). — proof: CI green
+- [ ] 6. **Client routing + console screens (tests first).** Session/routing tests (SA → /console; SA blocked from /home, /users, /plant; tenant users blocked from /console); screen tests for tenants list (search/filters/25), register/edit, suspend dialog with required reason, activate, tenant detail with UA card (add UA → temp panel; reset UA), Super Admins (add, deactivate with guards, reset), platform audit list (50/page). Then implement D7. — proof: lint/typecheck/test
+- [ ] 7. **Web e2e.** `console.spec.ts`: SA sign-in → console; register tenant → create UA → sign in as that UA (forced change → sign in again → Home); suspend → UA blocked; activate; axe 0 serious/critical on each console screen. — proof: CI green
+- [ ] 8. **Rebase on 04 (after 04 merges).** Rebase, resolve shared files (seed, fixtures-reset, fixtures.ts, home/_layout), confirm `022` now covers 04's tables, full suite green. — proof: CI green
+- [ ] 9. **Hosted proof (dev), after step 8.** deploy-dev deploys `platform` + `platform-setup`; hosted-checks: functions present, `platform-setup` refuses on dev; regression green (web incl. api, Android 5/5, hosted-checks, drift); temporary triggers removed; green PR CI on the last commit. — proof: run URLs
+- [ ] 10. **Docs.** architecture.md (spec "Proposed architecture changes" 1–4 + 04's flagged items if not yet applied), decision log rows; releases README runbook (D10). — proof: docs diff
+- [ ] 11. **Review + PR.** sdlc-reviewer (focus: setup endpoint, SA boundary, account change), fix Important, AC table, session log. — proof: PR CI green
+
+## Risks
+- **Setup endpoint** (only unauthenticated write): tests for every refusal path; secret absent on dev/staging; hosted check.
+- **SA boundary leaks** via a forgotten policy on a future table: step 3's automatic tenant-owned-table check makes every new table fail the test until it's covered.
+- **Changes to 02's `account`**: 02's API + pgTAP suites run unchanged.
+- **Rebase on 04** touches seed/fixtures/routing: step 8 is its own step with a full green run.
+- Rollback: additive; reverting removes functions and console; tenant columns have defaults.
+
+## Proof of done
+AC-1–16 → tests (spec table); full suite green after rebase on 04; dev regression green incl. Android.
+
+## Deviations from plan
+(filled in during build)
+
+## Session log
+### 2026-11-16
+- Done: intent + spec approved; plan drafted.
+- Next step: owner approves plan; Sonnet executes steps 1–7 in parallel with 04; step 8 after 04 merges.
