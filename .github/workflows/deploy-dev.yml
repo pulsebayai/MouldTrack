@@ -41,7 +41,7 @@ jobs:
         run: npx supabase db push --db-url "$DEV_SUPABASE_DB_URL" --include-all --yes
 
       - name: Deploy Edge Functions to dev (02 D4-D8)
-        run: npx supabase functions deploy user-admin account --project-ref "$DEV_SUPABASE_PROJECT_REF" --use-api
+        run: npx supabase functions deploy user-admin account --project-ref "$DEV_SUPABASE_PROJECT_REF" --use-api --yes
 
       - name: Set function secrets (CORS origin of the dev web app, D8)
         run: npx supabase secrets set ALLOWED_ORIGINS=https://mouldtrack--dev.expo.app --project-ref "$DEV_SUPABASE_PROJECT_REF"
