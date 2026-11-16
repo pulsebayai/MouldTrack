@@ -1,3 +1,4 @@
+import { router } from 'expo-router';
 import { Text } from 'react-native';
 import { SignOutButton } from '@/components/sign-out-button';
 import { Screen, colors } from '@/components/ui';
@@ -11,7 +12,7 @@ export default function NoAccess() {
       <Text style={{ fontSize: 15, color: colors.muted }}>
         Your account is not linked to an active manufacturing unit.
       </Text>
-      <SignOutButton />
+      <SignOutButton onSignedOut={() => router.replace('/sign-in')} />
     </Screen>
   );
 }
