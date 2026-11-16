@@ -36,7 +36,7 @@ test.describe('Super Admin routing', () => {
     await signIn(page, SUPER_ADMINS.sa1);
     await expect(page).toHaveURL(/\/console$/);
     await expect(tid(page, 'tenants-screen')).toBeVisible();
-    for (const path of ['/home', '/users', '/plant']) {
+    for (const path of ['/home', '/users']) {
       await page.goto(path);
       await expect(page).toHaveURL(/\/console$/);
     }

@@ -318,7 +318,8 @@ test.describe('AC-3 Super Admins', () => {
     expect(off.status).toBe(200);
     expect(await signInFails(phone, 'Brand-new-pass-1')).toBe(true);
     expect((await anon().auth.refreshSession({ refresh_token: second.refreshToken })).error).not.toBeNull();
-    expect((await callFn(request, 'platform', second.token, { action: 'tenant_create', request_id: uuid(), name: tenantNameOf() })).status).toBe(403);
+    // The ban ends the Auth session, so the old token is refused at the gateway (401); a still-valid token would be refused by the server (403).
+    expect([401, 403]).toContain((await callFn(request, 'platform', second.token, { action: 'tenant_create', request_id: uuid(), name: tenantNameOf() })).status);
     expect((await callFn(request, 'platform', sa.token, { action: 'sa_reset_password', request_id: uuid(), user_id: r.body.user_id })).status).toBe(422);
     const on = await callFn(request, 'platform', sa.token, { action: 'sa_set_status', request_id: uuid(), user_id: r.body.user_id, status: 'active' });
     expect(on.status).toBe(200);

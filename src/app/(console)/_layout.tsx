@@ -22,7 +22,7 @@ export default function ConsoleLayout() {
   return (
     <View style={{ flex: 1, flexDirection: wide ? 'row' : 'column', backgroundColor: colors.bg }}>
       <View
-        accessibilityRole="menu"
+        role="navigation"
         style={{ padding: 16, gap: 8, borderColor: colors.border, ...(wide ? { width: 240, borderRightWidth: 1 } : { borderBottomWidth: 1 }) }}
       >
         <Text accessibilityRole="header" style={{ fontSize: 20, fontWeight: '700', color: colors.primary }}>
