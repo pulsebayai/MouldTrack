@@ -93,6 +93,8 @@ test.describe('AC-4 expiry', () => {
     const sb = service();
     await sb.from('membership').update({ must_change_password: true, temp_password_expires_at: new Date(Date.now() - 60_000).toISOString() }).eq('user_id', fresh.id);
     const before = (await auditRows({ actor: fresh.id })).length;
+    // Audit is append-only, so on a persistent project (dev) earlier runs already left password_changed rows for this fixed user.
+    const changedBefore = (await auditRows({ action: 'user.password_changed', entity: fresh.id })).length;
     const s = await signIn(fresh.phone, FIXTURE_PASSWORD);
     const r = await callFn(request, 'account', s.token, { action: 'change_password', current_password: FIXTURE_PASSWORD, new_password: NEW_PW });
     expect(r.status).toBe(403);
@@ -100,7 +102,7 @@ test.describe('AC-4 expiry', () => {
     const events = (await auditRows({ actor: fresh.id })).slice(before);
     expect(events.map((e) => [e.action, e.reason])).toEqual([['access.denied', 'temp_password_expired']]);
     expect((await membershipOf(fresh.id))!.must_change_password).toBe(true);
-    expect(await auditRows({ action: 'user.password_changed', entity: fresh.id })).toHaveLength(0);
+    expect(await auditRows({ action: 'user.password_changed', entity: fresh.id })).toHaveLength(changedBefore);
     // the password itself did not change
     await signIn(fresh.phone, FIXTURE_PASSWORD);
     const { error } = await anon().auth.signInWithPassword({ email: phoneToAuthEmail(fresh.phone), password: NEW_PW });
