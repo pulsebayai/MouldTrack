@@ -1,10 +1,10 @@
 # Roadmap: MouldTrack
-Updated: 2026-11-16 · Architecture lock: 02-tenancy-and-roles · Schema lock: 02-tenancy-and-roles
+Updated: 2026-11-16 · Architecture lock: none · Schema lock: none
 
 | # | Feature slug | One-line intent | Product metric | Depends on | Touches (entities / screens / shared code) | Arch change? | Batch | Release | Status |
 |---|---|---|---|---|---|---|---|---|---|
 | 01 | walking-skeleton | Expo app (Android + web) with sign-in, a tenant-scoped home screen, base tenant/membership schema + RLS, CI + regression workflow + evidence, deployed to dev | — | — | tenants, memberships, auth, app shell, CI | yes | — | R1 | shipped |
-| 02 | tenancy-and-roles | Roles + RBAC; Unit Admin invites and deactivates supervisors; audit-event base; denied cross-tenant access is auditable (FR-02, AC-22) | enabler | 01 | users, memberships, audit_event, user-admin screens | yes | — | R1 | in-progress |
+| 02 | tenancy-and-roles | Roles + RBAC; Unit Admin creates (phone + password, temp password), edits, deactivates and resets users; audit-event base; denied cross-tenant access is auditable (FR-02, AC-22) | enabler | 01 | users, memberships, audit_event, user-admin screens | yes | — | R1 | shipped |
 | 03 | tenant-console | Super Admin web console: register/activate/suspend tenants, create the first Unit Admin, plan status, platform audit; no routine access to tenant operational data (FR-01) | enabler (pilot + tenants 2–3) | 02 | tenants, platform admin screens, audit_event | no | — | R1 | planned |
 | 04 | plant-masters | Unit Admin manages sites/lines, machines, products and benchmark targets with effective dates (FR-03). **Decides target basis + product changeover** | Target visibility | 02 | site, line, machine, product, benchmark, admin screens | no | — | R1 | planned |
 | 05 | shifts-and-assignments | Shift master and schedules (incl. overnight), supervisor × machine assignments; supervisor sees only assigned work (FR-03, FR-04). **Decides supervisor:machine cardinality** | Reading capture | 04 | shift, shift_assignment, supervisor home | no | — | R1 | planned |
@@ -13,7 +13,7 @@ Updated: 2026-11-16 · Architecture lock: 02-tenancy-and-roles · Schema lock: 0
 | 08 | shift-handover-ack | Mandatory per-issue acknowledgement + declaration at shift opening, start blocked until complete, Admin exception, carry-forward (FR-06–09, FR-13, AC-16–19, AC-21) | Handover compliance | 06, 07 | shift_handover, ownership history, shift-open RPC, opening screen | no | — | R1 | planned |
 | 09 | dashboards-reports | Full supervisor and Unit Admin dashboards with KPI calcs per PRD §7 (incl. supervisor performance adjusted for inherited issues); filters + CSV export (FR-14, FR-15) | Target visibility | 06, 07, 08 | read models/views, dashboard screens | no | — | R2 | planned |
 
-Later: in-app notifications + overdue-acknowledgement alerts (FR-16) · detailed downtime events · maintenance role · iOS · push/WhatsApp · offline · regional languages · PLC/OCR (FR-17).
+Later: SMS (temporary-password delivery, OTP sign-in, self-service reset) via AWS End User Messaging SMS after DLT registration · email via AWS SES · in-app notifications + overdue-acknowledgement alerts (FR-16) · detailed downtime events · maintenance role · iOS · push/WhatsApp · offline · regional languages · PLC/OCR (FR-17).
 
 ## Releases
 Every release passes the Release & regression policy (architecture.md). Records and evidence live in `sdlc/releases/`.
@@ -22,5 +22,5 @@ Every release passes the Release & regression policy (architecture.md). Records 
 
 ## Batches
 - 01-walking-skeleton shipped 2026-11-15 (PR #1). Evidence: PR CI run 43714726279, regression (dev) 43713831322, first scheduled nightly + this docs-only PR (AC-8) — see sdlc/features/01-walking-skeleton/plan.md.
-- 02-tenancy-and-roles started 2026-11-16, **alone**: every other planned feature depends on it (directly or via 04), so no batch is possible. Holds architecture + schema locks. Checkpoint re-runs when 02 ships.
+- 02-tenancy-and-roles shipped 2026-11-16 (PR #4, built alone). Evidence: PR CI 43843516704 (head) / 43841076155 (last code commit), dev regression 43839715572 (web 66 incl. api, Android 5/5, hosted-checks 5/5). AC-15 staging proven at the R1 gate. Next: Parallel planning checkpoint for 03–05.
 (Early candidates: 03 ∥ 04 and 06 ∥ 07; each pair conflicts only on the schema lock, so their migrations merge in order.)
