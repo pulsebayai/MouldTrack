@@ -105,3 +105,4 @@ All AC-1..13 mapped to green tests/runs in the PR table; full PR CI green; one d
 - Blocked / failing: none. Owner to switch off "Confirm email" in dev + staging Auth.
 - Next step: owner merges PR #1 → on main: first scheduled nightly + docs-only "roadmap: 01 shipped" PR (AC-8 proof) → mark 01 shipped, release locks → Parallel planning checkpoint for 02–05.
 - Decisions made (cross-cutting → already applied to architecture.md under the 01 lock): see decision log 2026-11-15 rows.
+- Post-merge (2026-11-15): PR #1 merged (838fa34). deploy-dev on main ✅; ci on main ✅. **AC-8 proven:** docs-only PR #2 run 43742284970 ran only `changes` + `ci-ok` (db/static/e2e-web skipped, 13 s). Remaining before "shipped": first scheduled nightly (02:30 IST). Owner: switch off "Confirm email" in dev/staging; protect `main` (require PR + `ci-ok`).
