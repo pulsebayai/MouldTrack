@@ -2,12 +2,17 @@ import { getSessionContext, roleLabel, type SessionClient } from '@/lib/session'
 
 type Row = { role: string; status: string; tenant: { name: string; status: string } | null } | null;
 
+const eqCalls: [string, string][] = [];
+
 function fakeClient(opts: { session?: { user: { id: string; email?: string } } | null; row?: Row; error?: Error }): SessionClient {
   return {
     auth: { getSession: async () => ({ data: { session: opts.session ?? null }, error: null }) },
     from: () => ({
       select: () => ({
-        maybeSingle: async () => ({ data: opts.row ?? null, error: opts.error ?? null }),
+        eq: (col: string, val: string) => {
+          eqCalls.push([col, val]);
+          return { maybeSingle: async () => ({ data: opts.row ?? null, error: opts.error ?? null }) };
+        },
       }),
     }),
   } as unknown as SessionClient;
@@ -16,6 +21,12 @@ function fakeClient(opts: { session?: { user: { id: string; email?: string } } |
 const user = { id: 'u1', email: 'e2e-sup-a@example.test' };
 
 describe('getSessionContext', () => {
+  it('asks only for the caller\'s own membership row (a Unit Admin can read the whole tenant)', async () => {
+    eqCalls.length = 0;
+    await getSessionContext(fakeClient({ session: { user }, row: null }));
+    expect(eqCalls).toEqual([['user_id', 'u1']]);
+  });
+
   it('returns null when there is no session (AC-3)', async () => {
     expect(await getSessionContext(fakeClient({ session: null }))).toBeNull();
   });

@@ -27,6 +27,8 @@ export async function getSessionContext(client: SessionClient): Promise<SessionC
   const { data, error } = await client
     .from('membership')
     .select('role, status, tenant:tenant(name, status)')
+    // A Unit Admin can read every membership of the tenant (02 RLS), so always ask for the caller's own row.
+    .eq('user_id', session.user.id)
     .maybeSingle<MembershipRow>();
   if (error) throw error;
   if (!data || data.status !== 'active' || !data.tenant || data.tenant.status !== 'active') {

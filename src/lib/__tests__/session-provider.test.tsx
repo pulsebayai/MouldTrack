@@ -21,10 +21,12 @@ function client(opts: { session: boolean; fail?: boolean }) {
     },
     from: () => ({
       select: () => ({
-        maybeSingle: async () =>
-          opts.fail
-            ? { data: null, error: new Error('Failed to fetch') }
-            : { data: { role: 'supervisor', status: 'active', tenant: { name: 'e2e org A', status: 'active' } }, error: null },
+        eq: () => ({
+          maybeSingle: async () =>
+            opts.fail
+              ? { data: null, error: new Error('Failed to fetch') }
+              : { data: { role: 'supervisor', status: 'active', tenant: { name: 'e2e org A', status: 'active' } }, error: null },
+        }),
       }),
     }),
   };
