@@ -131,7 +131,9 @@ export function ConfirmDialog(props: {
 }) {
   const { visible, title, message, confirmLabel, busy, onConfirm, onCancel } = props;
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
+    // No fade: a half-transparent dialog fails contrast checks and keeps blank controls mounted while it leaves.
+    // react-native-web forwards unknown props to the dialog element, which needs an accessible name.
+    <Modal visible={visible} transparent animationType="none" onRequestClose={onCancel} {...({ 'aria-label': title } as object)}>
       <View style={styles.backdrop}>
         <View testID="confirm-dialog" accessibilityRole="alert" accessibilityViewIsModal style={styles.dialog}>
           <Text testID="confirm-title" accessibilityRole="header" style={{ fontSize: 20, fontWeight: '700', color: colors.text }}>
