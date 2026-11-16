@@ -4,7 +4,7 @@ Every release Rn follows architecture.md §Release & regression policy. Run on `
 
 ## Procedure (Stage 5b)
 1. Scope: list the features; confirm `main` CI is green. Note the commit SHA and the CI run URL (a **code** commit's full run, never a docs-only skipped run).
-2. Deploy `main` to **staging** (migrations, web alias `staging`, EAS Update `preview`). Run `regression.yml` with `target=staging`. It must pass.
+2. Deploy `main` to **staging** (migrations, Edge Functions `user-admin` + `account`, secret `ALLOWED_ORIGINS`, web alias `staging`, EAS Update `preview`) and run `node scripts/auth-config.mjs --apply --ref staging` (hosted Auth settings; the nightly check only verifies them). Run `regression.yml` with `target=staging`. It must pass.
 3. Manual checklist on staging (below), including one **real Android phone**.
 4. Write `sdlc/releases/<Rn>.md` from the template; copy the regression summary and result files into `sdlc/releases/<Rn>/evidence/`. Commit via PR.
 5. **Owner sign-off in chat (Sidambara Raja).** Only then promote to prod (the production-gate hook blocks it until the owner runs/approves it).

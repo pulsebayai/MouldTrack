@@ -29,6 +29,21 @@ export async function callerId(req: Request, sb: SupabaseClient): Promise<string
   return data.user.id;
 }
 
+/** The `session_id` claim of an access token that callerId already verified with Auth (null if absent or malformed). */
+export function sessionIdOf(req: Request): string | null {
+  const header = req.headers.get('authorization') ?? '';
+  const token = header.toLowerCase().startsWith('bearer ') ? header.slice(7).trim() : '';
+  const part = token.split('.')[1];
+  if (!part) return null;
+  try {
+    const json = atob(part.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(part.length / 4) * 4, '='));
+    const id = JSON.parse(json).session_id;
+    return typeof id === 'string' && /^[0-9a-f-]{36}$/i.test(id) ? id : null;
+  } catch {
+    return null;
+  }
+}
+
 export function randomBytes(n: number): Uint8Array {
   return crypto.getRandomValues(new Uint8Array(n));
 }

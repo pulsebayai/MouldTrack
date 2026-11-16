@@ -55,6 +55,13 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      - uses: denoland/setup-deno@v2
+        with: { deno-version: v2.x }
+      - name: Edge Functions type-check and lint (R9)
+        # Copied out of the repo: the root package.json would make Deno resolve the app's types.
+        run: |
+          rm -rf "$RUNNER_TEMP/fn" && cp -r supabase/functions "$RUNNER_TEMP/fn"
+          cd "$RUNNER_TEMP/fn" && deno check */index.ts && deno lint
       - if: always()
         uses: actions/upload-artifact@v4
         with:

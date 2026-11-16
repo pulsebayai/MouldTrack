@@ -82,6 +82,7 @@ jobs:
       E2E_API_URL: ${{ needs.setup.outputs.target == 'dev' && secrets.DEV_SUPABASE_URL || '' }}
       E2E_ANON_KEY: ${{ needs.setup.outputs.target == 'dev' && secrets.DEV_SUPABASE_ANON_KEY || '' }}
       E2E_SERVICE_ROLE_KEY: ${{ needs.setup.outputs.target == 'dev' && secrets.DEV_SUPABASE_SERVICE_ROLE_KEY || '' }}
+      E2E_REQUIRE_API: ${{ needs.setup.outputs.target == 'dev' && '1' || '' }} # a missing API env on dev is a failure, never a skip (R9)
       CI: 'true'
     steps:
       - uses: actions/checkout@v4
@@ -112,12 +113,15 @@ jobs:
 
   hosted-checks:
     needs: [setup, web] # after web: its fixtures reset removes legacy users (e.g. the pre-02 e2e-nomember) the orphan check would flag
-    if: always() && needs.setup.outputs.target == 'dev'
+    # dev: all checks. staging: only the Auth config check (AC-15, R4); the rest stay dev-only.
+    if: always() && (needs.setup.outputs.target == 'dev' || needs.setup.outputs.target == 'staging')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
+      TARGET: ${{ needs.setup.outputs.target }}
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       DEV_SUPABASE_PROJECT_REF: ${{ secrets.DEV_SUPABASE_PROJECT_REF }}
+      STAGING_SUPABASE_PROJECT_REF: ${{ secrets.STAGING_SUPABASE_PROJECT_REF }}
       APP_ENV: development
       SUPABASE_URL: ${{ secrets.DEV_SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.DEV_SUPABASE_SERVICE_ROLE_KEY }}

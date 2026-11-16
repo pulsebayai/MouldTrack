@@ -63,7 +63,7 @@ export default function ChangePassword() {
       if (forced) router.replace('/home');
       else setDone(true);
     } catch (err) {
-      if (err instanceof ApiError && err.message === EXPIRED) setExpired(true);
+      if (err instanceof ApiError && err.code === 'expired') setExpired(true);
       else if (err instanceof ApiError && err.field === 'current_password') setErrors({ current: err.message });
       else if (err instanceof ApiError && err.field === 'new_password') setErrors({ next: err.message });
       else setErrors({ form: err instanceof ApiError ? err.message : toUserMessage(err) });

@@ -40,8 +40,8 @@ export function unwrap(res: { data: unknown; error: RpcError }): Record<string, 
   if (res.error) throw fromRpcError(res.error);
   const data = (res.data ?? {}) as Record<string, unknown>;
   if (data.ok === false) {
-    if (data.code === 'expired') throw new HttpError(403, { message: EXPIRED_MESSAGE });
-    throw new HttpError(403, { message: NOT_ALLOWED });
+    if (data.code === 'expired') throw new HttpError(403, { code: 'expired', message: EXPIRED_MESSAGE });
+    throw new HttpError(403, { code: 'not_allowed', message: NOT_ALLOWED });
   }
   return data;
 }

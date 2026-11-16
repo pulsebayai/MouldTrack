@@ -4,7 +4,7 @@ import { MESSAGES } from './errors';
 
 /** Error from an Edge Function: `field` (when the server names one) and a message that is safe to show. */
 export class ApiError extends Error {
-  constructor(public status: number, public field: string | undefined, message: string) {
+  constructor(public status: number, public field: string | undefined, message: string, public code?: string) {
     super(message);
     this.name = 'ApiError';
   }
@@ -24,6 +24,14 @@ export function newRequestId(): string {
   b[8] = (b[8] & 0x3f) | 0x80;
   const h = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
+/**
+ * Whether a retry may reuse the request id. After a network error (no response) the first attempt may have succeeded, so the
+ * same id makes the retry idempotent. After any 5xx the server may have half-completed, so a fresh id is used (R2).
+ */
+export function keepRequestIdAfter(err: unknown): boolean {
+  return !(err instanceof ApiError && err.status >= 500);
 }
 
 export async function callFunction<T = Record<string, unknown>>(
@@ -54,7 +62,7 @@ export async function callFunction<T = Record<string, unknown>>(
   }
   if (!res.ok) {
     const safe = res.status < 500 && typeof json.message === 'string' ? json.message : MESSAGES.generic;
-    throw new ApiError(res.status, typeof json.field === 'string' ? json.field : undefined, safe);
+    throw new ApiError(res.status, typeof json.field === 'string' ? json.field : undefined, safe, typeof json.code === 'string' ? json.code : undefined);
   }
   return json as T;
 }

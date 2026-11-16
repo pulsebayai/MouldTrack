@@ -110,6 +110,17 @@ describe('Add user form (AC-1, AC-2)', () => {
     expect(mockCreate.mock.calls[1][2]).toBe(mockCreate.mock.calls[0][2]);
   });
 
+  it('uses a new request id after a 5xx answer (the first attempt may have half-completed)', async () => {
+    mockCreate.mockRejectedValueOnce(new ApiError(500, undefined, 'Something went wrong. Please try again.')).mockResolvedValue({ user_id: 'n', temp_password: 'Abcdefgh2345' });
+    await renderWithSession(<UserNew />, { ctx: admin });
+    await fillNew();
+    await fireEvent.press(screen.getByTestId('user-save'));
+    expect(await screen.findByTestId('user-form-error')).toBeTruthy();
+    await fireEvent.press(screen.getByTestId('user-save'));
+    await waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(2));
+    expect(mockCreate.mock.calls[1][2]).not.toBe(mockCreate.mock.calls[0][2]);
+  });
+
   it('shows "Already done" and no password when the server reports a repeat', async () => {
     mockCreate.mockResolvedValue({ user_id: 'n', already: true, message: 'Already done — reset the password if it was lost' });
     await renderWithSession(<UserNew />, { ctx: admin });

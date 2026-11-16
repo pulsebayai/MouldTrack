@@ -1,4 +1,4 @@
-import { ApiError, accountApi, callFunction, newRequestId, userAdminApi } from '@/lib/api';
+import { ApiError, keepRequestIdAfter, accountApi, callFunction, newRequestId, userAdminApi } from '@/lib/api';
 
 const deps = (fetchImpl: jest.Mock) => ({ baseUrl: 'http://api.test', anonKey: 'anon', fetchImpl: fetchImpl as never });
 const client = (token: string | null) => ({ auth: { getSession: async () => ({ data: { session: token ? { access_token: token } : null } }) } }) as never;
@@ -80,5 +80,23 @@ describe('typed wrappers', () => {
     expect(JSON.parse((f.mock.calls[0] as unknown as [string, { body: string }])[1].body)).toEqual({
       action: 'change_password', current_password: 'old-pass-1', new_password: 'new-pass-22',
     });
+  });
+});
+
+describe('request id reuse (R2)', () => {
+  it('ApiError carries the server code', async () => {
+    const err = await callFunction(client('t'), 'account', {}, deps(reply(403, { code: 'expired', message: 'x' }))).catch((e) => e);
+    expect(err).toMatchObject({ status: 403, code: 'expired' });
+    const none = await callFunction(client('t'), 'account', {}, deps(reply(400, { field: 'a', message: 'x' }))).catch((e) => e);
+    expect(none.code).toBeUndefined();
+  });
+  it.each([
+    ['a network failure (no response)', new TypeError('Network request failed'), true],
+    ['a 4xx answer', new ApiError(409, 'phone', 'dup'), true],
+    ['a 403 answer', new ApiError(403, undefined, 'Not allowed'), true],
+    ['a 500 answer', new ApiError(500, undefined, 'Something went wrong'), false],
+    ['a 502 answer', new ApiError(502, undefined, 'Something went wrong'), false],
+  ])('keepRequestIdAfter: %s', (_n, err, keep) => {
+    expect(keepRequestIdAfter(err)).toBe(keep);
   });
 });

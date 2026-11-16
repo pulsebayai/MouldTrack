@@ -5,6 +5,7 @@ import { TempPasswordPanel } from "@/components/temp-password-panel";
 import { Button, Chip, ErrorText, Field, colors } from "@/components/ui";
 import {
   ApiError,
+  keepRequestIdAfter,
   newRequestId,
   userAdminApi,
   type UpdateInput,
@@ -191,6 +192,7 @@ export function UserForm({ userId }: { userId?: string }) {
         }
       }
     } catch (err) {
+      if (!keepRequestIdAfter(err)) requestId.current = newRequestId(); // after a 5xx the first attempt may be half-done (R2)
       if (
         err instanceof ApiError &&
         err.field &&

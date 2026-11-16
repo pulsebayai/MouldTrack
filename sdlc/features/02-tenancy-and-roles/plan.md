@@ -117,6 +117,11 @@ Locks held: architecture + schema (roadmap, 2026-11-16).
 - **Step 10: Users loading state** puts the accessible name on the spinner (axe `aria-progressbar-name` caught it on slower dev; run 43827029080).
 - **Step 10: Jest timeout** 20 s in `users.test.tsx` and `user-form.test.tsx`: the first test in `users.test.tsx` timed out at the 5 s default on a loaded runner (static job, run 43829728473; passes locally in well under 1 s per test). Assertions unchanged. Flake reported to Opus.
 - **Step 10: extra files** `scripts/hosted-checks.sh` (runs the four hosted checks, writes `hosted-checks.tap` for the evidence summary), `scripts/__tests__/{auth-config,orphan-check}.test.ts`. The regression `web` job exports `E2E_API_URL/E2E_ANON_KEY/E2E_SERVICE_ROLE_KEY` (dev only) so the `api` project runs against dev; the `android` job resets fixtures again before Maestro because the web e2e changes U4's password.
+- **12a: R1/R2/R5/R8 SQL is a new migration** `20261116010000_review_fixes.sql` (this feature holds the schema lock) instead of editing `20261116000000`, which is already applied to hosted dev (`db push` would not re-apply it). Changed signatures are dropped and recreated: `ua_set_status` (+ `p_reason`), `account_password_changed` (+ `p_keep_session`, `p_check_only`), `_ua_audit` (+ `p_reason`).
+- **12a R5:** the no-write pre-check is `account_password_changed(..., p_check_only := true)` (plus `app.account_check`), not a new `svc_` wrapper, because `004` pins the wrapper count at 8 and must stay unchanged.
+- **12a R5:** `change-password.test.tsx` "switches to the expired state ..." now builds the `ApiError` with `code 'expired'` (the screen goes by the code, not the wording); assertion unchanged, plus a new test that the same text without the code stays a form error.
+- **12a R6:** the double-submit path is covered by a concurrency API test (outcomes limited to 200/409, exactly one password); a deterministic test of the re-check needs fault injection that the local stack does not offer.
+- **12a unlisted files:** `e2e/evidence.ts`, `e2e/api/review-fixes.spec.ts`, `supabase/tests/005_review_fixes.test.sql`, `scripts/consistency-check.ts` (+ test), `scripts/__tests__/playwright-evidence.test.ts`. The scratch Postgres harness got an `auth.sessions` stub (local only; CI uses the real table).
 
 ## Session log
 ### 2026-11-16

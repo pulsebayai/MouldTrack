@@ -41,3 +41,5 @@ Unit Admin (web), Supervisor (Android: first sign-in, password change). Systems:
 ## Open questions
 Resolved 2026-11-16 (owner): sign-in = phone + password; employee ID required + unique per tenant; Super Admin resets the last Unit Admin's password (03); SMS deferred to later (AWS End User Messaging SMS; SES for email).
 1. Spec (technical): Supabase phone+password sign-in normally needs the Phone provider enabled; the spec decides between that and an internal non-deliverable auth address keyed by phone, so that no SMS provider is needed now and adding SMS later doesn't change accounts.
+
+- Fixture phone numbers (`+91 90000 …`) are real-format numbers reserved for tests; no SMS, call or message is ever sent to them (nothing in the app contacts a phone number in 02).

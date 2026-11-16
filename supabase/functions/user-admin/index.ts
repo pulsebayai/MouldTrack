@@ -49,7 +49,15 @@ async function create(sb: SupabaseClient, actor: string, body: Record<string, un
     await new Promise((r) => setTimeout(r, 150));
   }
   if (authError || !created?.user) {
-    if (authError && isEmailTaken(authError)) throw new HttpError(409, { field: 'phone', message: PHONE_TAKEN });
+    if (authError && isEmailTaken(authError)) {
+      // A double submit of this very request may have won meanwhile: if the database now knows the request, report that
+      // instead of a duplicate-phone conflict (R6). A real duplicate still raises 409 here.
+      const again = unwrap(await sb.rpc('svc_ua_check_create', {
+        p_actor: actor, p_request_id: requestId, p_full_name: fullName, p_employee_id: employeeId, p_phone: phone, p_role: role,
+      }));
+      if (again.already) return { user_id: again.user_id, already: true, message: ALREADY_DONE };
+      throw new HttpError(409, { field: 'phone', message: PHONE_TAKEN });
+    }
     console.error('auth_create_failed', authError?.code ?? 'unknown');
     throw new HttpError(500, { message: 'Something went wrong. Try again.' });
   }
@@ -116,16 +124,18 @@ async function setStatus(sb: SupabaseClient, actor: string, body: Record<string,
   const status = requireString(body, 'status');
 
   const res = unwrap(await sb.rpc('svc_ua_set_status', { p_actor: actor, p_request_id: requestId, p_user_id: userId, p_status: status }));
-  if (res.already) return { ok: true }; // the first attempt already applied the Auth ban state
-
-  const { error } = await sb.auth.admin.updateUserById(userId, { ban_duration: status === 'inactive' ? BAN_FOREVER : 'none' });
+  // A replay (res.already) re-applies the Auth state that matches the current membership status: the first attempt may
+  // have committed the database change and failed on Auth (R2). Auth updates are idempotent.
+  const target = res.already ? String(res.status) : status;
+  const { error } = await sb.auth.admin.updateUserById(userId, { ban_duration: target === 'inactive' ? BAN_FOREVER : 'none' });
   if (error) {
     console.error('auth_ban_failed', error.code ?? 'unknown');
     if (res.changed === true) {
-      // Revert the database change so membership and Auth agree.
-      await sb.rpc('svc_ua_set_status', {
-        p_actor: actor, p_request_id: crypto.randomUUID(), p_user_id: userId, p_status: status === 'inactive' ? 'active' : 'inactive',
+      // Revert the database change so membership and Auth agree. A failed revert is logged and still answers 500.
+      const rev = await sb.rpc('svc_ua_set_status', {
+        p_actor: actor, p_request_id: crypto.randomUUID(), p_user_id: userId, p_status: status === 'inactive' ? 'active' : 'inactive', p_reason: 'compensation',
       });
+      if (rev.error || (rev.data as { ok?: boolean } | null)?.ok === false) console.error('compensation_failed status_not_reverted', userId);
     }
     throw new HttpError(500, { message: 'Something went wrong. Try again.' });
   }

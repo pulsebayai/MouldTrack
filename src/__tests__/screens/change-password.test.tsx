@@ -139,11 +139,20 @@ describe('Change password expired state (AC-4)', () => {
     await waitFor(() => expect(value.client.auth.signOut).toHaveBeenCalled());
   });
 
-  it('switches to the expired state when the server refuses with the expiry message', async () => {
-    mockChange.mockRejectedValue(new ApiError(403, undefined, message));
+  it('switches to the expired state when the server refuses with the expired code', async () => {
+    mockChange.mockRejectedValue(new ApiError(403, undefined, message, 'expired'));
     await renderWithSession(<ChangePassword />, { ctx: forced });
     await fillForm();
     await fireEvent.press(screen.getByTestId('change-password-submit'));
     expect(await screen.findByTestId('password-expired')).toHaveTextContent(message);
+  });
+
+  it('goes by the code, not the wording: the same text without the code stays a form error (R5)', async () => {
+    mockChange.mockRejectedValue(new ApiError(403, undefined, message));
+    await renderWithSession(<ChangePassword />, { ctx: forced });
+    await fillForm();
+    await fireEvent.press(screen.getByTestId('change-password-submit'));
+    expect(await screen.findByTestId('change-password-error')).toHaveTextContent(message);
+    expect(screen.queryByTestId('password-expired')).toBeNull();
   });
 });

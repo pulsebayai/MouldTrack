@@ -12,7 +12,12 @@ import {
   StatusLabel,
   colors,
 } from "@/components/ui";
-import { ApiError, newRequestId, userAdminApi } from "@/lib/api";
+import {
+  ApiError,
+  keepRequestIdAfter,
+  newRequestId,
+  userAdminApi,
+} from "@/lib/api";
 import { toUserMessage } from "@/lib/errors";
 import { formatPhone } from "@/lib/identity";
 import { isMember } from "@/lib/session";
@@ -139,6 +144,8 @@ export default function Users() {
       }
       requestIds.current.delete(key);
     } catch (e) {
+      // Network error: keep the id (the first attempt may have succeeded). 5xx: a fresh id next time (R2).
+      if (!keepRequestIdAfter(e)) requestIds.current.delete(key);
       setActionError(e instanceof ApiError ? e.message : toUserMessage(e));
     } finally {
       setBusy(false);

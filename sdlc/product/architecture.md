@@ -56,7 +56,9 @@ Regression = the whole suite (unit, DB/RLS, web e2e, Android e2e). Tests accumul
 Release sign-off: Sidambara Raja · Evidence retention: 90 days · Regulated data never in fixtures: real names/phone numbers of plant staff, real customer production data. Fixture Auth addresses use `@phone.mouldtrack.invalid` (never deliverable); fixture phones use `+91 90000 00001–00099` (canonical) and `+91 90000 10000–99999` (throwaway, created by tests and removed by `fixtures-reset`); names are invented. Mutating tests run in their own fixture tenant (`e2e org U`). Local/CI Supabase ports live in 15320–15329, below the Linux ephemeral range, so `supabase start` never races outgoing connections for a port.
 
 ## Known debt & fragile areas
-None yet (greenfield).
+- **Synthetic Auth identity (02):** sign-in uses `<10 digits>@phone.mouldtrack.invalid` as the Auth email. It never receives mail; when SMS/OTP or email arrives (roadmap "Later") the mapping is replaced by a real phone/email identity and a data migration.
+- **Users search has no index (02):** the Users list filters with `ilike` on name, employee ID and phone. Fine up to about 500 users per tenant; add a trigram index when a tenant approaches that.
+- **Staging hosted checks (02, R4):** the nightly `hosted-checks` job runs the Auth config check on staging only; the Edge Function, orphan, consistency and CORS checks are dev-only. The staging `auth-config.mjs --apply` and a first full staging run happen at the R1 release gate, so AC-15 for staging is proven there, not in feature 02.
 
 ## Decision log
 | Date | Decision | Reason | Feature |

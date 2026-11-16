@@ -1,8 +1,8 @@
 // account: a signed-in user changes their own password (D5). Expiry of a temporary password is checked first
 // (AC-4), the current password is verified with a throwaway session, then Auth is updated and the flag cleared.
-import { EXPIRED_MESSAGE, HttpError, unwrap } from '../_shared/errors.ts';
+import { HttpError, unwrap } from '../_shared/errors.ts';
 import { passwordPolicy } from '../_shared/identity.ts';
-import { anonClient, callerId, serviceClient } from '../_shared/clients.ts';
+import { anonClient, callerId, serviceClient, sessionIdOf } from '../_shared/clients.ts';
 import { requireString, serveJson } from '../_shared/http.ts';
 
 serveJson(async (req, body) => {
@@ -13,27 +13,9 @@ serveJson(async (req, body) => {
   const sb = serviceClient();
   const userId = await callerId(req, sb);
 
-  const { data: m, error: mErr } = await sb
-    .from('membership')
-    .select('tenant_id, role, status, must_change_password, temp_password_expires_at')
-    .eq('user_id', userId)
-    .maybeSingle();
-  if (mErr) {
-    console.error('membership_lookup_failed', mErr.code ?? 'unknown');
-    throw new HttpError(500, { message: 'Something went wrong. Try again.' });
-  }
-  if (!m || m.status !== 'active') {
-    // Let the database audit and refuse (inactive / no membership).
-    unwrap(await sb.rpc('svc_account_password_changed', { p_user_id: userId }));
-    throw new HttpError(403, { message: 'Not allowed' });
-  }
-  if (m.must_change_password && m.temp_password_expires_at && new Date(m.temp_password_expires_at) < new Date()) {
-    await sb.rpc('svc_audit_denied', {
-      p_actor: userId, p_tenant: m.tenant_id, p_role: m.role, p_reason: 'temp_password_expired',
-      p_entity_type: 'user', p_entity_id: userId, p_source: 'edge:account',
-    });
-    throw new HttpError(403, { message: EXPIRED_MESSAGE });
-  }
+  // No-write pre-check in the database: refuses (and audits, D13) an inactive member, a suspended tenant or an expired
+  // temporary password before Auth is touched.
+  unwrap(await sb.rpc('svc_account_password_changed', { p_user_id: userId, p_keep_session: null, p_check_only: true }));
 
   const { data: authUser, error: uErr } = await sb.auth.admin.getUserById(userId);
   if (uErr || !authUser.user?.email) throw new HttpError(500, { message: 'Something went wrong. Try again.' });
@@ -54,6 +36,7 @@ serveJson(async (req, body) => {
     throw new HttpError(500, { message: 'Something went wrong. Try again.' });
   }
 
-  unwrap(await sb.rpc('svc_account_password_changed', { p_user_id: userId }));
+  // Ends every other session of the user (the caller's own, from the verified JWT, and its refresh token survive).
+  unwrap(await sb.rpc('svc_account_password_changed', { p_user_id: userId, p_keep_session: sessionIdOf(req) }));
   return { ok: true };
 });

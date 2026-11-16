@@ -238,6 +238,32 @@ describe('Deactivate / reactivate with confirmation (AC-6, AC-14)', () => {
   });
 });
 
+describe('Retry safety (R2)', () => {
+  it('uses a new request id after a 5xx answer, but the same one after a 4xx answer', async () => {
+    mockSetStatus
+      .mockRejectedValueOnce(new ApiError(500, undefined, 'Something went wrong. Please try again.'))
+      .mockRejectedValueOnce(new ApiError(422, 'last_admin', 'A unit must keep at least one active Unit Admin'))
+      .mockResolvedValue({ ok: true });
+    await setup(list([row(1)])).ui;
+    await screen.findByTestId('user-row-id-1');
+    const press = async () => {
+      await fireEvent.press(screen.getByTestId('user-toggle-id-1'));
+      await fireEvent.press(screen.getByTestId('confirm-ok'));
+    };
+    await press();
+    await waitFor(() => expect(mockSetStatus).toHaveBeenCalledTimes(1));
+    await screen.findByTestId('users-action-error');
+    await press();
+    await waitFor(() => expect(mockSetStatus).toHaveBeenCalledTimes(2));
+    await screen.findByTestId('users-action-error');
+    await press();
+    await waitFor(() => expect(mockSetStatus).toHaveBeenCalledTimes(3));
+    const ids = mockSetStatus.mock.calls.map((c) => c[3]);
+    expect(ids[1]).not.toBe(ids[0]); // after the 500
+    expect(ids[2]).toBe(ids[1]); // after the 422
+  });
+});
+
 describe('Reset password and the temporary-password panel (AC-5, AC-14)', () => {
   it('names the person in the dialog, then shows the new password once with Copy and Done', async () => {
     mockReset.mockResolvedValue({ temp_password: 'Abcdefgh2345' });
