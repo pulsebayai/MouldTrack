@@ -241,6 +241,24 @@ test.describe('AC-5..8, AC-12 targets and idempotency over HTTP', () => {
     expect(await auditRows({ action: 'product.retired', entity: product })).toHaveLength(1);
   });
 
+  test('ending a target also cancels the changes scheduled after it (6a R1)', async () => {
+    const m = await rpc(ua, 'pm_save_machine', { p_request_id: uuid(), p_id: null, p_code: code(), p_name: 'End press', p_asset_tag: '', p_make: '', p_model: '', p_controller: '', p_line_id: null, p_status: 'active' });
+    const p = await rpc(ua, 'pm_save_product', { p_request_id: uuid(), p_id: null, p_code: code(), p_description: 'End cap', p_uom: 'pcs' });
+    const machine = m.data.id as string;
+    const product = p.data.id as string;
+    const set = (pieces: number, from: string) => rpc(ua, 'pm_set_target', { p_request_id: uuid(), p_machine_id: machine, p_product_id: product, p_pieces: pieces, p_effective_from: from });
+    expect((await set(100, today)).data).toMatchObject({ ok: true });
+    expect((await set(200, addDays(today, 4))).data).toMatchObject({ ok: true });
+    const end = await rpc(ua, 'pm_end_target', { p_request_id: uuid(), p_machine_id: machine, p_product_id: product, p_effective_from: today });
+    expect(end.data).toMatchObject({ ok: true, cancelled: [addDays(today, 4)] });
+    const rows = (await ua.client.from('target_version').select('effective_from, pieces_per_shift').eq('machine_id', machine)).data ?? [];
+    expect(rows).toHaveLength(4);
+    expect((await auditRows({ action: 'target.ended', entity: end.data.id }))).toHaveLength(1);
+    // nothing current and nothing scheduled any more: ending again is refused
+    const again = await rpc(ua, 'pm_end_target', { p_request_id: uuid(), p_machine_id: machine, p_product_id: product, p_effective_from: today });
+    expect(JSON.parse(again.error!.details!)).toMatchObject({ code: 'guard', field: 'no_target' });
+  });
+
   test('a repeated create returns the first outcome without a second row', async () => {
     const rid = uuid();
     const c = code();

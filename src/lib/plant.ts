@@ -286,6 +286,18 @@ export function summariseTargets(versions: TargetVersion[], today: string): Pair
   return out;
 }
 
+/** The scheduled (later than `date`) targets that ending on `date` would also cancel: per later date, the winning version if it is a target. */
+export function scheduledAfter(versions: TargetVersion[], date: string): { from: string; pieces: number }[] {
+  const sorted = [...versions].sort(latestFirst);
+  const dates = [...new Set(sorted.filter((v) => v.effective_from > date).map((v) => v.effective_from))].sort();
+  const out: { from: string; pieces: number }[] = [];
+  for (const d of dates) {
+    const winner = sorted.find((v) => v.effective_from === d)!;
+    if (winner.pieces_per_shift !== null) out.push({ from: d, pieces: winner.pieces_per_shift });
+  }
+  return out;
+}
+
 // ---- Writes (RPC) ---------------------------------------------------------------------------------------------------------------
 /** A server refusal. `field` names the form field for validation/duplicate errors; `machines` lists blocking machine codes. */
 export class PlantError extends ApiError {

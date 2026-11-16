@@ -165,7 +165,8 @@ set search_path = ''
 as $$ select app.plant_date_at(p_tenant, now()) $$;
 
 -- Pieces per shift in force for a machine x product on a plant date; null when there is none or it was ended (AC-7).
--- Server-side callers only. When called with a user's JWT it also refuses other tenants' machines.
+-- Server-side callers only. The tenant check is skipped only for the service role; every other caller (including no claims at all) must
+-- belong to the machine's tenant, so there is no unauthenticated bypass (6a R3).
 create function app.target_for(p_machine uuid, p_product uuid, p_date date)
 returns integer
 language sql
@@ -178,7 +179,7 @@ as $$
   where v.machine_id = p_machine
     and v.product_id = p_product
     and v.effective_from <= p_date
-    and (auth.uid() is null or v.tenant_id = app.current_tenant_id())
+    and (auth.role() = 'service_role' or v.tenant_id = app.current_tenant_id())
   order by v.effective_from desc, v.recorded_at desc, v.id desc
   limit 1
 $$;
@@ -819,6 +820,8 @@ declare
   p public.product;
   v_before integer;
   v_id uuid;
+  v_cancel date[];
+  v_d date;
 begin
   a := app._pm_authorise(p_request_id, c_src);
   if not (a->>'ok')::boolean then return a; end if;
@@ -835,19 +838,34 @@ begin
     perform app._pm_fail('validation', 'Targets can''t end in the past', 'effective_from');
   end if;
   -- Ending works for retired machines and products too: that is how their targets get cleaned up.
+  -- "End" means no target from the end date onwards (6a R1): besides the null at the end date, every later scheduled change whose
+  -- winning version is a target is cancelled with its own null, all in this transaction. Refused only when the pair has no target
+  -- in force on the date and none scheduled after it.
   v_before := app.target_for(p_machine_id, p_product_id, p_effective_from);
-  if v_before is null then perform app._pm_fail('guard', 'There is no target to end on that date', 'no_target'); end if;
+  select coalesce(array_agg(f.d order by f.d), '{}') into v_cancel
+    from (select distinct t.effective_from as d
+            from public.target_version t
+           where t.machine_id = p_machine_id and t.product_id = p_product_id and t.effective_from > p_effective_from
+             and app.target_for(p_machine_id, p_product_id, t.effective_from) is not null) f;
+  if v_before is null and cardinality(v_cancel) = 0 then
+    perform app._pm_fail('guard', 'There is no target to end on that date', 'no_target');
+  end if;
   select * into m from public.machine x where x.id = p_machine_id;
   select * into p from public.product x where x.id = p_product_id;
 
   insert into public.target_version (tenant_id, machine_id, product_id, effective_from, pieces_per_shift, recorded_by, request_id)
   values (v_tenant, p_machine_id, p_product_id, p_effective_from, null, (a->>'actor')::uuid, p_request_id)
   returning id into v_id;
+  foreach v_d in array v_cancel loop
+    insert into public.target_version (tenant_id, machine_id, product_id, effective_from, pieces_per_shift, recorded_by, request_id)
+    values (v_tenant, p_machine_id, p_product_id, v_d, null, (a->>'actor')::uuid, p_request_id);
+  end loop;
   perform app._pm_audit(a, 'target.ended', 'target_version', v_id,
     jsonb_build_object('pieces_per_shift', v_before),
-    jsonb_build_object('machine_code', m.code, 'product_code', p.code, 'pieces_per_shift', null, 'effective_from', p_effective_from),
+    jsonb_build_object('machine_code', m.code, 'product_code', p.code, 'pieces_per_shift', null, 'effective_from', p_effective_from,
+                       'cancelled_dates', to_jsonb(v_cancel)),
     p_request_id, c_src);
-  return jsonb_build_object('ok', true, 'id', v_id);
+  return jsonb_build_object('ok', true, 'id', v_id, 'cancelled', to_jsonb(v_cancel));
 end
 $$;
 

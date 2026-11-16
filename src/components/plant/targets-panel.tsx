@@ -93,6 +93,8 @@ export function TargetsPanel({ machineId, machineCode, retired }: { machineId: s
               productId={form.productId}
               productLabel={`${machineCode} · ${label(data.data.products.get(form.productId))}`}
               today={data.data.today}
+              versions={data.data.versions.filter((v) => v.product_id === form.productId)}
+              unit={`${data.data.products.get(form.productId)?.uom ?? 'pcs'}/shift`}
               onDone={done}
               onCancel={() => setForm(null)}
             />
