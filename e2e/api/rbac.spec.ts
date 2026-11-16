@@ -38,7 +38,7 @@ test.describe('AC-9 role', () => {
     for (const body of ACTIONS(R.users.fresh.id)) {
       const r = await callFn(request, 'user-admin', sup.token, body);
       expect(r.status, body.action).toBe(403);
-      expect(r.body).toEqual({ message: 'Not allowed' });
+      expect(r.body).toEqual({ code: 'not_allowed', message: 'Not allowed' });
     }
     const events = (await auditRows({ action: 'access.denied', actor: sup.userId })).slice(before);
     expect(events).toHaveLength(4);
@@ -67,7 +67,7 @@ test.describe('AC-10 cross-tenant', () => {
       const missing = await callFn(request, 'user-admin', ua.token, make(unknown));
       expect(cross.status).toBe(403);
       expect(cross).toEqual(missing); // no existence leak
-      expect(cross.body).toEqual({ message: 'Not allowed' });
+      expect(cross.body).toEqual({ code: 'not_allowed', message: 'Not allowed' });
     }
     const events = (await auditRows({ action: 'access.denied', actor: ua.userId })).slice(before);
     expect(events.filter((e) => e.reason === 'cross_tenant')).toHaveLength(3);
@@ -131,7 +131,7 @@ test.describe('AC-12 in flight', () => {
       await sb.from('tenant').update({ status: 'suspended' }).eq('id', Q.id);
       const r = await callFn(request, 'user-admin', qua.token, ACTIONS(Q.users.sup.id)[2]);
       expect(r.status).toBe(403);
-      expect(r.body).toEqual({ message: 'Not allowed' });
+      expect(r.body).toEqual({ code: 'not_allowed', message: 'Not allowed' });
       const events = await auditRows({ action: 'access.denied', actor: qua.userId });
       expect(events.at(-1)).toMatchObject({ reason: 'inactive', tenant_id: Q.id });
       expect((await qua.client.from('tenant').select('id')).data).toEqual([]);
