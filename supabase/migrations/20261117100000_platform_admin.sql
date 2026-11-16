@@ -635,7 +635,7 @@ security definer
 set search_path = ''
 as $$
 begin
-  perform pg_advisory_xact_lock(hashtext('app.platform_admin'));
+  perform pg_advisory_xact_lock(hashtext('app.platform_setup'));
   if exists (select 1 from public.platform_admin) then
     if not exists (
       select 1 from public.audit_event e
@@ -648,6 +648,29 @@ begin
   return jsonb_build_object('ok', true);
 end
 $$;
+
+-- A wrong setup token while setup is open (R2): refused and audited, throttled like the closed-state refusal.
+create function app.pa_setup_bad_token()
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  perform pg_advisory_xact_lock(hashtext('app.platform_setup'));
+  if not exists (
+    select 1 from public.audit_event e
+    where e.action = 'access.denied' and e.reason = 'setup_bad_token' and e.occurred_at > now() - interval '1 minute'
+  ) then
+    perform app.audit_denied(null, null, null, 'setup_bad_token', 'platform_admin', null, 'edge:platform-setup');
+  end if;
+  return jsonb_build_object('ok', false, 'code', 'not_allowed');
+end
+$$;
+
+-- Serves the one-per-minute throttle lookups (N-3): without it every public refusal scans recent audit rows.
+create index audit_event_setup_refusals_idx on public.audit_event (occurred_at)
+  where reason in ('setup_closed', 'setup_bad_token');
 
 create function app.pa_setup_first(p_user_id uuid, p_full_name text, p_phone text)
 returns jsonb
@@ -745,6 +768,9 @@ as $$ select app.pa_sa_reset_password(p_actor, p_request_id, p_user_id) $$;
 create function public.psvc_pa_setup_check()
 returns jsonb language sql security invoker set search_path = ''
 as $$ select app.pa_setup_check() $$;
+create function public.psvc_pa_setup_bad_token()
+returns jsonb language sql security invoker set search_path = ''
+as $$ select app.pa_setup_bad_token() $$;
 create function public.psvc_pa_setup_first(p_user_id uuid, p_full_name text, p_phone text)
 returns jsonb language sql security invoker set search_path = ''
 as $$ select app.pa_setup_first(p_user_id, p_full_name, p_phone) $$;

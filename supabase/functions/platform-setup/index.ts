@@ -6,7 +6,7 @@ import { generateTempPassword, phoneToAuthEmail } from '../_shared/identity.ts';
 import { randomBytes, serviceClient } from '../_shared/clients.ts';
 import { createAuthUser, phoneOf } from '../_shared/auth-users.ts';
 import { requireString, serveJson } from '../_shared/http.ts';
-import { setupTokenConfigured, setupTokenMatches } from '../_shared/setup-token.ts';
+import { setupTokenMatches, setupTokenUsable } from '../_shared/setup-token.ts';
 
 const REFUSED = { code: 'not_allowed', message: 'Not allowed' };
 const CLOSED = { code: 'setup_closed', message: 'Not allowed' };
@@ -17,8 +17,9 @@ function refusal(data: unknown): HttpError {
 
 serveJson(async (req, body) => {
   const expected = Deno.env.get('PLATFORM_SETUP_TOKEN');
-  // No secret configured (every environment except while setup is pending): refuse without touching the database.
-  if (!setupTokenConfigured(expected)) throw new HttpError(403, REFUSED);
+  // No usable secret (every environment except while setup is pending, and the local literal anywhere but the local stack): refuse
+  // without touching the database and without an audit row.
+  if (!setupTokenUsable(expected, Deno.env.get('SUPABASE_URL'))) throw new HttpError(403, REFUSED);
 
   const sb = serviceClient();
   // Closed already? Refuse with or without a token; the SQL function audits the refusal (throttled).
@@ -29,7 +30,12 @@ serveJson(async (req, body) => {
   }
   if ((check.data as { ok?: boolean } | null)?.ok !== true) throw refusal(check.data);
 
-  if (!setupTokenMatches(expected, req.headers.get('x-setup-token'))) throw new HttpError(403, REFUSED);
+  if (!setupTokenMatches(expected, req.headers.get('x-setup-token'))) {
+    // Setup is open and the token is wrong: audited (throttled in SQL). A failure to audit never changes the answer.
+    const bad = await sb.rpc('psvc_pa_setup_bad_token');
+    if (bad.error) console.error('setup_bad_token_audit_failed', bad.error.code ?? 'unknown');
+    throw new HttpError(403, REFUSED);
+  }
 
   const fullName = requireString(body, 'full_name');
   const phone = phoneOf(body, true)!;

@@ -1,4 +1,6 @@
-import { MIN_SETUP_TOKEN_LENGTH, setupTokenConfigured, setupTokenMatches } from '../../../supabase/functions/_shared/setup-token';
+import {
+  LOCAL_SETUP_TOKEN, MIN_SETUP_TOKEN_LENGTH, isLocalSupabaseUrl, setupTokenConfigured, setupTokenMatches, setupTokenUsable,
+} from '../../../supabase/functions/_shared/setup-token';
 
 const TOKEN = 'a-long-enough-setup-token-123456';
 
@@ -32,5 +34,49 @@ describe('setup token (03, AC-2)', () => {
     const t = 'tokén-with-accents-1234567890';
     expect(setupTokenMatches(t, t)).toBe(true);
     expect(setupTokenMatches(t, 'token-with-accents-1234567890')).toBe(false);
+  });
+});
+
+describe('local literal guard (03 R3)', () => {
+  const LOCAL = LOCAL_SETUP_TOKEN;
+  it('the local literal is itself a well-formed token (long enough), so only the guard stops it off the local stack', () => {
+    expect(setupTokenConfigured(LOCAL)).toBe(true);
+  });
+  it.each([
+    'http://127.0.0.1:15321',
+    'http://localhost:15321',
+    'http://kong:8000',
+    'http://supabase_kong_MouldTrack:8000',
+    'http://host.docker.internal:15321',
+    'http://[::1]:15321',
+  ])('treats %s as the local stack', (url) => {
+    expect(isLocalSupabaseUrl(url)).toBe(true);
+    expect(setupTokenUsable(LOCAL, url)).toBe(true);
+  });
+  it.each([
+    'https://abcdefghijkl.supabase.co',
+    'https://abcdefghijkl.supabase.red',
+    'http://db.example.com',
+    'https://localhost.evil.example.com',
+    'http://127.0.0.1.evil.example.com',
+    '',
+    'not a url',
+    undefined,
+  ])('does not treat %s as the local stack and refuses the local literal there', (url) => {
+    expect(isLocalSupabaseUrl(url)).toBe(false);
+    expect(setupTokenUsable(LOCAL, url)).toBe(false);
+  });
+  it('any other well-formed token is usable anywhere', () => {
+    expect(setupTokenUsable(TOKEN, 'https://abcdefghijkl.supabase.co')).toBe(true);
+    expect(setupTokenUsable(TOKEN, undefined)).toBe(true);
+  });
+  it('an unconfigured token is never usable', () => {
+    expect(setupTokenUsable(undefined, 'http://127.0.0.1:15321')).toBe(false);
+    expect(setupTokenUsable('short', 'http://127.0.0.1:15321')).toBe(false);
+  });
+  it('the literal matches supabase/config.toml', () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const toml = require('fs').readFileSync(require('path').join(__dirname, '../../../supabase/config.toml'), 'utf8') as string;
+    expect(toml).toContain(`PLATFORM_SETUP_TOKEN = "${LOCAL}"`);
   });
 });

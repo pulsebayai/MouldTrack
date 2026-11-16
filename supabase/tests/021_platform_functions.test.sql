@@ -2,7 +2,7 @@
 -- Self-contained; rolled back. Phones from the throwaway block +91 90000 21xxx.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(153);
+select plan(157);
 
 create function pg_temp.err(q text) returns jsonb language plpgsql as $f$
 declare d text; m text; st text;
@@ -212,6 +212,11 @@ select is(app.pa_setup_first('00000000-0000-4000-b900-0000000000e4', 'Late Setup
 select is((select count(*)::int from public.platform_admin where phone_e164 = '+919000021401'), 0, 'setup_first: nothing created when refused');
 delete from public.platform_admin;
 select is(app.pa_setup_check(), '{"ok": true}'::jsonb, 'setup: open when no SA exists');
+select is(app.pa_setup_bad_token(), '{"ok": false, "code": "not_allowed"}'::jsonb, 'bad token: refused');
+select is((select count(*)::int from public.audit_event where action = 'access.denied' and reason = 'setup_bad_token' and source = 'edge:platform-setup' and actor_user_id is null and tenant_id is null), 1, 'bad token: the attempt is audited');
+select app.pa_setup_bad_token();
+select is((select count(*)::int from public.audit_event where reason = 'setup_bad_token'), 1, 'bad token: attempts are throttled to one audit row per minute');
+select ok(exists (select 1 from pg_indexes where schemaname = 'public' and tablename = 'audit_event' and indexname = 'audit_event_setup_refusals_idx'), 'a partial index serves the setup throttle lookups (N-3)');
 select is(pg_temp.err($$ select app.pa_setup_first('00000000-0000-4000-b900-0000000000e4', '', '+919000021401') $$) @> '{"code":"validation","field":"full_name"}', true, 'setup_first: validates the name');
 select is(pg_temp.err($$ select app.pa_setup_first('00000000-0000-4000-b900-0000000000e4', 'First Admin', '+919000021101') $$) @> '{"code":"duplicate","field":"phone"}', true, 'setup_first: refuses a phone that a member holds');
 select is((app.pa_setup_first('00000000-0000-4000-b900-0000000000e4', ' First Admin ', '+919000021401'))->>'ok', 'true', 'setup_first: creates the first SA');

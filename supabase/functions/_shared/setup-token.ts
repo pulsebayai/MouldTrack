@@ -19,3 +19,30 @@ export function setupTokenMatches(expected: string | undefined | null, provided:
   for (let i = 0; i < n; i++) diff |= (a[i] ?? 0) ^ (b[i] ?? 0);
   return diff === 0;
 }
+
+/** The non-secret token in supabase/config.toml for the local stack. It must never authorise anything on a hosted project. */
+export const LOCAL_SETUP_TOKEN = 'local-setup-token-not-a-secret-0123456789';
+
+/**
+ * True for the local stack's SUPABASE_URL: plain http to localhost, a loopback address, host.docker.internal or a dotless docker
+ * service name (the edge runtime sees `http://kong:8000`). A hosted project is always https on a dotted host.
+ */
+export function isLocalSupabaseUrl(url: string | undefined | null): boolean {
+  if (typeof url !== 'string' || url === '') return false;
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== 'http:') return false;
+  const host = u.hostname.replace(/^\[|\]$/g, '');
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === 'host.docker.internal' || !host.includes('.');
+}
+
+/** A usable token is configured and, when it is the local literal, only on the local stack (R3). */
+export function setupTokenUsable(expected: string | undefined | null, supabaseUrl: string | undefined | null): expected is string {
+  if (!setupTokenConfigured(expected)) return false;
+  if (expected === LOCAL_SETUP_TOKEN && !isLocalSupabaseUrl(supabaseUrl)) return false;
+  return true;
+}

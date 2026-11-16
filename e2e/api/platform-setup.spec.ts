@@ -32,6 +32,12 @@ test('a missing or wrong token is refused with 403 and creates nothing', async (
     expect(r.body).toEqual({ code: 'not_allowed', message: 'Not allowed' });
   }
   expect((await service().from('platform_admin').select('user_id')).data).toEqual([]);
+  // R2: while setup is open a wrong token is audited, throttled to one row a minute, and the secret never appears in the row.
+  const since = new Date(Date.now() - 60_000).toISOString();
+  const { data: rows } = await service().from('audit_event').select('reason, source, actor_user_id, tenant_id, before, after').eq('reason', 'setup_bad_token').gte('occurred_at', since);
+  expect(rows!.length).toBe(1);
+  expect(rows![0]).toMatchObject({ source: 'edge:platform-setup', actor_user_id: null, tenant_id: null });
+  expect(JSON.stringify(rows)).not.toContain(TOKEN);
 });
 
 test('GET and non-JSON bodies are refused before anything happens', async ({ request }) => {
