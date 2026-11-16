@@ -6,7 +6,7 @@ import { SiteForm } from '@/components/plant/site-form';
 import { useLoad } from '@/components/plant/use-load';
 import { Button, ConfirmDialog, ErrorText, Field, colors } from '@/components/ui';
 import { toUserMessage } from '@/lib/errors';
-import { MSG, PlantError, RequestIds, fetchLines, plantApi, type Line } from '@/lib/plant';
+import { MSG, PlantError, RequestIds, fetchHasTargets, fetchLines, plantApi, type Line } from '@/lib/plant';
 import { useSession } from '@/lib/session-provider';
 
 /** Site & lines tab: edit the site name / time zone, add, rename and archive lines. */
@@ -14,6 +14,7 @@ export default function SiteTab() {
   const { client } = useSession();
   const { site, reload } = usePlant();
   const lines = useLoad(() => fetchLines(client), []);
+  const hasTargets = useLoad(() => fetchHasTargets(client), []);
   const [newName, setNewName] = useState('');
   const [editing, setEditing] = useState<{ id: string; name: string } | null>(null);
   const [pending, setPending] = useState<Line | null>(null);
@@ -72,7 +73,7 @@ export default function SiteTab() {
 
   return (
     <View testID="site-tab" style={{ gap: 24 }}>
-      <SiteForm site={site} defaultTimezone={site.timezone} onSaved={reload} />
+      <SiteForm site={site} defaultTimezone={site.timezone} onSaved={reload} timezoneLocked={hasTargets.latest === true} />
 
       <View testID="lines-section" style={{ gap: 12 }}>
         <Text accessibilityRole="header" style={{ fontSize: 20, fontWeight: '700', color: colors.text }}>Lines</Text>
@@ -82,7 +83,7 @@ export default function SiteTab() {
         <Button title="Add line" testID="line-add" onPress={() => saveLine(null, newName)} disabled={busy} busy={busy && !editing && !pending} />
 
         {lines.state === 'loading' ? <Loading testID="lines-loading" label="Loading lines" /> : null}
-        {lines.state === 'error' ? <LoadError testID="lines-load-error" onRetry={lines.reload} /> : null}
+        {lines.state === 'error' ? <LoadError testID="lines-load-error" onRetry={lines.reload} error={lines.error} /> : null}
         {lines.state === 'ready' && (lines.data ?? []).length === 0 ? (
           <Text testID="lines-empty" style={{ fontSize: 16, color: colors.text }}>No lines yet</Text>
         ) : null}

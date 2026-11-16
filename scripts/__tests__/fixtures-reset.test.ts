@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { assertSafeTarget, isCanonicalPhone, isFixtureAuthEmail, isThrowawayAuthEmail, isThrowawayPlantName, PLANT, TENANTS, USERS } from '../fixtures-reset';
+import { assertSafeTarget, ensureFixtureSite, isCanonicalPhone, isFixtureAuthEmail, isThrowawayAuthEmail, isThrowawayPlantName, PLANT, TENANTS, USERS } from '../fixtures-reset';
 
 const dev = { APP_ENV: 'development', DEV_SUPABASE_PROJECT_REF: 'abcdefghijklmnopqrst', SUPABASE_URL: 'https://abcdefghijklmnopqrst.supabase.co' };
 
@@ -124,5 +124,37 @@ describe('fixtures-reset 04 plant fixtures (D8)', () => {
       for (const x of p.products) { expect(seed).toContain(`'${x.code}'`); expect(seed).toContain(`'${x.description}'`); }
       for (const t of p.targets) expect(seed).toMatch(new RegExp(`date '2026-01-01', ${t.pieces},`));
     }
+  });
+});
+
+describe('fixtures-reset ensureFixtureSite (R4 item 14)', () => {
+  // a recording stand-in for the service-role client's site table
+  function fakeAdmin(existing: { id: string; name: string; timezone: string } | null) {
+    const calls: { op: string; payload?: unknown; id?: unknown }[] = [];
+    const chain = (op: string, payload?: unknown) => {
+      const c: Record<string, unknown> = {};
+      for (const n of ['select', 'eq']) c[n] = (...a: unknown[]) => { if (n === 'eq' && op === 'update') calls[calls.length - 1].id = a[1]; return c; };
+      c.maybeSingle = async () => ({ data: existing, error: null });
+      c.single = async () => ({ data: { id: 'new-site' }, error: null });
+      c.then = (res: (v: unknown) => unknown) => Promise.resolve({ data: [{ id: 'x' }], error: null }).then(res);
+      calls.push({ op, payload });
+      return c;
+    };
+    return { calls, admin: { from: () => ({ select: () => chain('select'), insert: (p: unknown) => chain('insert', p), update: (p: unknown) => chain('update', p) }) } as never };
+  }
+  it('restores the name and time zone when an e2e run changed them', async () => {
+    const f = fakeAdmin({ id: 's-1', name: 'Renamed by a test', timezone: 'UTC' });
+    expect(await ensureFixtureSite(f.admin, 't-1', { site: 'Fixture Plant U' })).toBe('s-1');
+    expect(f.calls.find((c) => c.op === 'update')).toMatchObject({ payload: { name: 'Fixture Plant U', timezone: 'Asia/Kolkata' }, id: 's-1' });
+  });
+  it('leaves an untouched site alone', async () => {
+    const f = fakeAdmin({ id: 's-1', name: 'Fixture Plant U', timezone: 'Asia/Kolkata' });
+    expect(await ensureFixtureSite(f.admin, 't-1', { site: 'Fixture Plant U' })).toBe('s-1');
+    expect(f.calls.some((c) => c.op === 'update' || c.op === 'insert')).toBe(false);
+  });
+  it('creates a missing site', async () => {
+    const f = fakeAdmin(null);
+    expect(await ensureFixtureSite(f.admin, 't-1', { site: 'Fixture Plant U' })).toBe('new-site');
+    expect(f.calls.find((c) => c.op === 'insert')).toMatchObject({ payload: { tenant_id: 't-1', name: 'Fixture Plant U', timezone: 'Asia/Kolkata' } });
   });
 });

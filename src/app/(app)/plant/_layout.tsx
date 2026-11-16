@@ -40,7 +40,7 @@ export default function PlantLayout() {
           <Button title="Home" variant="secondary" testID="plant-home" onPress={() => router.replace('/home')} />
         </View>
         {base.state === 'loading' ? <Loading testID="plant-loading" label="Loading plant" /> : null}
-        {base.state === 'error' ? <LoadError testID="plant-error" onRetry={base.reload} /> : null}
+        {base.state === 'error' ? <LoadError testID="plant-error" onRetry={base.reload} error={base.error} /> : null}
         {base.state === 'ready' && base.data && !base.data.site ? (
           <SiteForm site={null} defaultTimezone={base.data.tenantTimezone ?? DEFAULT_TIMEZONE} onSaved={base.reload} />
         ) : null}

@@ -124,6 +124,15 @@ const must = <T>(r: { data: T; error: { message: string } | null }): T => {
   return r.data;
 };
 
+/** The fixture site exists with its fixture name and time zone (an e2e run may have renamed it; targets never touch it). Returns its id. */
+export async function ensureFixtureSite(admin: Admin, tenantId: string, fx: Pick<PlantFixture, 'site'>): Promise<string> {
+  const want = { name: fx.site, timezone: 'Asia/Kolkata' };
+  const site = must(await admin.from('site').select('id, name, timezone').eq('tenant_id', tenantId).maybeSingle());
+  if (!site) return must(await admin.from('site').insert({ tenant_id: tenantId, ...want }).select('id').single())!.id as string;
+  if (site.name !== want.name || site.timezone !== want.timezone) must(await admin.from('site').update(want).eq('id', site.id).select('id'));
+  return site.id as string;
+}
+
 /**
  * Plant fixtures (04, D8). target_version is append-only, so targets are only ever inserted (and only when the pair has none);
  * throwaway machines/products that already have targets are retired instead of deleted. Dev accumulates a few retired rows per run (accepted).
@@ -131,9 +140,7 @@ const must = <T>(r: { data: T; error: { message: string } | null }): T => {
 async function resetPlant(admin: Admin, tenantIds: Map<string, string>) {
   for (const fx of PLANT) {
     const tenantId = tenantIds.get(fx.tenant)!;
-    let site = must(await admin.from('site').select('id').eq('tenant_id', tenantId).maybeSingle());
-    if (!site) site = must(await admin.from('site').insert({ tenant_id: tenantId, name: fx.site, timezone: 'Asia/Kolkata' }).select('id').single());
-    const siteId = site!.id as string;
+    const siteId = await ensureFixtureSite(admin, tenantId, fx);
 
     const lineIds = new Map<string, string>();
     for (const name of fx.lines) {

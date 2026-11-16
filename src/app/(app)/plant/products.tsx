@@ -78,7 +78,7 @@ export default function ProductsTab() {
       </View>
 
       {list.state === 'loading' ? <Loading testID="products-loading" label="Loading products" /> : null}
-      {list.state === 'error' ? <LoadError testID="products-error" onRetry={list.reload} /> : null}
+      {list.state === 'error' ? <LoadError testID="products-error" onRetry={list.reload} error={list.error} /> : null}
       {list.state === 'ready' && rows.length === 0 ? (
         filtered ? (
           <Text testID="products-no-match" style={{ fontSize: 16, color: colors.text }}>No products match</Text>

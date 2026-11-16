@@ -44,7 +44,7 @@ export function TargetsPanel({ machineId, machineCode, retired }: { machineId: s
         Targets (pieces per shift)
       </Text>
       {data.state === 'loading' ? <Loading testID="targets-loading" label="Loading targets" /> : null}
-      {data.state === 'error' ? <LoadError testID="targets-error" onRetry={data.reload} /> : null}
+      {data.state === 'error' ? <LoadError testID="targets-error" onRetry={data.reload} error={data.error} /> : null}
       {data.state === 'ready' && data.data ? (
         <>
           {data.data.versions.length === 0 ? (

@@ -111,3 +111,45 @@ describe('Site & lines tab (AC-1, AC-2)', () => {
     for (const id of ['site-save', 'line-add', 'line-rename-l-1', 'line-archive-l-1']) expect(screen.getByTestId(id)).toHaveStyle({ minHeight: 48 });
   });
 });
+
+describe('Site timezone lock (R2)', () => {
+  const renderSite = (hasTargets: boolean) => {
+    const t = plantClient({ line: ok(lines), target_version: ok(null, hasTargets ? 2 : 0) });
+    return { ...t, ui: renderWithSession(
+      <PlantContext.Provider value={{ site, today: '2026-11-18', reload }}>
+        <SiteTab />
+      </PlantContext.Provider>,
+      { ctx: admin, client: t.client },
+    ) };
+  };
+  it('shows the time zone as read-only text with the reason once targets exist, and still saves the name', async () => {
+    const { rpc, ui } = renderSite(true);
+    await ui;
+    expect(await screen.findByTestId('site-tz-locked')).toHaveTextContent("Asia / Kolkata");
+    expect(screen.getByTestId('site-tz-locked-note')).toHaveTextContent("The site timezone can't change once targets exist");
+    expect(screen.queryByTestId('site-tz-Asia/Tokyo')).toBeNull();
+    await fireEvent.changeText(screen.getByLabelText('Site name'), 'Renamed');
+    await fireEvent.press(screen.getByTestId('site-save'));
+    await waitFor(() => expect(rpc).toHaveBeenCalledWith('pm_save_site', { p_request_id: expect.any(String), p_name: 'Renamed', p_timezone: 'Asia/Kolkata' }));
+  });
+  it('keeps the time zone chips while no target exists', async () => {
+    const { ui } = renderSite(false);
+    await ui;
+    await screen.findByTestId('line-row-l-1');
+    expect(screen.getByTestId('site-tz-Asia/Tokyo')).toBeTruthy();
+    expect(screen.queryByTestId('site-tz-locked')).toBeNull();
+  });
+});
+
+describe('Load errors use the shared message mapping (R4 item 9)', () => {
+  it('shows the generic message for an unexpected error and the network message for a fetch failure', async () => {
+    const t = plantClient({ line: { data: null, error: new Error('boom: relation "line" does not exist') } });
+    await renderWithSession(
+      <PlantContext.Provider value={{ site, today: null, reload }}>
+        <SiteTab />
+      </PlantContext.Provider>,
+      { ctx: admin, client: t.client },
+    );
+    expect(await screen.findByTestId('lines-load-error')).toHaveTextContent('Something went wrong. Please try again.');
+  });
+});

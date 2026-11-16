@@ -102,26 +102,24 @@ describe('Home 02 entries', () => {
 describe('Home 04 entries', () => {
   const admin = { ...ctx, role: 'unit_admin' as const };
   beforeEach(() => mockPush.mockReset());
+  afterEach(() => jest.restoreAllMocks()); // restored even when an assertion fails (R4 item 13)
 
   it('a Unit Admin on web sees the Plant entry', async () => {
     jest.replaceProperty(Platform, 'OS', 'web');
     await renderWithSession(<Home />, { ctx: admin });
     await fireEvent.press(screen.getByTestId('plant-link'));
     expect(mockPush).toHaveBeenCalledWith('/plant');
-    jest.restoreAllMocks();
   });
 
   it('a supervisor sees no Plant entry', async () => {
     jest.replaceProperty(Platform, 'OS', 'web');
     await renderWithSession(<Home />, { ctx });
     expect(screen.queryByTestId('plant-link')).toBeNull();
-    jest.restoreAllMocks();
   });
 
   it('a Unit Admin on a phone (not web) sees no Plant entry', async () => {
     jest.replaceProperty(Platform, 'OS', 'android');
     await renderWithSession(<Home />, { ctx: admin });
     expect(screen.queryByTestId('plant-link')).toBeNull();
-    jest.restoreAllMocks();
   });
 });

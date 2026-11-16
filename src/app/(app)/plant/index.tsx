@@ -74,7 +74,7 @@ export default function MachinesTab() {
       </View>
 
       {list.state === 'loading' ? <Loading testID="machines-loading" label="Loading machines" /> : null}
-      {list.state === 'error' ? <LoadError testID="machines-error" onRetry={list.reload} /> : null}
+      {list.state === 'error' ? <LoadError testID="machines-error" onRetry={list.reload} error={list.error} /> : null}
       {list.state === 'ready' && rows.length === 0 ? (
         filtered ? (
           <Text testID="machines-no-match" style={{ fontSize: 16, color: colors.text }}>No machines match</Text>

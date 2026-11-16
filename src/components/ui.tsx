@@ -105,15 +105,16 @@ export function StatusLabel({ status, testID }: { status: string; testID?: strin
 }
 
 /** Selectable filter chip: the selected state is shown with a check mark and bold text, not by colour alone. */
-export function Chip({ label, selected, onPress, testID }: { label: string; selected: boolean; onPress: () => void; testID?: string }) {
+export function Chip({ label, selected, onPress, testID, disabled }: { label: string; selected: boolean; onPress: () => void; testID?: string; disabled?: boolean }) {
   return (
     <Pressable
       testID={testID}
       accessibilityRole="button"
       accessibilityLabel={label}
-      accessibilityState={{ selected }}
+      accessibilityState={{ selected, disabled: !!disabled }}
+      disabled={disabled}
       onPress={onPress}
-      style={[styles.chip, selected && styles.chipSelected]}
+      style={[styles.chip, selected && styles.chipSelected, disabled && { opacity: 0.6 }]}
     >
       <Text style={{ color: colors.text, fontSize: 15, fontWeight: selected ? '700' : '400' }}>{selected ? `✓ ${label}` : label}</Text>
     </Pressable>

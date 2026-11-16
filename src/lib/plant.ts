@@ -33,6 +33,11 @@ export type TargetVersion = {
 type Db = Pick<SupabaseClient, 'from'>;
 type RpcClient = Pick<SupabaseClient, 'rpc'>;
 
+/** Escapes the LIKE wildcard `_` so a search for "M_1" matches literally (`%` is already removed by sanitiseSearch). */
+function likeTerm(q: string): string {
+  return sanitiseSearch(q).replace(/_/g, '\\_');
+}
+
 /** Removes characters that would change the meaning of a PostgREST `or`/`ilike` filter. */
 export function sanitiseSearch(q: string): string {
   return q.replace(/[,()%*\\"]/g, '').trim();
@@ -130,6 +135,13 @@ export async function fetchSite(client: Db): Promise<Site | null> {
   return (data as unknown as Site) ?? null;
 }
 
+/** True once any target exists for the tenant: from then on the site timezone is locked (R2). Head count, no rows. */
+export async function fetchHasTargets(client: Db): Promise<boolean> {
+  const { count, error } = await client.from('target_version').select('id', { count: 'exact', head: true });
+  if (error) throw error;
+  return (count ?? 0) > 0;
+}
+
 /** The tenant's default timezone (offered when the site is first set up). */
 export async function fetchTenantTimezone(client: Db): Promise<string | null> {
   const { data, error } = await client.from('tenant').select('timezone').maybeSingle();
@@ -157,7 +169,7 @@ export type MachineQuery = { search: string; status: MachineStatusFilter; line: 
 
 export async function fetchMachines(client: Db, query: MachineQuery): Promise<{ rows: Machine[]; total: number }> {
   let q = client.from('machine').select(MACHINE_COLUMNS, { count: 'exact' });
-  const term = sanitiseSearch(query.search);
+  const term = likeTerm(query.search);
   if (term) q = q.or(`code.ilike.%${term}%,name.ilike.%${term}%`);
   if (query.status !== 'all') q = q.eq('status', query.status);
   if (query.line === 'none') q = q.is('line_id', null);
@@ -180,7 +192,7 @@ export type ProductQuery = { search: string; showRetired: boolean; page: number 
 
 export async function fetchProducts(client: Db, query: ProductQuery): Promise<{ rows: Product[]; total: number }> {
   let q = client.from('product').select(PRODUCT_COLUMNS, { count: 'exact' });
-  const term = sanitiseSearch(query.search);
+  const term = likeTerm(query.search);
   if (term) q = q.or(`code.ilike.%${term}%,description.ilike.%${term}%`);
   if (!query.showRetired) q = q.is('retired_at', null);
   const from = query.page * PLANT_PAGE_SIZE;
@@ -296,6 +308,7 @@ function mapRpcError(error: NonNullable<RpcError> & Record<string, unknown>, sta
     }
     throw new PlantError(400, detail.field, String(error.message ?? MESSAGES.generic), detail.code, detail.machines);
   }
+  if (status === 401) throw new PlantError(401, undefined, 'Sign in again', 'unauthenticated'); // expired session (R4 item 10)
   if (typeof status === 'number' && status >= 500) throw new ApiError(status, undefined, MESSAGES.generic);
   if (typeof status === 'number' && status >= 400 && status < 500) throw new ApiError(status, undefined, MESSAGES.generic);
   throw error; // no response: a network error

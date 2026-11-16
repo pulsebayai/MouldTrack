@@ -1,7 +1,7 @@
 import { ApiError } from '@/lib/api';
 import {
   PLANT_PAGE_SIZE, PlantError, RequestIds, fetchActiveProducts, fetchLines, fetchMachine, fetchMachines, fetchPlantToday, fetchProducts, fetchRecorderNames,
-  fetchProductsByIds, fetchSite, fetchTargetVersions, fetchTenantTimezone, formatPieces, formatPlantDate, isValidDate, machineStatusLabel, parsePieces, plantApi, productStatusLabel, sanitiseSearch,
+  fetchProductsByIds, fetchHasTargets, fetchSite, fetchTargetVersions, fetchTenantTimezone, formatPieces, formatPlantDate, isValidDate, machineStatusLabel, parsePieces, plantApi, productStatusLabel, sanitiseSearch,
   summariseTargets, validateMachineForm, validateProductForm, validateTargetForm, type MachineQuery, type TargetVersion,
 } from '@/lib/plant';
 import { fakeDb } from '@/test/fake-db';
@@ -269,7 +269,8 @@ describe('RPC wrappers', () => {
     const err = await plantApi.saveSite(c, { name: 'x', timezone: 'UTC' }, rid).catch((e) => e);
     expect(err).toMatchObject({ status: 502, message: 'Something went wrong. Please try again.' });
     const c2 = rpc({ data: null, status: 401, error: { code: 'PGRST301', message: 'JWT expired' } });
-    expect(await plantApi.saveSite(c2, { name: 'x', timezone: 'UTC' }, rid).catch((e) => e)).toMatchObject({ status: 401, message: 'Something went wrong. Please try again.' });
+    // R4 item 10: an expired session says so instead of the generic message
+    expect(await plantApi.saveSite(c2, { name: 'x', timezone: 'UTC' }, rid).catch((e) => e)).toMatchObject({ status: 401, message: 'Sign in again' });
   });
   it('re-throws network failures (no status) untouched', async () => {
     const boom = new TypeError('Failed to fetch');
@@ -303,5 +304,23 @@ describe('RequestIds (02 R2)', () => {
     expect(b).not.toBe(a);
     r.failed('k', new PlantError(400, 'code', 'dup', 'duplicate'));
     expect(r.get('k')).not.toBe(b);
+  });
+});
+
+describe('step 6a client changes (R2, R4)', () => {
+  it('R2: knows whether the tenant has any target (head count, no rows)', async () => {
+    const some = fakeDb(() => ({ data: null, count: 3, error: null }));
+    expect(await fetchHasTargets(some.client as never)).toBe(true);
+    expect(some.queries[0].table).toBe('target_version');
+    expect(some.queries[0].select?.[1]).toEqual({ count: 'exact', head: true });
+    expect(await fetchHasTargets(fakeDb(() => ({ data: null, count: 0, error: null })).client as never)).toBe(false);
+    await expect(fetchHasTargets(fakeDb(() => ({ data: null, count: null, error: new TypeError('Failed to fetch') })).client as never)).rejects.toThrow('Failed to fetch');
+  });
+  it('R4 item 11: an underscore in a search is matched literally, not as a wildcard', async () => {
+    const db = fakeDb(() => ({ data: [], count: 0, error: null }));
+    await fetchMachines(db.client as never, { search: 'M_1', status: 'all', line: 'all', showRetired: true, page: 0 });
+    await fetchProducts(db.client as never, { search: 'a_b', showRetired: true, page: 0 });
+    expect(db.queries[0].filters).toEqual([['or', 'code.ilike.%M\\_1%,name.ilike.%M\\_1%']]);
+    expect(db.queries[1].filters).toEqual([['or', 'code.ilike.%a\\_b%,description.ilike.%a\\_b%']]);
   });
 });

@@ -19,7 +19,9 @@ create table public.site (
   timezone text not null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  constraint site_one_per_tenant unique (tenant_id), -- R1 pilot rule; drop this constraint when multi-site arrives
+  -- R1 pilot rule: one site per tenant. When multi-site arrives, drop this constraint and the site lookups that assume one row
+  -- per tenant (app.plant_date_at, pm_save_site, the plant_today view); site_one_per_tenant is also mapped in app._pm_dup.
+  constraint site_one_per_tenant unique (tenant_id),
   constraint site_tenant_id_key unique (tenant_id, id)
 );
 
@@ -87,6 +89,23 @@ create table public.target_version (
 );
 create index target_version_lookup_idx on public.target_version (machine_id, product_id, effective_from desc, recorded_at desc);
 create index target_version_product_idx on public.target_version (tenant_id, product_id);
+
+-- site.timezone must be a real IANA zone: a CHECK cannot read pg_timezone_names, so a trigger does it (also covers direct writes).
+create function app.site_timezone_valid()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if not exists (select 1 from pg_catalog.pg_timezone_names z where z.name = new.timezone) then
+    raise exception 'Unknown time zone %', new.timezone using errcode = '23514';
+  end if;
+  return new;
+end
+$$;
+create trigger site_timezone_valid before insert or update of timezone on public.site
+  for each row execute function app.site_timezone_valid();
 
 -- 3. Row-level security: members of the tenant read, nobody writes through the API ---------------------------
 do $$
@@ -194,7 +213,7 @@ begin
   for f in
     select p.oid::regprocedure as sig
     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-    where n.nspname = 'app' and p.proname in ('target_version_append_only', 'plant_date_at', 'plant_date', 'target_for')
+    where n.nspname = 'app' and p.proname in ('target_version_append_only', 'site_timezone_valid', 'plant_date_at', 'plant_date', 'target_for')
   loop
     execute format('revoke all on function %s from public, anon, authenticated', f.sig);
   end loop;
@@ -280,7 +299,9 @@ begin
   if p_request_id is null then
     perform app._pm_fail('validation', 'A request id is required', 'request_id');
   end if;
-  select e.entity_id into v_done from public.audit_event e where e.actor_user_id = v_actor and e.request_id = p_request_id;
+  -- Idempotency: a request id already recorded by this actor for THIS RPC (source) is a replay and returns the first outcome.
+  -- The same id on a different RPC is not a replay: it falls through and trips the unique (actor, request_id) audit key.
+  select e.entity_id into v_done from public.audit_event e where e.actor_user_id = v_actor and e.request_id = p_request_id and e.source = p_source;
   return jsonb_build_object('ok', true, 'tenant_id', a.tenant_id, 'actor', v_actor, 'role', a.role, 'done', v_done);
 end
 $$;
@@ -361,6 +382,7 @@ declare
   v_tz text := nullif(btrim(p_timezone), '');
   cur public.site;
   upd public.site;
+  v_c text;
 begin
   a := app._pm_authorise(p_request_id, c_src);
   if not (a->>'ok')::boolean then return a; end if;
@@ -381,11 +403,24 @@ begin
   end if;
 
   select * into cur from public.site s where s.tenant_id = v_tenant;
-  if not found then
-    insert into public.site (tenant_id, name, timezone) values (v_tenant, v_name, v_tz) returning * into upd;
+  begin
+    if not found then
+      insert into public.site (tenant_id, name, timezone) values (v_tenant, v_name, v_tz) returning * into upd;
+    else
+      -- Dates of targets are interpreted in the site timezone; moving it would silently shift every effective date.
+      if v_tz <> cur.timezone and exists (select 1 from public.target_version t where t.tenant_id = v_tenant) then
+        perform app._pm_fail('guard', 'The site timezone can''t change once targets exist', 'timezone_locked');
+      end if;
+      update public.site s set name = v_name, timezone = v_tz, updated_at = now() where s.id = cur.id returning * into upd;
+    end if;
+  exception when unique_violation then
+    get stacked diagnostics v_c = constraint_name;
+    perform app._pm_dup(v_c);
+    raise;
+  end;
+  if cur.id is null then
     perform app._pm_audit(a, 'site.created', 'site', upd.id, null, to_jsonb(upd) - 'created_at' - 'updated_at', p_request_id, c_src);
   else
-    update public.site s set name = v_name, timezone = v_tz, updated_at = now() where s.id = cur.id returning * into upd;
     perform app._pm_audit(a, 'site.updated', 'site', upd.id,
       to_jsonb(cur) - 'created_at' - 'updated_at', to_jsonb(upd) - 'created_at' - 'updated_at', p_request_id, c_src);
   end if;

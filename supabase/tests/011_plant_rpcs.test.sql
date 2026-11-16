@@ -182,7 +182,7 @@ select is((pg_temp.keep('t2', public.pm_set_target(gen_random_uuid(), pg_temp.id
 select is(app.target_for(pg_temp.id('m1'), pg_temp.id('p1'), (select d + 9 from today)), 1000, 'target: the old target applies the day before the change');
 select is(app.target_for(pg_temp.id('m1'), pg_temp.id('p1'), (select d + 10 from today)), 1300, 'target: the new target applies from the change date');
 select is((select (before->>'pieces_per_shift')::int from public.audit_event where entity_id = pg_temp.id('t2')), 1000, 'target: the audit before shows the target in force on that date');
-select is((public.pm_set_target(gen_random_uuid(), pg_temp.id('m1'), pg_temp.id('p1'), 1100, (select d from today)) is not null), true, 'target: same-day correction accepted');
+select is((public.pm_set_target(gen_random_uuid(), pg_temp.id('m1'), pg_temp.id('p1'), 1100, (select d from today)))->>'ok', 'true', 'target: same-day correction accepted');
 select is(app.target_for(pg_temp.id('m1'), pg_temp.id('p1'), (select d from today)), 1100, 'target: the correction wins for that day');
 select is((select count(*)::int from public.target_version where machine_id = pg_temp.id('m1')), 3, 'target: history keeps every version');
 -- retired machine / product cannot get a target
@@ -208,12 +208,14 @@ select is((pg_temp.keep('t4', public.pm_end_target(gen_random_uuid(), pg_temp.id
 select is(app.target_for(pg_temp.id('m2'), pg_temp.id('p3'), (select d + 3 from today)), null, 'end: no target from the end date');
 select results_eq($$ select (before->>'pieces_per_shift')::int, (after->>'pieces_per_shift') is null from public.audit_event where action = 'target.ended' $$, $$ values (400, true) $$, 'end: audited with before and after');
 select is((public.pm_set_product_retired(gen_random_uuid(), pg_temp.id('p3'), true))->>'changed', 'true', 'product: retire allowed once every target is ended');
-select is((public.pm_end_target(gen_random_uuid(), pg_temp.id('m1'), pg_temp.id('p1'), (select d + 20 from today)) is not null), true, 'end: ends M-1 / P-1 20 days ahead');
+create temp table e20 as select public.pm_end_target(gen_random_uuid(), pg_temp.id('m1'), pg_temp.id('p1'), (select d + 20 from today)) as r; -- own statement: a stable function must see the committed-in-transaction row
+select is((e20.r->>'ok') || ':' || coalesce(app.target_for(pg_temp.id('m1'), pg_temp.id('p1'), (select d + 20 from today))::text, 'none'), 'true:none', 'end: ends M-1 / P-1 20 days ahead (ok, and no target from that day)') from e20;
 select is(app.target_for(pg_temp.id('m1'), pg_temp.id('p1'), (select d + 19 from today)), 1300, 'end: still in force the day before');
 select is((pg_temp.err(format($$ select public.pm_set_product_retired(gen_random_uuid(), %L, true) $$, pg_temp.id('p1'))))->>'code', 'guard', 'product: still blocked while the target is in force until its end date');
 -- ending works for retired machines too
 select is((public.pm_set_machine_retired(gen_random_uuid(), pg_temp.id('m1'), true))->>'ok', 'true', 'machine M-1 retired with an open target');
-select is((public.pm_end_target(gen_random_uuid(), pg_temp.id('m1'), pg_temp.id('p1'), (select d + 5 from today)) is not null), true, 'end: allowed for a retired machine');
+create temp table e5 as select public.pm_end_target(gen_random_uuid(), pg_temp.id('m1'), pg_temp.id('p1'), (select d + 5 from today)) as r; -- own statement: a stable function must see the committed-in-transaction row
+select is((e5.r->>'ok') || ':' || coalesce(app.target_for(pg_temp.id('m1'), pg_temp.id('p1'), (select d + 5 from today))::text, 'none'), 'true:none', 'end: allowed for a retired machine (ok, and no target from that day)') from e5;
 
 -- Denials (AC-10, AC-11) ----------------------------------------------------------------------
 create temp table calls (n text, q text);

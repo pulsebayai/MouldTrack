@@ -142,6 +142,7 @@ describe('Edit, retire and reinstate (AC-3)', () => {
     expect(screen.queryByTestId('machine-save')).toBeNull();
     expect(screen.queryByTestId('machine-retire')).toBeNull();
     expect(screen.getByLabelText('Name').props.editable).toBe(false);
+    for (const id of ['machine-line-none', 'machine-status-active', 'machine-status-under_maintenance']) expect(screen.getByTestId(id)).toBeDisabled(); // R4 item 11
     expect(screen.queryByTestId('target-add')).toBeNull(); // no new targets for a retired machine
     await fireEvent.press(screen.getByTestId('machine-reinstate'));
     expect(screen.getByTestId('confirm-title')).toHaveTextContent('Reinstate M-1 · Press 1?');

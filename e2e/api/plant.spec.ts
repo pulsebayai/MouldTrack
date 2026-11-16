@@ -143,11 +143,16 @@ test.describe('AC-11 isolation', () => {
     const asProduct = await run(victimIds.product);
     const asUnknown = await run(unknown);
     for (const r of [...asMachine, ...asProduct, ...asUnknown]) expect(r).toEqual(DENIED);
-    const events = (await auditRows({ action: 'access.denied', actor: ua.userId })).slice(before);
-    expect(events.length).toBeGreaterThan(0);
+    // 3 ids x 8 calls = 24 denials, every one audited under the caller's tenant (entity = the id that was refused)
+    const events = (await auditRows({ action: 'access.denied', actor: ua.userId }))
+      .slice(before)
+      .filter((e) => [victimIds.machine, victimIds.product, unknown].includes(e.entity_id));
+    expect(events).toHaveLength(24);
     for (const e of events) expect(e.tenant_id).toBe(R.id);
-    expect(events.some((e) => e.reason === 'cross_tenant')).toBe(true);
-    expect(events.some((e) => e.reason === 'not_found')).toBe(true);
+    // victim machine: 4 machine-type calls are cross_tenant, the 4 others look it up in the wrong table (not_found);
+    // victim product: 3 product-type cross_tenant + 5 not_found; an unknown id: all 8 not_found
+    expect(events.filter((e) => e.reason === 'cross_tenant')).toHaveLength(7);
+    expect(events.filter((e) => e.reason === 'not_found')).toHaveLength(17);
     // nothing of the victim tenant changed
     const v = (await service().from('machine').select('retired_at, name, tenant_id').eq('id', victimMachine).single()).data!;
     expect(v).toMatchObject({ retired_at: null, tenant_id: victimTenant });
@@ -211,10 +216,13 @@ test.describe('AC-5..8, AC-12 targets and idempotency over HTTP', () => {
     expect(change.data).toMatchObject({ ok: true });
     const blocked = await rpc(ua, 'pm_set_product_retired', { p_request_id: uuid(), p_id: product, p_retired: true });
     expect(JSON.parse(blocked.error!.details!)).toMatchObject({ code: 'guard', machines: [mCode] });
-    expect((await rpc(ua, 'pm_end_target', { p_request_id: uuid(), p_machine_id: machine, p_product_id: product, p_effective_from: addDays(today, 4) })).data).toMatchObject({ ok: true });
-    expect((await rpc(ua, 'pm_end_target', { p_request_id: uuid(), p_machine_id: machine, p_product_id: product, p_effective_from: today })).data).toMatchObject({ ok: true });
+    const end1 = await rpc(ua, 'pm_end_target', { p_request_id: uuid(), p_machine_id: machine, p_product_id: product, p_effective_from: addDays(today, 4) });
+    const end2 = await rpc(ua, 'pm_end_target', { p_request_id: uuid(), p_machine_id: machine, p_product_id: product, p_effective_from: today });
+    expect(end1.data).toMatchObject({ ok: true });
+    expect(end2.data).toMatchObject({ ok: true });
     expect((await ua.client.from('current_target').select('machine_id').eq('machine_id', machine)).data).toEqual([]);
-    expect((await rpc(ua, 'pm_set_product_retired', { p_request_id: uuid(), p_id: product, p_retired: true })).data).toMatchObject({ ok: true, changed: true });
+    const retire = await rpc(ua, 'pm_set_product_retired', { p_request_id: uuid(), p_id: product, p_retired: true });
+    expect(retire.data).toMatchObject({ ok: true, changed: true });
     expect(await versions()).toHaveLength(4);
 
     // append-only: neither the Unit Admin nor the service role can change or remove history
@@ -225,11 +233,12 @@ test.describe('AC-5..8, AC-12 targets and idempotency over HTTP', () => {
     expect(del.error?.code).toBe('42501');
     expect(await versions()).toHaveLength(4);
 
-    // every change was audited exactly once
-    for (const [action, n] of [['target.set', 2], ['target.ended', 2], ['product.retired', 1]] as const) {
-      const rows = await auditRows({ action, tenant: R.id });
-      expect(rows.filter((r) => [set.data.id, change.data.id].includes(r.entity_id) || action !== 'target.set').length, action).toBeGreaterThanOrEqual(n);
-    }
+    // every change was audited exactly once, found by its own entity id
+    expect(await auditRows({ action: 'target.set', entity: set.data.id })).toHaveLength(1);
+    expect(await auditRows({ action: 'target.set', entity: change.data.id })).toHaveLength(1);
+    expect(await auditRows({ action: 'target.ended', entity: end1.data.id })).toHaveLength(1);
+    expect(await auditRows({ action: 'target.ended', entity: end2.data.id })).toHaveLength(1);
+    expect(await auditRows({ action: 'product.retired', entity: product })).toHaveLength(1);
   });
 
   test('a repeated create returns the first outcome without a second row', async () => {

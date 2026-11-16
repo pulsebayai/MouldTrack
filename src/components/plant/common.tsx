@@ -14,10 +14,10 @@ export function Loading({ testID, label }: { testID: string; label: string }) {
   );
 }
 
-export function LoadError({ testID, onRetry }: { testID: string; onRetry: () => void }) {
+export function LoadError({ testID, onRetry, error }: { testID: string; onRetry: () => void; error?: unknown }) {
   return (
     <View style={{ gap: 12 }}>
-      <ErrorText testID={testID}>{toUserMessage(new TypeError('Failed to fetch'))}</ErrorText>
+      <ErrorText testID={testID}>{toUserMessage(error)}</ErrorText>
       <Button title="Try again" testID={`${testID}-retry`} onPress={onRetry} />
     </View>
   );

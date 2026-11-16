@@ -25,7 +25,7 @@ export function MachineForm({ machineId }: { machineId?: string }) {
   const machine = useLoad(() => fetchMachine(client, machineId!), [machineId], editing);
   const row = machine.latest && machine.latest.id === machineId ? machine.latest : null;
   if (editing && !row && machine.state === 'loading') return <Loading testID="machine-form-loading" label="Loading machine" />;
-  if (editing && !row && machine.state === 'error') return <LoadError testID="machine-form-load-error" onRetry={machine.reload} />;
+  if (editing && !row && machine.state === 'error') return <LoadError testID="machine-form-load-error" onRetry={machine.reload} error={machine.error} />;
   if (editing && !row) {
     return (
       <View style={{ gap: 16 }}>
@@ -122,9 +122,9 @@ function MachineFormBody({ row, reload }: { row: Machine | null; reload: () => v
         <View style={{ gap: 8 }}>
           <Label>Line</Label>
           <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
-            <Chip testID="machine-line-none" label="No line" selected={values.line_id === null} onPress={() => !retired && set('line_id', null)} />
+            <Chip testID="machine-line-none" label="No line" selected={values.line_id === null} disabled={retired} onPress={() => set('line_id', null)} />
             {lineList.map((l) => (
-              <Chip key={l.id} testID={`machine-line-${l.id}`} label={l.name} selected={values.line_id === l.id} onPress={() => !retired && set('line_id', l.id)} />
+              <Chip key={l.id} testID={`machine-line-${l.id}`} label={l.name} selected={values.line_id === l.id} disabled={retired} onPress={() => set('line_id', l.id)} />
             ))}
           </View>
           {errors.line_id ? <ErrorText testID="machine-line-error">{errors.line_id}</ErrorText> : null}
@@ -132,8 +132,8 @@ function MachineFormBody({ row, reload }: { row: Machine | null; reload: () => v
         <View style={{ gap: 8 }}>
           <Label>Status</Label>
           <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
-            <Chip testID="machine-status-active" label="Active" selected={values.status === 'active'} onPress={() => !retired && set('status', 'active')} />
-            <Chip testID="machine-status-under_maintenance" label="Under maintenance" selected={values.status === 'under_maintenance'} onPress={() => !retired && set('status', 'under_maintenance')} />
+            <Chip testID="machine-status-active" label="Active" selected={values.status === 'active'} disabled={retired} onPress={() => set('status', 'active')} />
+            <Chip testID="machine-status-under_maintenance" label="Under maintenance" selected={values.status === 'under_maintenance'} disabled={retired} onPress={() => set('status', 'under_maintenance')} />
           </View>
           {errors.status ? <ErrorText testID="machine-status-error">{errors.status}</ErrorText> : null}
         </View>
