@@ -242,12 +242,11 @@ export default function Users() {
         </View>
 
         {state === "loading" ? (
-          <View
-            testID="users-loading"
-            accessibilityLabel="Loading users"
-            style={{ gap: 12 }}
-          >
-            <ActivityIndicator color={colors.primary} />
+          <View testID="users-loading" style={{ gap: 12 }}>
+            <ActivityIndicator
+              color={colors.primary}
+              accessibilityLabel="Loading users"
+            />
             {[0, 1, 2].map((i) => (
               <View
                 key={i}
