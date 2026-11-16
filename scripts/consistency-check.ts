@@ -40,7 +40,10 @@ async function main() {
   }
   const { data: members, error } = await admin.from('membership').select('user_id, phone_e164, status');
   if (error) throw error;
-  const bad = findInconsistencies((members ?? []) as Member[], users);
+  // 03: Super Admins follow the same rules (email = phone, inactive banned, active not banned).
+  const { data: admins, error: aErr } = await admin.from('platform_admin').select('user_id, phone_e164, status');
+  if (aErr) throw aErr;
+  const bad = findInconsistencies([...(members ?? []), ...(admins ?? [])] as Member[], users);
   if (bad.length) {
     console.error(`membership / Auth inconsistencies (${bad.length}):\n${bad.map((b) => `  ${b}`).join('\n')}`);
     process.exit(1);
