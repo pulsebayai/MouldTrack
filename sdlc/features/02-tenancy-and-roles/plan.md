@@ -65,7 +65,7 @@ Locks held: architecture + schema (roadmap, 2026-11-16).
   - **R10 (nits 10–12) docs:** architecture "Known debt": synthetic `.invalid` identity, users-search index not added (fine ≤ 500 users), staging hosted checks at R1; intent note that fixture phones are real-format but never contacted. Deviations line for unlisted test/support files.
   - **R11 (D14) Sign in again after a password change.** Screen test (notice shown, signed out locally, no stale session, no navigation Home), web e2e `change-password.spec` (forced and from-Home change → sign-in notice → new password → Home), Maestro `first-sign-in.yaml` the same, API test asserts the caller's old refresh token fails. `spec.md` AC-3/AC-13 updated.
   - Proof: PR CI green on the last code commit; one regression dispatch-equivalent on dev is **not** possible without temporary triggers → re-add the dev-only `pull_request` trigger on regression.yml + deploy-dev.yml for this step, prove, remove again (log both).
-- [ ] 12. **Review + PR.** Remove temporary triggers; run `sdlc-reviewer`; fix Important findings; full suite green on the last code commit; open PR with AC → test → result table. — proof: PR CI green, reviewer findings recorded below
+- [x] 12. **Review + PR.** Remove temporary triggers; run `sdlc-reviewer`; fix Important findings; full suite green on the last code commit; open PR with AC → test → result table. — proof: PR CI green, reviewer findings recorded below
 
 ## Risks
 - **Highest: step 4 two-step Auth/DB writes.** Mitigation D4 compensation + orphan check (step 10). Rollback: functions are new; reverting the PR removes them; migration is additive.
@@ -181,3 +181,8 @@ Locks held: architecture + schema (roadmap, 2026-11-16).
 - Blocked / failing: none. Open for Opus: R4 staging check (`hosted-checks` with target staging) is written but could not be run (staging off limits; needs `STAGING_SUPABASE_PROJECT_REF` secret); R6 has no deterministic test (see Deviations).
 - Next step: Opus re-review, then the PR.
 - Decisions made: none beyond 12a/D14.
+
+### 2026-11-16 (Opus, post-merge)
+- Done: PR #4 merged (6e11761). Owner rotated `E2E_FIXTURE_PASSWORD`; `main` protected by ruleset `protect-main`. Roadmap: 02 shipped, locks released, Later += SMS/email.
+- Open: AC-15 staging + `STAGING_SUPABASE_PROJECT_REF` secret at the R1 release (owner).
+- Next step: Parallel planning checkpoint (03 ∥ 04).
