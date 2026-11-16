@@ -27,7 +27,7 @@ function Gate() {
       </Screen>
     );
   }
-  return <Stack screenOptions={{ headerShown: false }} />;
+  return <Stack screenOptions={{ headerShown: false, title: 'MouldTrack' }} />;
 }
 
 export default function RootLayout() {

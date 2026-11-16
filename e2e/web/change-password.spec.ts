@@ -51,7 +51,7 @@ test.describe('AC-3 first sign-in (fresh fixture U4)', () => {
 
     await expect(page).toHaveURL(/\/home$/);
     await expect(page.getByTestId('home-tenant')).toHaveText('e2e org U');
-    await page.getByTestId('sign-out').click();
+    await page.locator('[data-testid="sign-out"]:visible').click();
     await expectOnSignIn(page);
     await signIn(page, USERS.u4, 'Fresh-start-2026');
     await expect(page).toHaveURL(/\/home$/);
@@ -85,7 +85,7 @@ test.describe('AC-4 expiry', () => {
     await expect(page.getByTestId('password-expired')).toHaveText('Your temporary password has expired. Ask your Unit Admin to reset it.');
     await expect(page.getByLabel('New password', { exact: true })).toHaveCount(0);
     await expectNoSeriousViolations(page);
-    await page.getByTestId('sign-out').click();
+    await page.locator('[data-testid="sign-out"]:visible').click();
     await expectOnSignIn(page);
   });
 });
@@ -106,7 +106,7 @@ test.describe('AC-13 self-service change from Home', () => {
     await expect(page.getByTestId('password-changed')).toBeVisible();
     await page.getByTestId('change-password-done').click();
     await expect(page).toHaveURL(/\/home$/);
-    await page.getByTestId('sign-out').click();
+    await page.locator('[data-testid="sign-out"]:visible').click();
     await signIn(page, u.phone, 'Self-service-2026');
     await expect(page.getByTestId('home-tenant')).toHaveText('e2e org U');
   });
