@@ -306,8 +306,9 @@ test.describe('AC-8 guards', () => {
         callFn(request, 'user-admin', ua2.token, { action: 'update', request_id: uuid(), user_id: org.users.ua1.id, role: 'supervisor' }),
       ]);
       expect([a.status, b.status].sort()).toEqual([200, 403]);
-      const { data } = await service().from('membership').select('user_id').eq('tenant_id', org.id).eq('role', 'unit_admin').eq('status', 'active');
-      expect(data).toHaveLength(1);
+      const { data } = await service().from('membership').select('user_id').eq('role', 'unit_admin').eq('status', 'active')
+        .in('user_id', [org.users.ua1.id, org.users.ua2.id]);
+      expect(data).toHaveLength(1); // the loser of the race is the one still a Unit Admin
     } finally {
       await service().from('membership').update({ role: 'unit_admin' }).in('user_id', [org.users.ua1.id, org.users.ua2.id]);
     }

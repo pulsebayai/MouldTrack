@@ -36,10 +36,19 @@ async function create(sb: SupabaseClient, actor: string, body: Record<string, un
   if (check.already) return { user_id: check.user_id, already: true, message: ALREADY_DONE };
 
   const tempPassword = generateTempPassword(randomBytes);
-  const { data: created, error: authError } = await sb.auth.admin.createUser({
-    email: phoneToAuthEmail(phone), password: tempPassword, email_confirm: true,
-  });
-  if (authError || !created.user) {
+  const email = phoneToAuthEmail(phone);
+  let created: Awaited<ReturnType<typeof sb.auth.admin.createUser>>['data'] | null = null;
+  let authError: { code?: string; message?: string; status?: number } | null = null;
+  // Two simultaneous creates for one phone can make Auth fail with a 5xx on its unique index; one retry then sees
+  // the winner and reports email_exists (mapped to the duplicate-phone message below).
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await sb.auth.admin.createUser({ email, password: tempPassword, email_confirm: true });
+    created = res.data;
+    authError = res.error;
+    if (!res.error || (res.error.status ?? 500) < 500) break;
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  if (authError || !created?.user) {
     if (authError && isEmailTaken(authError)) throw new HttpError(409, { field: 'phone', message: PHONE_TAKEN });
     console.error('auth_create_failed', authError?.code ?? 'unknown');
     throw new HttpError(500, { message: 'Something went wrong. Try again.' });

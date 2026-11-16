@@ -50,11 +50,12 @@ test.describe('AC-3 first sign-in', () => {
   test('wrong current password -> 403 and nothing changes', async ({ request }) => {
     const u = await makeActiveUser(request, ua1.token);
     const s = await signIn(u.phone, u.password);
+    const before = (await auditRows({ action: 'user.password_changed', entity: u.userId })).length; // the first change made it active
     const r = await callFn(request, 'account', s.token, { action: 'change_password', current_password: 'Wrong-password-1', new_password: NEW_PW });
     expect(r.status).toBe(403);
     expect(r.body.field).toBe('current_password');
     await signIn(u.phone, u.password);
-    expect(await auditRows({ action: 'user.password_changed', entity: u.userId })).toHaveLength(0);
+    expect(await auditRows({ action: 'user.password_changed', entity: u.userId })).toHaveLength(before);
   });
 
   test('policy: too short, no digit, no letter, same as current -> 400 new_password', async ({ request }) => {
@@ -71,11 +72,12 @@ test.describe('AC-3 first sign-in', () => {
   test('self-service change from Home for a normal user (AC-13)', async ({ request }) => {
     const u = await makeActiveUser(request, ua1.token);
     const s = await signIn(u.phone, u.password);
+    const before = (await auditRows({ action: 'user.password_changed', entity: u.userId })).length;
     const r = await callFn(request, 'account', s.token, { action: 'change_password', current_password: u.password, new_password: NEW_PW });
     expect(r.status).toBe(200);
     await signIn(u.phone, NEW_PW);
     expect(await signInFails(u.phone, u.password)).toBe(true);
-    expect(await auditRows({ action: 'user.password_changed', entity: u.userId })).toHaveLength(1);
+    expect(await auditRows({ action: 'user.password_changed', entity: u.userId })).toHaveLength(before + 1);
   });
 
   test('no JWT -> 401; unknown action -> 400', async ({ request }) => {
