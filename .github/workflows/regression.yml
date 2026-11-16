@@ -130,8 +130,8 @@ jobs:
           if-no-files-found: warn
 
   hosted-checks:
-    needs: setup
-    if: needs.setup.outputs.target == 'dev'
+    needs: [setup, web] # after web: its fixtures reset removes legacy users (e.g. the pre-02 e2e-nomember) the orphan check would flag
+    if: always() && needs.setup.outputs.target == 'dev'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:

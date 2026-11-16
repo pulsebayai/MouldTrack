@@ -98,6 +98,7 @@ Locks held: architecture + schema (roadmap, 2026-11-16).
 - **Step 7: `users.spec.ts`** matches only visible elements (hidden earlier screens stay mounted in the Stack).
 - **Step 7: no-match copy** is exactly "No users match" (matcher is exact); list loading/error state is derived from a keyed result to satisfy the `react-hooks/set-state-in-effect` lint rule.
 - **Step 10: temporary `pull_request` triggers** on `deploy-dev.yml` (paths: itself, `supabase/functions/**`, `supabase/migrations/**`, `scripts/auth-config.mjs`) and `regression.yml` (paths: itself, auth-config, orphan-check, hosted-checks, `e2e/maestro/**`), dev target only, plus the 01-style "wait for deploy-dev of this commit" step and `actions: read`. **Remove in step 12.**
+- **Step 10: `hosted-checks` runs after `web`** (not in parallel): dev still held the pre-02 legacy `e2e-nomember@example.test` Auth user (no membership), which the fixtures reset in `web` removes; run 43824871543 flagged it. Functions deploy and secrets set need `--yes` in CI.
 - **Step 10: extra files** `scripts/hosted-checks.sh` (runs the four hosted checks, writes `hosted-checks.tap` for the evidence summary), `scripts/__tests__/{auth-config,orphan-check}.test.ts`. The regression `web` job exports `E2E_API_URL/E2E_ANON_KEY/E2E_SERVICE_ROLE_KEY` (dev only) so the `api` project runs against dev; the `android` job resets fixtures again before Maestro because the web e2e changes U4's password.
 
 ## Session log
