@@ -54,8 +54,8 @@ select pg_temp.as_user('ua');
 create temp table rid as select gen_random_uuid() as v;
 select is((public.pm_save_line((select v from rid), null, 'Line R'))->>'ok', 'true', 'a line is created with a request id');
 select is((public.pm_save_line((select v from rid), null, 'Line R')) ->> 'already', 'true', 'the same request id on the same RPC replays');
-select is((pg_temp.err(format($$ select public.pm_save_product(%L, null, 'TZ-P2', 'Other', 'pcs') $$, (select v from rid))))->>'sqlstate', '23505',
-  'the same request id on a different RPC is not reported as done (it hits the unique audit key)');
+select is((pg_temp.err(format($$ select public.pm_save_product(%L, null, 'TZ-P2', 'Other', 'pcs') $$, (select v from rid))) - 'message'), '{"code":"validation","field":"request_id","sqlstate":"P0001"}'::jsonb,
+  'the same request id on a different RPC is not reported as done: a validation error on request_id (D11), not a 500');
 select is((select count(*)::int from public.product where tenant_id = pg_temp.id('ta') and code = 'TZ-P2'), 0, 'and creates nothing');
 
 -- R4 item 5: a lost site race maps to a field error ---------------------------------------------------------------

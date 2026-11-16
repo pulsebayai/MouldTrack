@@ -203,10 +203,12 @@ select is((pg_temp.err(format($$ select public.pm_set_product_retired(gen_random
 -- end target
 select is((pg_temp.err(format($$ select public.pm_end_target(gen_random_uuid(), %L, %L, %L) $$, pg_temp.id('m1'), pg_temp.id('p1'), (select d - 1 from today))))->>'field', 'effective_from', 'end: a past date is refused');
 select is((pg_temp.err(format($$ select public.pm_end_target(gen_random_uuid(), %L, %L, %L) $$, pg_temp.id('m2'), pg_temp.id('p1'), (select d from today))))->>'field', 'no_target', 'end: no target in force is refused (guard no_target)');
-select is((pg_temp.err(format($$ select public.pm_end_target(gen_random_uuid(), %L, %L, %L) $$, pg_temp.id('m2'), pg_temp.id('p3'), (select d from today))))->>'field', 'no_target', 'end: a target that only starts later is not in force today');
-select is((pg_temp.keep('t4', public.pm_end_target(gen_random_uuid(), pg_temp.id('m2'), pg_temp.id('p3'), (select d + 3 from today))))->>'ok', 'true', 'end: ends the future target from its own start date');
-select is(app.target_for(pg_temp.id('m2'), pg_temp.id('p3'), (select d + 3 from today)), null, 'end: no target from the end date');
-select results_eq($$ select (before->>'pieces_per_shift')::int, (after->>'pieces_per_shift') is null from public.audit_event where action = 'target.ended' $$, $$ values (400, true) $$, 'end: audited with before and after');
+-- D11 (R1): ending when only a future target exists is allowed and cancels it; no_target only when nothing is current or scheduled
+create temp table t4 as select public.pm_end_target(gen_random_uuid(), pg_temp.id('m2'), pg_temp.id('p3'), (select d from today)) as r;
+select is((t4.r->>'ok') || ':' || (t4.r->'cancelled')::text, 'true:' || to_jsonb(array[(select (d + 3)::text from today)])::text, 'end: a target that only starts later can be ended today and the future target is cancelled') from t4;
+select is(app.target_for(pg_temp.id('m2'), pg_temp.id('p3'), (select d + 3 from today)), null, 'end: no target from the cancelled date');
+select is((pg_temp.err(format($$ select public.pm_end_target(gen_random_uuid(), %L, %L, %L) $$, pg_temp.id('m2'), pg_temp.id('p3'), (select d from today))))->>'field', 'no_target', 'end: nothing current and nothing scheduled is refused (guard no_target)');
+select results_eq($$ select (before->>'pieces_per_shift')::int, (after->>'pieces_per_shift') is null, jsonb_array_length(after->'cancelled_dates') from public.audit_event where action = 'target.ended' $$, $$ values (null::int, true, 1) $$, 'end: audited with before, after and the cancelled dates');
 select is((public.pm_set_product_retired(gen_random_uuid(), pg_temp.id('p3'), true))->>'changed', 'true', 'product: retire allowed once every target is ended');
 create temp table e20 as select public.pm_end_target(gen_random_uuid(), pg_temp.id('m1'), pg_temp.id('p1'), (select d + 20 from today)) as r; -- own statement: a stable function must see the committed-in-transaction row
 select is((e20.r->>'ok') || ':' || coalesce(app.target_for(pg_temp.id('m1'), pg_temp.id('p1'), (select d + 20 from today))::text, 'none'), 'true:none', 'end: ends M-1 / P-1 20 days ahead (ok, and no target from that day)') from e20;

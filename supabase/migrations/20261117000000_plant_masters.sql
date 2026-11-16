@@ -345,12 +345,17 @@ $$;
 create function app._pm_audit(
   p_auth jsonb, p_action text, p_entity_type text, p_entity uuid, p_before jsonb, p_after jsonb, p_request uuid, p_source text
 ) returns void
-language sql
+language plpgsql
 security definer
 set search_path = ''
 as $$
+begin
   insert into public.audit_event (tenant_id, actor_user_id, actor_role, action, entity_type, entity_id, before, after, source, request_id)
-  values ((p_auth->>'tenant_id')::uuid, (p_auth->>'actor')::uuid, p_auth->>'role', p_action, p_entity_type, p_entity, p_before, p_after, p_source, p_request)
+  values ((p_auth->>'tenant_id')::uuid, (p_auth->>'actor')::uuid, p_auth->>'role', p_action, p_entity_type, p_entity, p_before, p_after, p_source, p_request);
+exception when unique_violation then
+  -- the same request id already recorded by this actor for a different RPC (D11): a clear validation error, never a 500
+  perform app._pm_fail('validation', 'This request id was already used for another action', 'request_id');
+end
 $$;
 
 -- Length check on an already trimmed value; null is allowed only when p_min = 0.

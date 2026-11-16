@@ -164,7 +164,7 @@ select is(app.plant_date_at('40000000-0000-4000-c100-00000000000a', timestamptz 
 select is(app.plant_date_at('40000000-0000-4000-c100-00000000000a', timestamptz '2026-11-17 19:00:00+00'), date '2026-11-18', 'plant_date_at: 00:30 IST belongs to the 18th although UTC says the 17th');
 
 -- target_for (AC-7) -----------------------------------------------------------------
-select set_config('request.jwt.claims', '', true); -- called server-side, no user JWT
+select set_config('request.jwt.claims', '{"role":"service_role"}', true); -- called server-side as the service role (D11; no-claims callers get null, see 013)
 -- pair M2/P2 in tenant X for the cases; machine/product created here
 insert into public.machine (id, tenant_id, site_id, code, name) values ('43000000-0000-4000-c100-0000000000a2', '40000000-0000-4000-c100-00000000000a', '41000000-0000-4000-c100-00000000000a', 'M-2', 'Press 2');
 insert into public.product (id, tenant_id, code, description) values ('44000000-0000-4000-c100-0000000000a2', '40000000-0000-4000-c100-00000000000a', 'P-2', 'Cap 38mm');
