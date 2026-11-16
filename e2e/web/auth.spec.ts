@@ -16,7 +16,7 @@ test.describe('Sign-in (01-walking-skeleton)', () => {
 
   test('AC-2: wrong password shows a plain error and stays on sign-in', async ({ page }) => {
     await signIn(page, USERS.supA, 'definitely-wrong-password');
-    await expect(page.getByTestId('sign-in-error')).toHaveText('Email or password is incorrect');
+    await expect(page.getByTestId('sign-in-error')).toHaveText('Phone number or password is incorrect');
     await expectOnSignIn(page);
   });
 

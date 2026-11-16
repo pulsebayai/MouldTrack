@@ -1,5 +1,4 @@
 import { expect, type Page } from '@playwright/test';
-import { phoneToAuthEmail } from '../../supabase/functions/_shared/identity';
 
 const baseURL = process.env.BASE_URL ?? 'http://localhost:8081';
 const isLocal = /localhost|127\.0\.0\.1/.test(baseURL);
@@ -22,11 +21,10 @@ export const USERS = {
   u4: '+919000000009', // org U: fresh, must change password
 } as const;
 
-/** Signs in with a fixture phone. */
+/** Signs in through the UI with a phone in +91XXXXXXXXXX form (the screen has a fixed +91 prefix). */
 export async function signIn(page: Page, phone: string, password = FIXTURE_PASSWORD) {
   await page.goto('/sign-in');
-  // Until the sign-in screen takes a phone number (step 6) the Auth address derived from the phone goes in the email field.
-  await page.getByTestId('email').fill(phoneToAuthEmail(phone));
+  await page.getByTestId('phone').fill(phone.replace(/^\+91/, ''));
   await page.getByTestId('password').fill(password);
   await page.getByTestId('sign-in-submit').click();
 }

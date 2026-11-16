@@ -17,6 +17,11 @@ export function normalisePhone(input: string): PhoneResult {
   return { ok: true, e164: `+91${digits}` };
 }
 
+/** `+919876543210` -> `+91 9876543210` (display). */
+export function formatPhone(e164: string): string {
+  return `${e164.slice(0, 3)} ${e164.slice(3)}`;
+}
+
 /** `+919876543210` -> `+91******3210` (audit events never hold a full phone). */
 export function maskPhone(e164: string): string {
   return `${e164.slice(0, 3)}******${e164.slice(-4)}`;

@@ -19,10 +19,11 @@ export function useSession(): SessionState {
   return v;
 }
 
-export type AppRoute = '/sign-in' | '/no-access' | '/home';
+export type AppRoute = '/sign-in' | '/no-access' | '/change-password' | '/home';
 export function routeFor(ctx: SessionContext | null): AppRoute {
   if (!ctx) return '/sign-in';
   if ('noAccess' in ctx) return '/no-access';
+  if ('mustChangePassword' in ctx) return '/change-password';
   return '/home';
 }
 

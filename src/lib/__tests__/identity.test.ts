@@ -1,5 +1,6 @@
 import {
   authEmailToPhone,
+  formatPhone,
   generateTempPassword,
   maskPhone,
   normalisePhone,
@@ -94,5 +95,11 @@ describe('generateTempPassword (FR-3)', () => {
   it('forces a letter and a digit even with degenerate randomness', () => {
     const p = generateTempPassword((n) => new Uint8Array(n));
     expect(/[A-Za-z]/.test(p) && /[0-9]/.test(p)).toBe(true);
+  });
+});
+
+describe('formatPhone', () => {
+  it('shows the country code, a space, then the ten digits', () => {
+    expect(formatPhone('+919876543210')).toBe('+91 9876543210');
   });
 });

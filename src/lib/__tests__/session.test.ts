@@ -1,6 +1,6 @@
 import { getSessionContext, roleLabel, type SessionClient } from '@/lib/session';
 
-type Row = { role: string; status: string; tenant: { name: string; status: string } | null } | null;
+type Row = { role: string; status: string; must_change_password?: boolean; temp_password_expires_at?: string | null; tenant: { name: string; status: string } | null } | null;
 
 const eqCalls: [string, string][] = [];
 
@@ -57,5 +57,45 @@ describe('roleLabel', () => {
     expect(roleLabel('unit_admin')).toBe('Unit Admin');
     expect(roleLabel('supervisor')).toBe('Supervisor');
     expect(roleLabel('maintenance')).toBe('Maintenance');
+  });
+});
+
+describe('getSessionContext must-change-password state (02, AC-3)', () => {
+  const future = new Date(Date.now() + 3600_000).toISOString();
+  const past = new Date(Date.now() - 3600_000).toISOString();
+
+  it('reports mustChangePassword before looking at the tenant (which RLS hides until the change is done)', async () => {
+    const ctx = await getSessionContext(
+      fakeClient({ session: { user }, row: { role: 'supervisor', status: 'active', must_change_password: true, temp_password_expires_at: future, tenant: null } }),
+    );
+    expect(ctx).toEqual({ user: { id: 'u1', email: 'e2e-sup-a@example.test' }, mustChangePassword: true, expired: false });
+  });
+
+  it('flags an expired temporary password', async () => {
+    const ctx = await getSessionContext(
+      fakeClient({ session: { user }, row: { role: 'supervisor', status: 'active', must_change_password: true, temp_password_expires_at: past, tenant: null } }),
+    );
+    expect(ctx).toMatchObject({ mustChangePassword: true, expired: true });
+  });
+
+  it('treats a must-change user without an expiry as not expired', async () => {
+    const ctx = await getSessionContext(
+      fakeClient({ session: { user }, row: { role: 'supervisor', status: 'active', must_change_password: true, temp_password_expires_at: null, tenant: null } }),
+    );
+    expect(ctx).toMatchObject({ mustChangePassword: true, expired: false });
+  });
+
+  it('an inactive must-change user has no access', async () => {
+    const ctx = await getSessionContext(
+      fakeClient({ session: { user }, row: { role: 'supervisor', status: 'inactive', must_change_password: true, temp_password_expires_at: future, tenant: null } }),
+    );
+    expect(ctx).toEqual({ noAccess: true });
+  });
+
+  it('a normal member (flag false) still gets the tenant context', async () => {
+    const ctx = await getSessionContext(
+      fakeClient({ session: { user }, row: { role: 'unit_admin', status: 'active', must_change_password: false, tenant: { name: 'A', status: 'active' } } }),
+    );
+    expect(ctx).toEqual({ user: { id: 'u1', email: 'e2e-sup-a@example.test' }, tenant: { name: 'A' }, role: 'unit_admin' });
   });
 });

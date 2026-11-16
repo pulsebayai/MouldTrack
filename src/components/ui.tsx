@@ -1,5 +1,5 @@
-import type { ReactNode } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View, type TextInputProps } from 'react-native';
+import { useState, type ReactNode } from 'react';
+import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, TextInput, View, type TextInputProps } from 'react-native';
 
 export const colors = {
   primary: '#0B4F71',
@@ -50,13 +50,101 @@ export function Button(props: {
   );
 }
 
-export function Field(props: { label: string } & TextInputProps) {
-  const { label, ...input } = props;
+export function Field(props: { label: string; error?: string | null; prefix?: string } & TextInputProps) {
+  const { label, error, prefix, ...input } = props;
   return (
     <View style={styles.field}>
       <Text style={styles.label}>{label}</Text>
-      <TextInput accessibilityLabel={label} style={styles.input} placeholderTextColor={colors.muted} {...input} />
+      <View style={styles.inputRow}>
+        {prefix ? (
+          <Text testID={input.testID ? `${input.testID}-prefix` : undefined} style={styles.prefix}>
+            {prefix}
+          </Text>
+        ) : null}
+        <TextInput
+          accessibilityLabel={label}
+          aria-invalid={error ? true : undefined}
+          style={[styles.input, { flex: 1 }, error ? styles.inputError : null]}
+          placeholderTextColor={colors.muted}
+          {...input}
+        />
+      </View>
+      {error ? <ErrorText testID={input.testID ? `${input.testID}-error` : undefined}>{error}</ErrorText> : null}
     </View>
+  );
+}
+
+/** Field with a Show/Hide control (48dp), for every password input. */
+export function PasswordField(props: { label: string; error?: string | null } & TextInputProps) {
+  const [shown, setShown] = useState(false);
+  const { label, ...rest } = props;
+  const toggle = `${shown ? 'Hide' : 'Show'} ${label.toLowerCase()}`;
+  return (
+    <View style={styles.field}>
+      <Field label={label} secureTextEntry={!shown} {...rest} />
+      <Pressable
+        testID={props.testID ? `${props.testID}-toggle` : undefined}
+        accessibilityRole="button"
+        accessibilityLabel={toggle}
+        onPress={() => setShown((s) => !s)}
+        style={{ minHeight: 48, justifyContent: 'center', alignSelf: 'flex-start' }}
+      >
+        <Text style={{ color: colors.primary, fontSize: 15 }}>{toggle}</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+/** Status is always text; the border is decoration only. */
+export function StatusLabel({ status, testID }: { status: string; testID?: string }) {
+  return (
+    <Text testID={testID} style={styles.status}>
+      {status}
+    </Text>
+  );
+}
+
+/** Selectable filter chip: the selected state is shown with a check mark and bold text, not by colour alone. */
+export function Chip({ label, selected, onPress, testID }: { label: string; selected: boolean; onPress: () => void; testID?: string }) {
+  return (
+    <Pressable
+      testID={testID}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ selected }}
+      onPress={onPress}
+      style={[styles.chip, selected && styles.chipSelected]}
+    >
+      <Text style={{ color: colors.text, fontSize: 15, fontWeight: selected ? '700' : '400' }}>{selected ? `✓ ${label}` : label}</Text>
+    </Pressable>
+  );
+}
+
+export function ConfirmDialog(props: {
+  visible: boolean;
+  title: string;
+  message: string;
+  confirmLabel: string;
+  busy?: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const { visible, title, message, confirmLabel, busy, onConfirm, onCancel } = props;
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
+      <View style={styles.backdrop}>
+        <View testID="confirm-dialog" accessibilityRole="alert" accessibilityViewIsModal style={styles.dialog}>
+          <Text testID="confirm-title" accessibilityRole="header" style={{ fontSize: 20, fontWeight: '700', color: colors.text }}>
+            {title}
+          </Text>
+          <Text testID="confirm-message" style={{ fontSize: 16, color: colors.text }}>
+            {message}
+          </Text>
+          <Button title={confirmLabel} testID="confirm-ok" onPress={onConfirm} busy={busy} disabled={busy} />
+          <Button title="Cancel" variant="secondary" testID="confirm-cancel" onPress={onCancel} disabled={busy} />
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -80,4 +168,12 @@ const styles = StyleSheet.create({
   label: { fontSize: 15, fontWeight: '600', color: colors.text },
   input: { minHeight: 48, borderWidth: 1, borderColor: colors.border, borderRadius: 8, paddingHorizontal: 12, fontSize: 16, color: colors.text },
   error: { color: colors.error, fontSize: 15 },
+  inputRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  prefix: { fontSize: 16, color: colors.text, fontWeight: '600', minHeight: 48, textAlignVertical: 'center', lineHeight: 48 },
+  inputError: { borderWidth: 2, borderColor: colors.error },
+  status: { alignSelf: 'flex-start', borderWidth: 1, borderColor: colors.border, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 2, fontSize: 14, color: colors.text },
+  chip: { minHeight: 48, borderWidth: 1, borderColor: colors.border, borderRadius: 24, paddingHorizontal: 16, justifyContent: 'center' },
+  chipSelected: { borderColor: colors.primary, borderWidth: 2 },
+  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center', padding: 24 },
+  dialog: { width: '100%', maxWidth: 420, backgroundColor: colors.bg, borderRadius: 12, padding: 24, gap: 16 },
 });
