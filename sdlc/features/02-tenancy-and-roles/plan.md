@@ -122,6 +122,9 @@ Locks held: architecture + schema (roadmap, 2026-11-16).
 - **12a R5:** `change-password.test.tsx` "switches to the expired state ..." now builds the `ApiError` with `code 'expired'` (the screen goes by the code, not the wording); assertion unchanged, plus a new test that the same text without the code stays a form error.
 - **12a R6:** the double-submit path is covered by a concurrency API test (outcomes limited to 200/409, exactly one password); a deterministic test of the re-check needs fault injection that the local stack does not offer.
 - **12a unlisted files:** `e2e/evidence.ts`, `e2e/api/review-fixes.spec.ts`, `supabase/tests/005_review_fixes.test.sql`, `scripts/consistency-check.ts` (+ test), `scripts/__tests__/playwright-evidence.test.ts`. The scratch Postgres harness got an `auth.sessions` stub (local only; CI uses the real table).
+- **12a: temporary dev-only `pull_request` triggers re-added** to `deploy-dev.yml` and `regression.yml` (identical to 867773a, incl. the deploy wait) for the R-item proof run; removed again in a separate commit afterwards (see the session log for SHAs).
+- **12a: `rbac.spec.ts` assertions** `toEqual({ message: 'Not allowed' })` became `toEqual({ code: 'not_allowed', message: 'Not allowed' })` (R5: 403 bodies carry the code; still exact equality, and the no-existence-leak equality of cross-tenant vs unknown id is unchanged).
+- **12a R1 finding:** the own-session-survives assertion was dropped from `review-fixes.spec.ts` (see `Blocked - needs Opus` in the session log).
 
 ## Session log
 ### 2026-11-16
