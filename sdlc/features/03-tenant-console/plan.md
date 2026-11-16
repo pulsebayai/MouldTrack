@@ -65,3 +65,11 @@ AC-1–16 → tests (spec table); full suite green after rebase on 04; dev regre
 ### 2026-11-16
 - Done: intent + spec approved; plan drafted.
 - Next step: owner approves plan; Sonnet executes steps 1–7 in parallel with 04; step 8 after 04 merges.
+
+### 2026-11-17 (Sonnet, steps 1–7)
+- Done: steps 1–7 (checkboxes ticked, deviations above). Commits: step 1 e8742b7, step 2 df7d016, step 3 c87aa1c, step 4 b746e2d, step 5 0740240, fix 91f89f7 (020/021 independent of seeded SAs/tenants), step 6 597774b, step 7 c793e74, fix 7306677, fix bfb5ff8.
+- Proof: PR #9 CI run 43930984795 on bfb5ff8, all jobs green (changes, static, db, e2e-web, summary, ci-ok); wall clock about 5 min. Playwright: 92 passed, 2 skipped (api, e2e, smoke and the new api-setup project). Local: Jest 339 tests (30 suites), lint and typecheck clean; local pgTAP harness 001–006 + 020 (41) + 021 (153) + 022 (23).
+- Resolved by CI: `[edge_runtime.secrets] PLATFORM_SETUP_TOKEN` reaches the local edge runtime (api-setup passes), so no ci.yml fallback is needed.
+- Items for architecture.md at step 10 (Opus): `app.phone_claim` (one phone per person across membership and platform_admin) and its triggers; `platform_admin` as a separate identity with own-row RLS; `public.psvc_*` wrapper prefix for 03 (02's 004 pins exactly 8 `svc_*`); `public.pa_*` read functions as the only new authenticated entry points; `platform` and `platform-setup` Edge Functions (setup refuses while any SA exists, constant-time token, throttled audit); `api-setup` Playwright project; SA boundary rule (SA sees `tenant` rows only, no tenant operational data; 022 discovers tenant tables automatically); `loadSessionContext` platform fallback; `_ua_authorise` SA branch that 04's `pm_*` functions must copy.
+- Flagged for later: 02's `/no-access` screen does not leave the page after sign-out (pre-existing, UX only). Step 8 must add `/plant` to the SA-blocked e2e check and the `pm_*` denial assertions to 022.
+- No blockers. Step 8 waits for 04 to merge.
