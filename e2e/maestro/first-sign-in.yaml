@@ -1,0 +1,23 @@
+# 02 AC-3 (Android): a fresh temporary-password user (fixture U4) is forced to change it, then lands on Home.
+# Fixture U4 is reset to its temporary password before each run (fixtures-reset), so this flow is repeatable.
+appId: com.pulsebayai.mouldtrack
+name: first-sign-in
+---
+- launchApp: { clearState: true }
+- tapOn: { id: "phone" }
+- inputText: "9000000009"
+- tapOn: { id: "password" }
+- inputText: ${PASSWORD}
+- hideKeyboard
+- tapOn: { id: "sign-in-submit" }
+- assertVisible: { id: "change-password-screen" }
+- assertNotVisible: { id: "home-tenant" }
+- tapOn: { id: "current-password" }
+- inputText: ${PASSWORD}
+- tapOn: { id: "new-password" }
+- inputText: "Maestro-first-2026"
+- tapOn: { id: "confirm-password" }
+- inputText: "Maestro-first-2026"
+- hideKeyboard
+- tapOn: { id: "change-password-submit" }
+- assertVisible: { id: "home-tenant", text: "e2e org U" }
