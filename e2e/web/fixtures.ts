@@ -8,17 +8,23 @@ export const FIXTURE_PASSWORD =
   process.env.E2E_FIXTURE_PASSWORD ||
   (isLocal ? 'local-e2e-Passw0rd!' : (() => { throw new Error('E2E_FIXTURE_PASSWORD is required for non-local targets'); })());
 
+/** Canonical fixture phones (D2): must match supabase/seed.sql and scripts/fixtures-reset.ts. */
 export const USERS = {
-  adminA: 'e2e-admin-a@example.test',
-  supA: 'e2e-sup-a@example.test',
-  supB: 'e2e-sup-b@example.test',
-  noMember: 'e2e-nomember@example.test',
-  suspended: 'e2e-suspended-s@example.test',
+  adminA: '+919000000001',
+  supA: '+919000000002',
+  supB: '+919000000003',
+  suspended: '+919000000004',
+  noMember: '+919000000005',
+  u1: '+919000000006', // org U: Unit Admin
+  u2: '+919000000007', // org U: Unit Admin
+  u3: '+919000000008', // org U: Supervisor
+  u4: '+919000000009', // org U: fresh, must change password
 } as const;
 
-export async function signIn(page: Page, email: string, password = FIXTURE_PASSWORD) {
+/** Signs in through the UI with a phone in +91XXXXXXXXXX form (the screen has a fixed +91 prefix). */
+export async function signIn(page: Page, phone: string, password = FIXTURE_PASSWORD) {
   await page.goto('/sign-in');
-  await page.getByTestId('email').fill(email);
+  await page.getByTestId('phone').fill(phone.replace(/^\+91/, ''));
   await page.getByTestId('password').fill(password);
   await page.getByTestId('sign-in-submit').click();
 }

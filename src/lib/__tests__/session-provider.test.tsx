@@ -4,7 +4,7 @@ import { SessionProvider, useSession } from '@/lib/session-provider';
 
 function Probe() {
   const { status, ctx } = useSession();
-  return <Text testID="probe">{`${status}:${ctx ? ('noAccess' in ctx ? 'noAccess' : ctx.tenant.name) : 'none'}`}</Text>;
+  return <Text testID="probe">{`${status}:${ctx ? ('tenant' in ctx ? ctx.tenant.name : 'noAccess') : 'none'}`}</Text>;
 }
 
 function client(opts: { session: boolean; fail?: boolean }) {
@@ -21,10 +21,12 @@ function client(opts: { session: boolean; fail?: boolean }) {
     },
     from: () => ({
       select: () => ({
-        maybeSingle: async () =>
-          opts.fail
-            ? { data: null, error: new Error('Failed to fetch') }
-            : { data: { role: 'supervisor', status: 'active', tenant: { name: 'e2e org A', status: 'active' } }, error: null },
+        eq: () => ({
+          maybeSingle: async () =>
+            opts.fail
+              ? { data: null, error: new Error('Failed to fetch') }
+              : { data: { role: 'supervisor', status: 'active', tenant: { name: 'e2e org A', status: 'active' } }, error: null },
+        }),
       }),
     }),
   };

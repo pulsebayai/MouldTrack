@@ -1,11 +1,13 @@
 import Constants from 'expo-constants';
+import { router } from 'expo-router';
 import { useState } from 'react';
-import { Text, View } from 'react-native';
+import { Platform, Text, View } from 'react-native';
 import { SignOutButton } from '@/components/sign-out-button';
 import { Button, Screen, colors } from '@/components/ui';
 import type { AppEnv } from '@/lib/env';
+import { authEmailToPhone, formatPhone } from '@/lib/identity';
 import { sendTestError } from '@/lib/sentry';
-import { roleLabel } from '@/lib/session';
+import { isMember, roleLabel } from '@/lib/session';
 import { useSession } from '@/lib/session-provider';
 
 const ENV_LABEL: Record<AppEnv, string | null> = {
@@ -18,7 +20,8 @@ const ENV_LABEL: Record<AppEnv, string | null> = {
 export default function Home() {
   const { ctx, appEnv } = useSession();
   const [testErrorSent, setTestErrorSent] = useState(false);
-  if (!ctx || 'noAccess' in ctx) return null; // the (app) layout redirects; nothing tenant-scoped renders here
+  if (!isMember(ctx)) return null; // the (app) layout redirects; nothing tenant-scoped renders here
+  const phone = ctx.user.email ? authEmailToPhone(ctx.user.email) : null;
   const banner = ENV_LABEL[appEnv];
   return (
     <Screen testID="home-screen">
@@ -35,7 +38,11 @@ export default function Home() {
       <Text testID="home-role" style={{ fontSize: 16, color: colors.text }}>
         Role: {roleLabel(ctx.role)}
       </Text>
-      <Text style={{ fontSize: 15, color: colors.muted }}>{ctx.user.email}</Text>
+      <Text style={{ fontSize: 15, color: colors.muted }}>{phone ? formatPhone(phone) : ctx.user.email}</Text>
+      {ctx.role === 'unit_admin' && Platform.OS === 'web' ? (
+        <Button title="Users" testID="users-link" onPress={() => router.push('/users')} />
+      ) : null}
+      <Button title="Change password" variant="secondary" testID="change-password-link" onPress={() => router.push('/change-password')} />
       <SignOutButton />
       {appEnv === 'development' ? (
         <>

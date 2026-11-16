@@ -6,3 +6,10 @@ describe('routeFor (guard, AC-3/AC-4)', () => {
   it('sends members home', () =>
     expect(routeFor({ user: { id: 'u', email: 'x' }, tenant: { name: 'A' }, role: 'unit_admin' })).toBe('/home'));
 });
+
+describe('routeFor must-change state (02, AC-3)', () => {
+  it('sends users who must change their password to /change-password', () => {
+    expect(routeFor({ user: { id: 'u', email: 'x' }, mustChangePassword: true, expired: false })).toBe('/change-password');
+    expect(routeFor({ user: { id: 'u', email: 'x' }, mustChangePassword: true, expired: true })).toBe('/change-password');
+  });
+});

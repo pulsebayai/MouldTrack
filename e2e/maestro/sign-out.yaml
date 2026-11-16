@@ -3,8 +3,8 @@ appId: com.pulsebayai.mouldtrack
 name: sign-out
 ---
 - launchApp: { clearState: true }
-- tapOn: { id: "email" }
-- inputText: "e2e-admin-a@example.test"
+- tapOn: { id: "phone" }
+- inputText: "9000000001"
 - tapOn: { id: "password" }
 - inputText: ${PASSWORD}
 - hideKeyboard

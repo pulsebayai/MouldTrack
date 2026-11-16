@@ -12,6 +12,14 @@ test.describe('Smoke (prod-safe)', () => {
     expect(errors, errors.join('\n')).toEqual([]);
   });
 
+  test('sign-in shows the phone field with the +91 prefix', async ({ page }) => {
+    await page.goto('/sign-in');
+    await expect(page.getByTestId('phone')).toBeVisible();
+    await expect(page.getByLabel('Phone number')).toBeVisible();
+    await expect(page.getByText('+91', { exact: true })).toBeVisible();
+    await expect(page.getByLabel('Email')).toHaveCount(0);
+  });
+
   test('protected route redirects to sign-in when signed out', async ({ page }) => {
     await page.goto('/home');
     await expect(page.getByTestId('sign-in-submit')).toBeVisible();

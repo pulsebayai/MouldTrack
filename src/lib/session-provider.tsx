@@ -9,7 +9,12 @@ export type SessionState = {
   appEnv: AppEnv;
   client: Pick<SupabaseClient, 'auth' | 'from'>;
   refresh: () => Promise<void>;
+  /** One-shot message for the sign-in screen (D14: after a password change the user signs in again). */
+  notice: SignInNotice | null;
+  setNotice: (n: SignInNotice | null) => void;
 };
+
+export type SignInNotice = 'password_changed';
 
 export const SessionStateContext = createContext<SessionState | null>(null);
 
@@ -19,10 +24,11 @@ export function useSession(): SessionState {
   return v;
 }
 
-export type AppRoute = '/sign-in' | '/no-access' | '/home';
+export type AppRoute = '/sign-in' | '/no-access' | '/change-password' | '/home';
 export function routeFor(ctx: SessionContext | null): AppRoute {
   if (!ctx) return '/sign-in';
   if ('noAccess' in ctx) return '/no-access';
+  if ('mustChangePassword' in ctx) return '/change-password';
   return '/home';
 }
 
@@ -30,6 +36,7 @@ export function SessionProvider(props: { client: SessionState['client']; appEnv:
   const { client, appEnv, children } = props;
   const [status, setStatus] = useState<SessionState['status']>('loading');
   const [ctx, setCtx] = useState<SessionContext | null>(null);
+  const [notice, setNotice] = useState<SignInNotice | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -51,6 +58,6 @@ export function SessionProvider(props: { client: SessionState['client']; appEnv:
     return () => data.subscription.unsubscribe();
   }, [client, refresh]);
 
-  const value = useMemo(() => ({ status, ctx, appEnv, client, refresh }), [status, ctx, appEnv, client, refresh]);
+  const value = useMemo(() => ({ status, ctx, appEnv, client, refresh, notice, setNotice }), [status, ctx, appEnv, client, refresh, notice]);
   return <SessionStateContext.Provider value={value}>{children}</SessionStateContext.Provider>;
 }

@@ -24,6 +24,7 @@
     "react-native-worklets": "0.13.0"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
     "@playwright/test": "1.65.0",
     "@testing-library/react-native": "^14.1.0",
     "@types/jest": "^30.0.0",
@@ -51,7 +52,8 @@
     "test:e2e:android": "maestro test e2e/maestro",
     "build": "expo export -p web --output-dir ${WEB_DIST:-dist} && bash scripts/android-prebuild-check.sh",
     "fixtures:reset": "tsx scripts/fixtures-reset.ts",
-    "serve:web": "serve ${WEB_DIST:-dist} -s -l 8081"
+    "serve:web": "serve ${WEB_DIST:-dist} -s -l 8081",
+    "test:api": "playwright test --project=api"
   },
   "private": true,
   "engines": {

@@ -3,8 +3,8 @@ appId: com.pulsebayai.mouldtrack
 name: relaunch
 ---
 - launchApp: { clearState: true }
-- tapOn: { id: "email" }
-- inputText: "e2e-sup-b@example.test"
+- tapOn: { id: "phone" }
+- inputText: "9000000003"
 - tapOn: { id: "password" }
 - inputText: ${PASSWORD}
 - hideKeyboard
