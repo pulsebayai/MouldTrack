@@ -128,3 +128,750 @@ insert into app.audit_action (action, feature) values
   ('tenant.created', '03'), ('tenant.updated', '03'), ('tenant.suspended', '03'), ('tenant.activated', '03'),
   ('platform_admin.created', '03'), ('platform_admin.deactivated', '03'), ('platform_admin.reactivated', '03'),
   ('platform_admin.password_reset', '03'), ('platform_admin.password_changed', '03');
+
+-- 6. Platform functions (step 2, D2). Same shape as 02's ua_*: service-only, denials COMMITTED + RETURNED as {ok:false, code},
+-- validation / duplicate / guard errors RAISE P0001 with detail {code, field}. Reached through public.psvc_* wrappers.
+
+-- Serialises every platform write (low volume), then authorises the actor as an active Super Admin with a normal password.
+create function app._pa_authorise(p_actor uuid, p_source text default 'edge:platform')
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  a public.platform_admin;
+  m record;
+  v_reason text;
+  v_role text;
+  v_tenant uuid;
+begin
+  perform pg_advisory_xact_lock(hashtext('app.platform_admin'));
+  select * into a from public.platform_admin pa where pa.user_id = p_actor;
+  if not found then
+    select mm.tenant_id, mm.role::text as role into m from public.membership mm where mm.user_id = p_actor;
+    v_reason := 'not_platform_admin';
+    v_tenant := m.tenant_id;
+    v_role := m.role;
+  elsif a.status <> 'active' then
+    v_reason := 'inactive';
+    v_role := 'platform_admin';
+  elsif a.must_change_password then
+    v_reason := 'must_change_password';
+    v_role := 'platform_admin';
+  end if;
+  if v_reason is not null then
+    perform app.audit_denied(p_actor, v_tenant, v_role, v_reason, null, null, p_source);
+    return jsonb_build_object('ok', false, 'code', 'not_allowed');
+  end if;
+  return jsonb_build_object('ok', true);
+end
+$$;
+
+create function app._pa_audit(
+  p_actor uuid, p_tenant uuid, p_action text, p_entity_type text, p_entity uuid,
+  p_before jsonb, p_after jsonb, p_request uuid, p_reason text default null, p_source text default 'edge:platform'
+) returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  insert into public.audit_event (tenant_id, actor_user_id, actor_role, action, entity_type, entity_id, before, after, reason, source, request_id)
+  values (p_tenant, p_actor, 'platform_admin', p_action, p_entity_type, p_entity, p_before, p_after, p_reason, p_source, p_request)
+$$;
+
+create function app._pa_tenant_snapshot(t public.tenant)
+returns jsonb
+language sql
+immutable
+security definer
+set search_path = ''
+as $$ select jsonb_build_object('name', t.name, 'timezone', t.timezone, 'plan_label', t.plan_label, 'status', t.status) $$;
+
+create function app._pa_sa_snapshot(a public.platform_admin)
+returns jsonb
+language sql
+immutable
+security definer
+set search_path = ''
+as $$
+  select jsonb_build_object('full_name', a.full_name, 'phone', left(a.phone_e164, 3) || '******' || right(a.phone_e164, 4), 'status', a.status)
+$$;
+
+create function app._pa_validate_tenant(p_name text, p_tz text, p_plan text, p_required boolean)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if (p_required or p_name is not null) and (p_name is null or length(p_name) not between 1 and 80) then
+    perform app._ua_fail('validation', 'Enter a name of 1 to 80 characters', 'name');
+  end if;
+  if (p_required or p_tz is not null) and (p_tz is null or p_tz !~ '^([A-Za-z_]+(/[A-Za-z0-9_+-]+)+|UTC)$'
+      or not exists (select 1 from pg_catalog.pg_timezone_names n where n.name = p_tz)) then
+    perform app._ua_fail('validation', 'Choose a valid time zone', 'timezone');
+  end if;
+  if (p_required or p_plan is not null) and (p_plan is null or p_plan not in ('trial', 'active')) then
+    perform app._ua_fail('validation', 'Plan must be Trial or Active', 'plan_label');
+  end if;
+end
+$$;
+
+create function app._pa_name_taken(p_name text, p_exclude uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$ select exists (select 1 from public.tenant t where lower(t.name) = lower(p_name) and t.id is distinct from p_exclude) $$;
+
+-- Tenants ----------------------------------------------------------------------------------------------------------------------------------------
+create function app.pa_tenant_create(p_actor uuid, p_request_id uuid, p_name text, p_timezone text, p_plan text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_auth jsonb;
+  v_done uuid;
+  v_name text := btrim(p_name);
+  v_tz text := coalesce(nullif(btrim(p_timezone), ''), 'Asia/Kolkata');
+  v_plan text := coalesce(nullif(btrim(p_plan), ''), 'trial');
+  t public.tenant;
+begin
+  v_auth := app._pa_authorise(p_actor);
+  if not (v_auth->>'ok')::boolean then return v_auth; end if;
+  v_done := app._ua_done(p_actor, p_request_id);
+  if v_done is not null then
+    return jsonb_build_object('ok', true, 'already', true, 'tenant_id', v_done);
+  end if;
+  perform app._pa_validate_tenant(v_name, v_tz, v_plan, true);
+  if app._pa_name_taken(v_name, null) then
+    perform app._ua_fail('duplicate', 'A tenant with this name already exists', 'name');
+  end if;
+  begin
+    insert into public.tenant (name, timezone, plan_label, status) values (v_name, v_tz, v_plan::public.plan_label, 'active') returning * into t;
+  exception when unique_violation then
+    perform app._ua_fail('duplicate', 'A tenant with this name already exists', 'name');
+  end;
+  perform app._pa_audit(p_actor, t.id, 'tenant.created', 'tenant', t.id, null, app._pa_tenant_snapshot(t), p_request_id);
+  return jsonb_build_object('ok', true, 'tenant_id', t.id);
+end
+$$;
+
+create function app.pa_tenant_update(p_actor uuid, p_request_id uuid, p_tenant uuid, p_name text, p_timezone text, p_plan text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_auth jsonb;
+  v_done uuid;
+  v_name text := btrim(p_name);
+  v_tz text := nullif(btrim(p_timezone), '');
+  v_plan text := nullif(btrim(p_plan), '');
+  cur public.tenant;
+  upd public.tenant;
+begin
+  v_auth := app._pa_authorise(p_actor);
+  if not (v_auth->>'ok')::boolean then return v_auth; end if;
+  v_done := app._ua_done(p_actor, p_request_id);
+  if v_done is not null then
+    return jsonb_build_object('ok', true, 'already', true, 'tenant_id', v_done);
+  end if;
+  select * into cur from public.tenant t where t.id = p_tenant for no key update;
+  if not found then
+    perform app._ua_fail('guard', 'Tenant not found', 'not_found');
+  end if;
+  perform app._pa_validate_tenant(v_name, v_tz, v_plan, false);
+  if v_name is not null and app._pa_name_taken(v_name, p_tenant) then
+    perform app._ua_fail('duplicate', 'A tenant with this name already exists', 'name');
+  end if;
+  begin
+    update public.tenant t
+    set name = coalesce(v_name, t.name), timezone = coalesce(v_tz, t.timezone),
+        plan_label = coalesce(v_plan::public.plan_label, t.plan_label), updated_at = now()
+    where t.id = p_tenant returning * into upd;
+  exception when unique_violation then
+    perform app._ua_fail('duplicate', 'A tenant with this name already exists', 'name');
+  end;
+  perform app._pa_audit(p_actor, p_tenant, 'tenant.updated', 'tenant', p_tenant, app._pa_tenant_snapshot(cur), app._pa_tenant_snapshot(upd), p_request_id);
+  return jsonb_build_object('ok', true, 'tenant_id', p_tenant);
+end
+$$;
+
+create function app.pa_tenant_set_status(p_actor uuid, p_request_id uuid, p_tenant uuid, p_status text, p_reason text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_auth jsonb;
+  v_done uuid;
+  v_reason text := nullif(btrim(p_reason), '');
+  cur public.tenant;
+  upd public.tenant;
+begin
+  v_auth := app._pa_authorise(p_actor);
+  if not (v_auth->>'ok')::boolean then return v_auth; end if;
+  v_done := app._ua_done(p_actor, p_request_id);
+  if v_done is not null then
+    return jsonb_build_object('ok', true, 'already', true, 'tenant_id', v_done,
+      'status', (select t.status from public.tenant t where t.id = v_done));
+  end if;
+  if p_status is null or p_status not in ('active', 'suspended') then
+    perform app._ua_fail('validation', 'Status must be active or suspended', 'status');
+  end if;
+  if p_status = 'suspended' and v_reason is null then
+    perform app._ua_fail('validation', 'Give a reason of 1 to 200 characters', 'reason');
+  end if;
+  if v_reason is not null and length(v_reason) > 200 then
+    perform app._ua_fail('validation', 'Give a reason of 1 to 200 characters', 'reason');
+  end if;
+  select * into cur from public.tenant t where t.id = p_tenant for no key update;
+  if not found then
+    perform app._ua_fail('guard', 'Tenant not found', 'not_found');
+  end if;
+  if cur.status::text = p_status then
+    return jsonb_build_object('ok', true, 'changed', false, 'tenant_id', p_tenant, 'status', cur.status);
+  end if;
+  update public.tenant t
+  set status = p_status::public.tenant_status,
+      suspended_reason = case when p_status = 'suspended' then v_reason else null end,
+      updated_at = now()
+  where t.id = p_tenant returning * into upd;
+  perform app._pa_audit(p_actor, p_tenant,
+    case when p_status = 'suspended' then 'tenant.suspended' else 'tenant.activated' end,
+    'tenant', p_tenant, app._pa_tenant_snapshot(cur), app._pa_tenant_snapshot(upd), p_request_id, v_reason);
+  return jsonb_build_object('ok', true, 'changed', true, 'tenant_id', p_tenant, 'status', upd.status);
+end
+$$;
+
+-- Unit Admins of a tenant (create / reset only) ------------------------------------------------------------------------------------------------------
+create function app.pa_ua_check_create(p_actor uuid, p_request_id uuid, p_tenant uuid, p_full_name text, p_employee_id text, p_phone text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_auth jsonb;
+  v_done uuid;
+  v_name text := btrim(p_full_name);
+  v_emp text := btrim(p_employee_id);
+begin
+  v_auth := app._pa_authorise(p_actor);
+  if not (v_auth->>'ok')::boolean then return v_auth; end if;
+  v_done := app._ua_done(p_actor, p_request_id);
+  if v_done is not null then
+    return jsonb_build_object('ok', true, 'already', true, 'user_id', v_done);
+  end if;
+  perform 1 from public.tenant t where t.id = p_tenant for no key update;
+  if not found then
+    perform app._ua_fail('guard', 'Tenant not found', 'not_found');
+  end if;
+  perform app._ua_validate(v_name, v_emp, p_phone, 'unit_admin', true);
+  perform app._ua_dupcheck(p_tenant, v_emp, p_phone, null);
+  return jsonb_build_object('ok', true);
+end
+$$;
+
+create function app.pa_ua_create(p_actor uuid, p_request_id uuid, p_tenant uuid, p_user_id uuid, p_full_name text, p_employee_id text, p_phone text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_auth jsonb;
+  v_done uuid;
+  v_name text := btrim(p_full_name);
+  v_emp text := btrim(p_employee_id);
+  v_constraint text;
+  m public.membership;
+begin
+  v_auth := app._pa_authorise(p_actor);
+  if not (v_auth->>'ok')::boolean then return v_auth; end if;
+  v_done := app._ua_done(p_actor, p_request_id);
+  if v_done is not null then
+    return jsonb_build_object('ok', true, 'already', true, 'user_id', v_done);
+  end if;
+  perform 1 from public.tenant t where t.id = p_tenant for no key update;
+  if not found then
+    perform app._ua_fail('guard', 'Tenant not found', 'not_found');
+  end if;
+  perform app._ua_validate(v_name, v_emp, p_phone, 'unit_admin', true);
+  perform app._ua_dupcheck(p_tenant, v_emp, p_phone, null);
+  begin
+    insert into public.membership (tenant_id, user_id, role, status, full_name, employee_id, phone_e164,
+                                   must_change_password, temp_password_expires_at, created_by)
+    values (p_tenant, p_user_id, 'unit_admin', 'active', v_name, v_emp, p_phone, true, now() + interval '24 hours', p_actor)
+    returning * into m;
+  exception when unique_violation then
+    get stacked diagnostics v_constraint = constraint_name;
+    if v_constraint in ('membership_phone_e164_key', 'phone_claim_phone_e164_key') then
+      perform app._ua_fail('duplicate', 'This phone number is already registered', 'phone');
+    elsif v_constraint = 'membership_tenant_employee_id_key' then
+      perform app._ua_fail('duplicate', 'This employee ID is already in use', 'employee_id');
+    end if;
+    raise;
+  end;
+  perform app._pa_audit(p_actor, p_tenant, 'user.created', 'user', p_user_id, null, app._ua_snapshot(m), p_request_id);
+  return jsonb_build_object('ok', true, 'user_id', p_user_id);
+end
+$$;
+
+-- Only a tenant's Unit Admin can be reset from the console; anything else is denied and audited (AC-9).
+create function app.pa_ua_reset_password(p_actor uuid, p_request_id uuid, p_user_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_auth jsonb;
+  v_done uuid;
+  cur public.membership;
+  v_reason text;
+begin
+  v_auth := app._pa_authorise(p_actor);
+  if not (v_auth->>'ok')::boolean then return v_auth; end if;
+  select * into cur from public.membership m where m.user_id = p_user_id;
+  if not found then
+    v_reason := 'not_found';
+  elsif cur.role <> 'unit_admin' then
+    v_reason := 'target_not_unit_admin';
+  end if;
+  if v_reason is not null then
+    perform app.audit_denied(p_actor, cur.tenant_id, 'platform_admin', v_reason, 'user', p_user_id, 'edge:platform');
+    return jsonb_build_object('ok', false, 'code', 'not_allowed');
+  end if;
+  v_done := app._ua_done(p_actor, p_request_id);
+  if v_done is not null then
+    return jsonb_build_object('ok', true, 'already', true, 'user_id', v_done);
+  end if;
+  if cur.status <> 'active' then
+    perform app._ua_fail('guard', 'Reactivate this user before resetting the password', 'inactive');
+  end if;
+  update public.membership m
+  set must_change_password = true, temp_password_expires_at = now() + interval '24 hours', updated_at = now()
+  where m.user_id = p_user_id;
+  perform app._revoke_sessions(p_user_id);
+  perform app._pa_audit(p_actor, cur.tenant_id, 'user.password_reset', 'user', p_user_id, null, null, p_request_id);
+  return jsonb_build_object('ok', true, 'user_id', p_user_id);
+end
+$$;
+
+-- Super Admins -----------------------------------------------------------------------------------------------------------------------------------------
+create function app._pa_validate_sa(p_name text, p_phone text)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if p_name is null or length(p_name) not between 1 and 80 then
+    perform app._ua_fail('validation', 'Enter a name of 1 to 80 characters', 'full_name');
+  end if;
+  if p_phone is null or p_phone !~ '^\+91[6-9][0-9]{9}$' then
+    perform app._ua_fail('validation', 'Enter a valid 10-digit Indian mobile number', 'phone');
+  end if;
+end
+$$;
+
+create function app.pa_sa_check_create(p_actor uuid, p_request_id uuid, p_full_name text, p_phone text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_auth jsonb;
+  v_done uuid;
+  v_name text := btrim(p_full_name);
+begin
+  v_auth := app._pa_authorise(p_actor);
+  if not (v_auth->>'ok')::boolean then return v_auth; end if;
+  v_done := app._ua_done(p_actor, p_request_id);
+  if v_done is not null then
+    return jsonb_build_object('ok', true, 'already', true, 'user_id', v_done);
+  end if;
+  perform app._pa_validate_sa(v_name, p_phone);
+  perform app._ua_dupcheck(null, null, p_phone, null);
+  return jsonb_build_object('ok', true);
+end
+$$;
+
+create function app.pa_sa_create(p_actor uuid, p_request_id uuid, p_user_id uuid, p_full_name text, p_phone text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_auth jsonb;
+  v_done uuid;
+  v_name text := btrim(p_full_name);
+  a public.platform_admin;
+begin
+  v_auth := app._pa_authorise(p_actor);
+  if not (v_auth->>'ok')::boolean then return v_auth; end if;
+  v_done := app._ua_done(p_actor, p_request_id);
+  if v_done is not null then
+    return jsonb_build_object('ok', true, 'already', true, 'user_id', v_done);
+  end if;
+  perform app._pa_validate_sa(v_name, p_phone);
+  perform app._ua_dupcheck(null, null, p_phone, null);
+  begin
+    insert into public.platform_admin (user_id, full_name, phone_e164, status, must_change_password, temp_password_expires_at, created_by)
+    values (p_user_id, v_name, p_phone, 'active', true, now() + interval '24 hours', p_actor)
+    returning * into a;
+  exception when unique_violation then
+    perform app._ua_fail('duplicate', 'This phone number is already registered', 'phone');
+  end;
+  perform app._pa_audit(p_actor, null, 'platform_admin.created', 'platform_admin', p_user_id, null, app._pa_sa_snapshot(a), p_request_id);
+  return jsonb_build_object('ok', true, 'user_id', p_user_id);
+end
+$$;
+
+create function app.pa_sa_set_status(p_actor uuid, p_request_id uuid, p_user_id uuid, p_status text, p_reason text default null)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_auth jsonb;
+  v_done uuid;
+  cur public.platform_admin;
+  upd public.platform_admin;
+begin
+  v_auth := app._pa_authorise(p_actor);
+  if not (v_auth->>'ok')::boolean then return v_auth; end if;
+  v_done := app._ua_done(p_actor, p_request_id);
+  if v_done is not null then
+    return jsonb_build_object('ok', true, 'already', true, 'user_id', v_done,
+      'status', (select pa.status from public.platform_admin pa where pa.user_id = v_done));
+  end if;
+  if p_status is null or p_status not in ('active', 'inactive') then
+    perform app._ua_fail('validation', 'Status must be active or inactive', 'status');
+  end if;
+  select * into cur from public.platform_admin pa where pa.user_id = p_user_id;
+  if not found then
+    perform app._ua_fail('guard', 'Super Admin not found', 'not_found');
+  end if;
+  if p_status = 'inactive' then
+    if p_user_id = p_actor then
+      perform app._ua_fail('guard', 'You cannot do this to your own account', 'self');
+    end if;
+    if cur.status = 'active' and not exists (
+      select 1 from public.platform_admin pa where pa.status = 'active' and pa.user_id <> p_user_id
+    ) then
+      perform app._ua_fail('guard', 'The platform must keep at least one active Super Admin', 'last_admin');
+    end if;
+  end if;
+  if cur.status::text = p_status then
+    return jsonb_build_object('ok', true, 'changed', false, 'user_id', p_user_id, 'status', cur.status);
+  end if;
+  update public.platform_admin pa set status = p_status::public.membership_status, updated_at = now()
+  where pa.user_id = p_user_id returning * into upd;
+  if p_status = 'inactive' then
+    perform app._revoke_sessions(p_user_id);
+  end if;
+  perform app._pa_audit(p_actor, null,
+    case when p_status = 'inactive' then 'platform_admin.deactivated' else 'platform_admin.reactivated' end,
+    'platform_admin', p_user_id, app._pa_sa_snapshot(cur), app._pa_sa_snapshot(upd), p_request_id, p_reason);
+  return jsonb_build_object('ok', true, 'changed', true, 'user_id', p_user_id, 'status', upd.status);
+end
+$$;
+
+create function app.pa_sa_reset_password(p_actor uuid, p_request_id uuid, p_user_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_auth jsonb;
+  v_done uuid;
+  cur public.platform_admin;
+begin
+  v_auth := app._pa_authorise(p_actor);
+  if not (v_auth->>'ok')::boolean then return v_auth; end if;
+  v_done := app._ua_done(p_actor, p_request_id);
+  if v_done is not null then
+    return jsonb_build_object('ok', true, 'already', true, 'user_id', v_done);
+  end if;
+  if p_user_id = p_actor then
+    perform app._ua_fail('guard', 'You cannot do this to your own account', 'self');
+  end if;
+  select * into cur from public.platform_admin pa where pa.user_id = p_user_id;
+  if not found then
+    perform app._ua_fail('guard', 'Super Admin not found', 'not_found');
+  end if;
+  if cur.status <> 'active' then
+    perform app._ua_fail('guard', 'Reactivate this user before resetting the password', 'inactive');
+  end if;
+  update public.platform_admin pa
+  set must_change_password = true, temp_password_expires_at = now() + interval '24 hours', updated_at = now()
+  where pa.user_id = p_user_id;
+  perform app._revoke_sessions(p_user_id);
+  perform app._pa_audit(p_actor, null, 'platform_admin.password_reset', 'platform_admin', p_user_id, null, null, p_request_id);
+  return jsonb_build_object('ok', true, 'user_id', p_user_id);
+end
+$$;
+
+-- One-time setup (D4): refuses once any Super Admin exists. A denial is committed + returned; the audit row is throttled to one
+-- per minute because the endpoint is public (anyone can call it after setup closed).
+create function app.pa_setup_check()
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  perform pg_advisory_xact_lock(hashtext('app.platform_admin'));
+  if exists (select 1 from public.platform_admin) then
+    if not exists (
+      select 1 from public.audit_event e
+      where e.action = 'access.denied' and e.reason = 'setup_closed' and e.occurred_at > now() - interval '1 minute'
+    ) then
+      perform app.audit_denied(null, null, null, 'setup_closed', 'platform_admin', null, 'edge:platform-setup');
+    end if;
+    return jsonb_build_object('ok', false, 'code', 'setup_closed');
+  end if;
+  return jsonb_build_object('ok', true);
+end
+$$;
+
+create function app.pa_setup_first(p_user_id uuid, p_full_name text, p_phone text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_check jsonb;
+  v_name text := btrim(p_full_name);
+  a public.platform_admin;
+begin
+  v_check := app.pa_setup_check();
+  if not (v_check->>'ok')::boolean then return v_check; end if;
+  perform app._pa_validate_sa(v_name, p_phone);
+  perform app._ua_dupcheck(null, null, p_phone, null);
+  begin
+    insert into public.platform_admin (user_id, full_name, phone_e164, status, must_change_password, temp_password_expires_at)
+    values (p_user_id, v_name, p_phone, 'active', true, now() + interval '24 hours')
+    returning * into a;
+  exception when unique_violation then
+    perform app._ua_fail('duplicate', 'This phone number is already registered', 'phone');
+  end;
+  insert into public.audit_event (tenant_id, actor_user_id, actor_role, action, entity_type, entity_id, after, source)
+  values (null, null, null, 'platform_admin.created', 'platform_admin', p_user_id, app._pa_sa_snapshot(a), 'edge:platform-setup');
+  return jsonb_build_object('ok', true, 'user_id', p_user_id);
+end
+$$;
+
+-- Own password change for a Super Admin (D5, mirrors 02's account_check / account_password_changed) --------------------------------------------------
+create function app.pa_password_changed(p_user_id uuid, p_keep_session uuid default null, p_check_only boolean default false)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  a public.platform_admin;
+begin
+  select * into a from public.platform_admin pa where pa.user_id = p_user_id;
+  if not found then
+    perform app.audit_denied(p_user_id, null, null, 'no_platform_admin', 'user', p_user_id, 'edge:account');
+    return jsonb_build_object('ok', false, 'code', 'not_allowed');
+  end if;
+  if a.status <> 'active' then
+    perform app.audit_denied(p_user_id, null, 'platform_admin', 'inactive', 'user', p_user_id, 'edge:account');
+    return jsonb_build_object('ok', false, 'code', 'not_allowed');
+  end if;
+  if a.must_change_password and a.temp_password_expires_at is not null and a.temp_password_expires_at < now() then
+    perform app.audit_denied(p_user_id, null, 'platform_admin', 'temp_password_expired', 'user', p_user_id, 'edge:account');
+    return jsonb_build_object('ok', false, 'code', 'expired');
+  end if;
+  if p_check_only then return jsonb_build_object('ok', true); end if;
+  update public.platform_admin pa
+  set must_change_password = false, temp_password_expires_at = null, updated_at = now()
+  where pa.user_id = p_user_id;
+  perform app._revoke_sessions(p_user_id, p_keep_session);
+  insert into public.audit_event (tenant_id, actor_user_id, actor_role, action, entity_type, entity_id, source)
+  values (null, p_user_id, 'platform_admin', 'platform_admin.password_changed', 'platform_admin', p_user_id, 'edge:account');
+  return jsonb_build_object('ok', true);
+end
+$$;
+
+-- 7. Wrappers (service_role only; psvc_ so 02's pinned "8 svc_* wrappers" stays true) ---------------------------------------------------------------------
+create function public.psvc_pa_tenant_create(p_actor uuid, p_request_id uuid, p_name text, p_timezone text, p_plan text)
+returns jsonb language sql security invoker set search_path = ''
+as $$ select app.pa_tenant_create(p_actor, p_request_id, p_name, p_timezone, p_plan) $$;
+create function public.psvc_pa_tenant_update(p_actor uuid, p_request_id uuid, p_tenant uuid, p_name text, p_timezone text, p_plan text)
+returns jsonb language sql security invoker set search_path = ''
+as $$ select app.pa_tenant_update(p_actor, p_request_id, p_tenant, p_name, p_timezone, p_plan) $$;
+create function public.psvc_pa_tenant_set_status(p_actor uuid, p_request_id uuid, p_tenant uuid, p_status text, p_reason text)
+returns jsonb language sql security invoker set search_path = ''
+as $$ select app.pa_tenant_set_status(p_actor, p_request_id, p_tenant, p_status, p_reason) $$;
+create function public.psvc_pa_ua_check_create(p_actor uuid, p_request_id uuid, p_tenant uuid, p_full_name text, p_employee_id text, p_phone text)
+returns jsonb language sql security invoker set search_path = ''
+as $$ select app.pa_ua_check_create(p_actor, p_request_id, p_tenant, p_full_name, p_employee_id, p_phone) $$;
+create function public.psvc_pa_ua_create(p_actor uuid, p_request_id uuid, p_tenant uuid, p_user_id uuid, p_full_name text, p_employee_id text, p_phone text)
+returns jsonb language sql security invoker set search_path = ''
+as $$ select app.pa_ua_create(p_actor, p_request_id, p_tenant, p_user_id, p_full_name, p_employee_id, p_phone) $$;
+create function public.psvc_pa_ua_reset_password(p_actor uuid, p_request_id uuid, p_user_id uuid)
+returns jsonb language sql security invoker set search_path = ''
+as $$ select app.pa_ua_reset_password(p_actor, p_request_id, p_user_id) $$;
+create function public.psvc_pa_sa_check_create(p_actor uuid, p_request_id uuid, p_full_name text, p_phone text)
+returns jsonb language sql security invoker set search_path = ''
+as $$ select app.pa_sa_check_create(p_actor, p_request_id, p_full_name, p_phone) $$;
+create function public.psvc_pa_sa_create(p_actor uuid, p_request_id uuid, p_user_id uuid, p_full_name text, p_phone text)
+returns jsonb language sql security invoker set search_path = ''
+as $$ select app.pa_sa_create(p_actor, p_request_id, p_user_id, p_full_name, p_phone) $$;
+create function public.psvc_pa_sa_set_status(p_actor uuid, p_request_id uuid, p_user_id uuid, p_status text, p_reason text default null)
+returns jsonb language sql security invoker set search_path = ''
+as $$ select app.pa_sa_set_status(p_actor, p_request_id, p_user_id, p_status, p_reason) $$;
+create function public.psvc_pa_sa_reset_password(p_actor uuid, p_request_id uuid, p_user_id uuid)
+returns jsonb language sql security invoker set search_path = ''
+as $$ select app.pa_sa_reset_password(p_actor, p_request_id, p_user_id) $$;
+create function public.psvc_pa_setup_check()
+returns jsonb language sql security invoker set search_path = ''
+as $$ select app.pa_setup_check() $$;
+create function public.psvc_pa_setup_first(p_user_id uuid, p_full_name text, p_phone text)
+returns jsonb language sql security invoker set search_path = ''
+as $$ select app.pa_setup_first(p_user_id, p_full_name, p_phone) $$;
+create function public.psvc_pa_password_changed(p_user_id uuid, p_keep_session uuid default null, p_check_only boolean default false)
+returns jsonb language sql security invoker set search_path = ''
+as $$ select app.pa_password_changed(p_user_id, p_keep_session, p_check_only) $$;
+
+-- 8. Read functions for the console (D6): the only new client entry points. Security definer, Super Admin only; anyone else gets an
+-- empty result and a committed access.denied. SAs have no RLS access to memberships or audit events, so these expose only what AC-10 / AC-12 allow.
+create function app._pa_read_guard(p_source text)
+returns boolean
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  m record;
+  v_role text;
+begin
+  if app.is_platform_admin() then return true; end if;
+  if auth.uid() is null then return false; end if;
+  select mm.tenant_id, mm.role::text as role into m from public.membership mm where mm.user_id = auth.uid();
+  v_role := m.role;
+  if exists (select 1 from public.platform_admin pa where pa.user_id = auth.uid()) then v_role := 'platform_admin'; end if;
+  perform app.audit_denied(auth.uid(), m.tenant_id, v_role, 'not_platform_admin', null, null, p_source);
+  return false;
+end
+$$;
+
+create function public.pa_tenant_summaries(p_search text default null, p_status text default null, p_plan text default null, p_page integer default 0)
+returns table (id uuid, name text, status text, plan_label text, timezone text, created_at timestamptz,
+               active_users integer, active_unit_admins integer, total_count bigint)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_term text := nullif(btrim(p_search), '');
+begin
+  if not app._pa_read_guard('rpc:pa_tenant_summaries') then return; end if;
+  if v_term is not null then
+    v_term := '%' || replace(replace(replace(v_term, '\', '\\'), '%', '\%'), '_', '\_') || '%';
+  end if;
+  return query
+  select t.id, t.name, t.status::text, t.plan_label::text, t.timezone, t.created_at,
+         (select count(*)::int from public.membership m where m.tenant_id = t.id and m.status = 'active'),
+         (select count(*)::int from public.membership m where m.tenant_id = t.id and m.status = 'active' and m.role = 'unit_admin'),
+         count(*) over ()
+  from public.tenant t
+  where (v_term is null or t.name ilike v_term)
+    and (nullif(p_status, '') is null or t.status::text = p_status)
+    and (nullif(p_plan, '') is null or t.plan_label::text = p_plan)
+  order by lower(t.name), t.id
+  offset greatest(coalesce(p_page, 0), 0) * 25 limit 25;
+end
+$$;
+
+create function public.pa_tenant_unit_admins(p_tenant uuid)
+returns table (user_id uuid, full_name text, phone_masked text, status text, must_change_password boolean)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if not app._pa_read_guard('rpc:pa_tenant_unit_admins') then return; end if;
+  return query
+  select m.user_id, m.full_name, left(m.phone_e164, 3) || '******' || right(m.phone_e164, 4), m.status::text, m.must_change_password
+  from public.membership m
+  where m.tenant_id = p_tenant and m.role = 'unit_admin'
+  order by lower(m.full_name), m.user_id;
+end
+$$;
+
+create function public.pa_super_admins()
+returns table (user_id uuid, full_name text, phone_masked text, status text, must_change_password boolean, is_self boolean)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if not app._pa_read_guard('rpc:pa_super_admins') then return; end if;
+  return query
+  select pa.user_id, pa.full_name, left(pa.phone_e164, 3) || '******' || right(pa.phone_e164, 4), pa.status::text,
+         pa.must_change_password, pa.user_id = auth.uid()
+  from public.platform_admin pa
+  order by lower(pa.full_name), pa.user_id;
+end
+$$;
+
+-- Platform audit: events whose actor is a Super Admin (incl. their denials) and setup events. Tenant users' own events are not shown.
+create function public.pa_audit(p_page integer default 0)
+returns table (id uuid, occurred_at timestamptz, action text, actor_name text, tenant_id uuid, tenant_name text,
+               entity_type text, reason text, source text, total_count bigint)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if not app._pa_read_guard('rpc:pa_audit') then return; end if;
+  return query
+  select e.id, e.occurred_at, e.action, pa.full_name, e.tenant_id, t.name, e.entity_type, e.reason, e.source, count(*) over ()
+  from public.audit_event e
+  left join public.platform_admin pa on pa.user_id = e.actor_user_id
+  left join public.tenant t on t.id = e.tenant_id
+  where e.actor_role = 'platform_admin' or e.source = 'edge:platform-setup'
+  order by e.occurred_at desc, e.id
+  offset greatest(coalesce(p_page, 0), 0) * 50 limit 50;
+end
+$$;
+
+-- 9. Privileges ---------------------------------------------------------------------------------------------------------------------------------------------
+do $$
+declare f record;
+begin
+  for f in
+    select p.oid::regprocedure as sig
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where (n.nspname = 'app' and p.proname ~ '^(pa_|_pa_)')
+       or (n.nspname = 'public' and p.proname ~ '^psvc_')
+  loop
+    execute format('revoke all on function %s from public, anon, authenticated', f.sig);
+    execute format('grant execute on function %s to service_role', f.sig);
+  end loop;
+  for f in
+    select p.oid::regprocedure as sig from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and p.proname in ('pa_tenant_summaries', 'pa_tenant_unit_admins', 'pa_super_admins', 'pa_audit')
+  loop
+    execute format('revoke all on function %s from public, anon', f.sig);
+    execute format('grant execute on function %s to authenticated, service_role', f.sig);
+  end loop;
+end $$;
