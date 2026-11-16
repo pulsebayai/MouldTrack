@@ -13,9 +13,14 @@ serveJson(async (req, body) => {
   const sb = serviceClient();
   const userId = await callerId(req, sb);
 
+  // A Platform Super Admin (03, D5) has no membership; their own row decides which database path applies. Tenant users are unaffected.
+  const { data: saRow, error: saError } = await sb.from('platform_admin').select('user_id').eq('user_id', userId).maybeSingle();
+  if (saError) throw new HttpError(500, { message: 'Something went wrong. Try again.' });
+  const rpc = saRow ? 'psvc_pa_password_changed' : 'svc_account_password_changed';
+
   // No-write pre-check in the database: refuses (and audits, D13) an inactive member, a suspended tenant or an expired
   // temporary password before Auth is touched.
-  unwrap(await sb.rpc('svc_account_password_changed', { p_user_id: userId, p_keep_session: null, p_check_only: true }));
+  unwrap(await sb.rpc(rpc, { p_user_id: userId, p_keep_session: null, p_check_only: true }));
 
   const { data: authUser, error: uErr } = await sb.auth.admin.getUserById(userId);
   if (uErr || !authUser.user?.email) throw new HttpError(500, { message: 'Something went wrong. Try again.' });
@@ -37,6 +42,6 @@ serveJson(async (req, body) => {
   }
 
   // Ends every other session of the user (the caller's own, from the verified JWT, and its refresh token survive).
-  unwrap(await sb.rpc('svc_account_password_changed', { p_user_id: userId, p_keep_session: sessionIdOf(req) }));
+  unwrap(await sb.rpc(rpc, { p_user_id: userId, p_keep_session: sessionIdOf(req) }));
   return { ok: true };
 });

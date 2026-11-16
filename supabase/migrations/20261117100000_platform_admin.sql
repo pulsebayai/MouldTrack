@@ -31,7 +31,8 @@ create policy platform_admin_select_own on public.platform_admin
   for select to authenticated
   using (user_id = (select auth.uid()));
 revoke all on public.platform_admin from public, anon, authenticated, service_role;
-grant select on public.platform_admin to authenticated, service_role; -- writes only through the service-only SQL functions
+grant select on public.platform_admin to authenticated;
+grant select, insert, update, delete on public.platform_admin to service_role; -- clients never write; the service-only SQL functions and fixture tooling do
 
 -- 3. phone_claim: one phone per person across membership and platform_admin ---------------------------------------------------------------------
 create table app.phone_claim (

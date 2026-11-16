@@ -400,6 +400,18 @@ verify_jwt = true
 [functions.account]
 verify_jwt = true
 
+[functions.platform]
+verify_jwt = true
+
+# One-time setup of the first Super Admin (03): the function authenticates by the x-setup-token header, not a JWT.
+[functions.platform-setup]
+verify_jwt = false
+
+# Local/ephemeral stacks only (a non-secret literal, like the seed password). Hosted environments get the secret from
+# `supabase secrets set` only while setup is pending (sdlc/releases/README.md); it is unset on dev and staging.
+[edge_runtime.secrets]
+PLATFORM_SETUP_TOKEN = "local-setup-token-not-a-secret-0123456789"
+
 # [edge_runtime.secrets]
 # secret_key = "env(SECRET_VALUE)"
 
