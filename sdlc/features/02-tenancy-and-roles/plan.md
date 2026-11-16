@@ -94,6 +94,7 @@ Locks held: architecture + schema (roadmap, 2026-11-16).
 - **Own-membership read for inactive users:** the existing 01 policy lets any user read their own membership row (needed so a must-change user can see the flag). An inactive user can therefore still read their own row (all other data is gated; Auth ban blocks sign-in). Left as is; flag for Opus review if AC-6 "no data" should include the own row.
 - **Step 7: shared `src/test/fake-db.ts`** (chainable PostgREST fake) and extra files `src/lib/users.ts`, `src/components/{not-allowed,temp-password-panel,user-form}.tsx` (create and edit share one form). Not in the plan's list, but needed by the screens.
 - **Step 7: `src/app/_layout.tsx`** sets `document.title = 'MouldTrack'` on mount (the Stack `title` option did not change the static page title; CI run 43821310722): axe `document-title` (serious) failed on every page in CI run 43820581136 (step 6 commit 120af8e). Also `change-password.spec.ts` now uses `[data-testid="sign-out"]:visible` (the Stack keeps the previous screen mounted, so two buttons matched). These are fixes to my own new step 6 spec; no assertion removed.
+- **Step 7: `users.spec.ts`** matches only visible elements (hidden earlier screens stay mounted in the Stack).
 - **Step 7: no-match copy** is exactly "No users match" (matcher is exact); list loading/error state is derived from a keyed result to satisfy the `react-hooks/set-state-in-effect` lint rule.
 
 ## Session log
