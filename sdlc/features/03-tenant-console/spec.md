@@ -7,6 +7,7 @@ Terms: **SA** Platform Super Admin, **UA** Unit Admin. All 02 patterns apply: Ed
 **Identity**
 - **AC-1 SA sign-in.** An active SA signs in on the normal phone + password screen and lands on the **Console**; tenant screens (Home, Users, Plant) are not reachable ("Not allowed"). A user can't be both an SA and a tenant member (phone unique across both).
 - **AC-2 First SA (one-time setup).** Calling the setup endpoint with the correct one-time token creates the first SA (name, phone) and returns a temporary password **once** in the HTTP response; audited `platform_admin.created` (source `setup`). Once any SA exists, the endpoint refuses (403, audited), with or without a token. A wrong/missing token → 403. Nothing is written to CI logs.
+  - *Clarified 2026-11-17 by Opus: with no usable token configured (none set, too short, or the local literal outside the local stack) the endpoint refuses 403 without touching the database, so that refusal is not audited. While a usable token is set, a refusal because setup is closed and a refusal because the token is wrong are both audited (`setup_closed`, `setup_bad_token`), at most one row per minute each.*
 - **AC-3 More SAs.** An SA can add another SA (name, phone → temp password once), deactivate/reactivate one (sessions ended, Auth ban as 02), and reset an SA's password. An SA can't deactivate themself; the last active SA can't be deactivated. Audited.
 
 **Tenants**
