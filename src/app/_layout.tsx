@@ -1,4 +1,5 @@
 import { Stack } from 'expo-router';
+import { useEffect } from 'react';
 import { ActivityIndicator, Text } from 'react-native';
 import { Button, Screen, colors } from '@/components/ui';
 import { getEnv } from '@/lib/env';
@@ -31,6 +32,10 @@ function Gate() {
 }
 
 export default function RootLayout() {
+  useEffect(() => {
+    // Web: the static export has a placeholder title; a page title is an accessibility requirement (axe document-title).
+    if (typeof document !== 'undefined') document.title = 'MouldTrack';
+  }, []);
   return (
     <SessionProvider client={supabase} appEnv={env.appEnv}>
       <Gate />

@@ -6,6 +6,7 @@ import { FIXTURE_PASSWORD as API_PASSWORD, cleanupCreated, createUserVia, makeAc
 import { USERS, expectOnSignIn, signIn } from './fixtures';
 
 async function expectNoSeriousViolations(page: Page) {
+  await expect(page).toHaveTitle('MouldTrack');
   const results = await new AxeBuilder({ page }).analyze();
   const bad = results.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
   expect(bad.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(' | ')}`)).toEqual([]);
@@ -107,6 +108,7 @@ test.describe('AC-13 self-service change from Home', () => {
     await page.getByTestId('change-password-done').click();
     await expect(page).toHaveURL(/\/home$/);
     await page.locator('[data-testid="sign-out"]:visible').click();
+    await expectOnSignIn(page);
     await signIn(page, u.phone, 'Self-service-2026');
     await expect(page.getByTestId('home-tenant')).toHaveText('e2e org U');
   });
