@@ -854,6 +854,63 @@ begin
 end
 $$;
 
+-- 10. 02's authorisation denies a Super Admin (no membership) and now records the denial with actor role platform_admin, so it appears in the
+-- platform audit (AC-11, AC-12). Everything else is 02's R8 definition unchanged. Later features' write paths (pm_*) copy this branch.
+create or replace function app._ua_authorise(p_actor uuid, p_target uuid default null)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_tenant uuid;
+  a record;
+  v_reason text;
+  v_role text;
+  v_target_tenant uuid;
+begin
+  select m.tenant_id into v_tenant from public.membership m where m.user_id = p_actor;
+  if v_tenant is not null then
+    perform 1 from public.tenant t where t.id = v_tenant for no key update;
+  end if;
+
+  select m.tenant_id, m.role, m.status, m.must_change_password, t.status as tenant_status
+    into a
+    from public.membership m join public.tenant t on t.id = m.tenant_id
+    where m.user_id = p_actor;
+  v_role := a.role::text;
+
+  if not found then
+    if exists (select 1 from public.platform_admin pa where pa.user_id = p_actor) then
+      v_reason := 'platform_admin';
+      v_role := 'platform_admin';
+    else
+      v_reason := 'no_membership';
+    end if;
+  elsif a.status <> 'active' or a.tenant_status <> 'active' then
+    v_reason := 'inactive';
+  elsif a.must_change_password then
+    v_reason := 'must_change_password';
+  elsif a.role <> 'unit_admin' then
+    v_reason := 'role';
+  elsif p_target is not null then
+    select m.tenant_id into v_target_tenant from public.membership m where m.user_id = p_target;
+    if not found then
+      v_reason := 'not_found';
+    elsif v_target_tenant <> a.tenant_id then
+      v_reason := 'cross_tenant';
+    end if;
+  end if;
+
+  if v_reason is not null then
+    perform app.audit_denied(p_actor, v_tenant, v_role, v_reason,
+      case when p_target is not null then 'user' end, p_target, 'edge:user-admin');
+    return jsonb_build_object('ok', false, 'code', 'not_allowed');
+  end if;
+  return jsonb_build_object('ok', true, 'tenant_id', a.tenant_id);
+end
+$$;
+
 -- 9. Privileges ---------------------------------------------------------------------------------------------------------------------------------------------
 do $$
 declare f record;
