@@ -34,6 +34,9 @@ beforeEach(() => {
   mockReset.mockReset();
 });
 
+// The first test pays the cold module transform of the screen; on a loaded CI runner that exceeded the 5 s default (run 43829728473).
+jest.setTimeout(20_000);
+
 describe('Users list (AC-14)', () => {
   it('renders name, employee id, phone, role and a text status label for each user', async () => {
     const rows = [

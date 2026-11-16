@@ -101,6 +101,7 @@ Locks held: architecture + schema (roadmap, 2026-11-16).
 - **Step 10: `hosted-checks` runs after `web`** (not in parallel): dev still held the pre-02 legacy `e2e-nomember@example.test` Auth user (no membership), which the fixtures reset in `web` removes; run 43824871543 flagged it. Functions deploy and secrets set need `--yes` in CI.
 - **Step 10: `account.spec.ts` AC-4 test** compares the `user.password_changed` audit count before and after instead of expecting 0 (append-only audit on persistent dev already holds rows for the fixed fresh user; run 43825492435). Same assertion on ephemeral DBs.
 - **Step 10: Users loading state** puts the accessible name on the spinner (axe `aria-progressbar-name` caught it on slower dev; run 43827029080).
+- **Step 10: Jest timeout** 20 s in `users.test.tsx` and `user-form.test.tsx`: the first test in `users.test.tsx` timed out at the 5 s default on a loaded runner (static job, run 43829728473; passes locally in well under 1 s per test). Assertions unchanged. Flake reported to Opus.
 - **Step 10: extra files** `scripts/hosted-checks.sh` (runs the four hosted checks, writes `hosted-checks.tap` for the evidence summary), `scripts/__tests__/{auth-config,orphan-check}.test.ts`. The regression `web` job exports `E2E_API_URL/E2E_ANON_KEY/E2E_SERVICE_ROLE_KEY` (dev only) so the `api` project runs against dev; the `android` job resets fixtures again before Maestro because the web e2e changes U4's password.
 
 ## Session log

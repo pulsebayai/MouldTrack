@@ -36,6 +36,9 @@ beforeEach(() => {
   mockId = 'id-1';
 });
 
+// The first test pays the cold module transform of the screen; on a loaded CI runner that exceeded the 5 s default (run 43829728473).
+jest.setTimeout(20_000);
+
 describe('Add user form (AC-1, AC-2)', () => {
   it('has labelled fields, a +91 prefix with a numeric keypad, role choices and 48dp save', async () => {
     await renderWithSession(<UserNew />, { ctx: admin });
