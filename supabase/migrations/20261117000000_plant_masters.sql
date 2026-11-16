@@ -199,3 +199,634 @@ begin
     execute format('revoke all on function %s from public, anon, authenticated', f.sig);
   end loop;
 end $$;
+
+-- 8. Write RPCs (step 2, D2) ---------------------------------------------------------------------------------------
+-- public.pm_* are the only way to change plant data: security definer, executable by authenticated, each authorises
+-- (Unit Admin of an active tenant, no pending password change), validates, writes and audits in one transaction.
+-- Authorisation failures COMMIT an access.denied row and RETURN {ok:false, code:'not_allowed'} (02, D13).
+-- Validation / duplicate / guard failures RAISE P0001 with detail {code, field?, ...}. Success returns {ok:true, id, ...}.
+
+create function app._pm_fail(p_code text, p_message text, p_field text default null, p_extra jsonb default null)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  raise exception '%', p_message
+    using errcode = 'P0001',
+          detail = (jsonb_strip_nulls(jsonb_build_object('code', p_code, 'field', p_field)) || coalesce(p_extra, '{}'::jsonb))::text;
+end
+$$;
+
+-- Maps a violated unique constraint to a field error; returns normally for constraints it does not know (caller re-raises).
+create function app._pm_dup(p_constraint text)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if p_constraint in ('machine_tenant_code_key', 'product_tenant_code_key') then
+    perform app._pm_fail('duplicate', 'This code is already in use', 'code');
+  elsif p_constraint = 'line_site_name_key' then
+    perform app._pm_fail('duplicate', 'A line with this name already exists', 'name');
+  elsif p_constraint = 'site_one_per_tenant' then
+    perform app._pm_fail('guard', 'This unit already has a site', 'site');
+  end if;
+end
+$$;
+
+-- Serialises per tenant (row lock first, so authorisation sees committed state), then authorises the caller as a Unit Admin.
+-- Returns {ok:true, tenant_id, actor, role[, done]} (done = entity of an already-recorded request) or the generic denial.
+create function app._pm_authorise(p_request_id uuid, p_source text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_actor uuid := auth.uid();
+  v_tenant uuid;
+  a record;
+  v_reason text;
+  v_done uuid;
+begin
+  select m.tenant_id into v_tenant from public.membership m where m.user_id = v_actor;
+  if v_tenant is not null then
+    perform 1 from public.tenant t where t.id = v_tenant for no key update;
+  end if;
+
+  select m.tenant_id, m.role, m.status, m.must_change_password, t.status as tenant_status
+    into a
+    from public.membership m join public.tenant t on t.id = m.tenant_id
+    where m.user_id = v_actor;
+
+  if not found then
+    v_reason := 'no_membership';
+  elsif a.status <> 'active' or a.tenant_status <> 'active' then
+    v_reason := 'inactive';
+  elsif a.must_change_password then
+    v_reason := 'must_change_password';
+  elsif a.role <> 'unit_admin' then
+    v_reason := 'role';
+  end if;
+
+  if v_reason is not null then
+    perform app.audit_denied(v_actor, v_tenant, a.role::text, v_reason, null, null, p_source);
+    return jsonb_build_object('ok', false, 'code', 'not_allowed');
+  end if;
+
+  if p_request_id is null then
+    perform app._pm_fail('validation', 'A request id is required', 'request_id');
+  end if;
+  select e.entity_id into v_done from public.audit_event e where e.actor_user_id = v_actor and e.request_id = p_request_id;
+  return jsonb_build_object('ok', true, 'tenant_id', a.tenant_id, 'actor', v_actor, 'role', a.role, 'done', v_done);
+end
+$$;
+
+-- Records a denial for an id that is not the caller's: another tenant's, or unknown (indistinguishable to the caller).
+create function app._pm_deny(p_auth jsonb, p_reason text, p_entity_type text, p_entity uuid, p_source text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  perform app.audit_denied((p_auth->>'actor')::uuid, (p_auth->>'tenant_id')::uuid, p_auth->>'role', p_reason, p_entity_type, p_entity, p_source);
+  return jsonb_build_object('ok', false, 'code', 'not_allowed');
+end
+$$;
+
+-- 'ok' when the row exists in the caller's tenant, else 'cross_tenant' (exists elsewhere) or 'not_found'.
+create function app._pm_owned(p_table text, p_id uuid, p_tenant uuid)
+returns text
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_tenant uuid;
+begin
+  if p_id is null then return 'not_found'; end if;
+  if p_table = 'line' then select l.tenant_id into v_tenant from public.line l where l.id = p_id;
+  elsif p_table = 'machine' then select m.tenant_id into v_tenant from public.machine m where m.id = p_id;
+  elsif p_table = 'product' then select p.tenant_id into v_tenant from public.product p where p.id = p_id;
+  else raise exception 'unknown table %', p_table; end if;
+  if v_tenant is null then return 'not_found'; end if;
+  if v_tenant <> p_tenant then return 'cross_tenant'; end if;
+  return 'ok';
+end
+$$;
+
+create function app._pm_audit(
+  p_auth jsonb, p_action text, p_entity_type text, p_entity uuid, p_before jsonb, p_after jsonb, p_request uuid, p_source text
+) returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  insert into public.audit_event (tenant_id, actor_user_id, actor_role, action, entity_type, entity_id, before, after, source, request_id)
+  values ((p_auth->>'tenant_id')::uuid, (p_auth->>'actor')::uuid, p_auth->>'role', p_action, p_entity_type, p_entity, p_before, p_after, p_source, p_request)
+$$;
+
+-- Length check on an already trimmed value; null is allowed only when p_min = 0.
+create function app._pm_len(p_value text, p_min int, p_max int, p_field text, p_message text)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if p_value is null then
+    if p_min > 0 then perform app._pm_fail('validation', p_message, p_field); end if;
+  elsif length(p_value) < p_min or length(p_value) > p_max then
+    perform app._pm_fail('validation', p_message, p_field);
+  end if;
+end
+$$;
+
+create function public.pm_save_site(p_request_id uuid, p_name text, p_timezone text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:pm_save_site';
+  a jsonb;
+  v_tenant uuid;
+  v_name text := btrim(p_name);
+  v_tz text := nullif(btrim(p_timezone), '');
+  cur public.site;
+  upd public.site;
+begin
+  a := app._pm_authorise(p_request_id, c_src);
+  if not (a->>'ok')::boolean then return a; end if;
+  if a->>'done' is not null then return jsonb_build_object('ok', true, 'id', (a->>'done')::uuid, 'already', true); end if;
+  v_tenant := (a->>'tenant_id')::uuid;
+
+  perform app._pm_len(v_name, 1, 80, 'name', 'Enter a name of 1 to 80 characters');
+  if v_tz is null then
+    select t.timezone into v_tz from public.tenant t where t.id = v_tenant;
+  end if;
+  begin
+    perform now() at time zone v_tz;
+  exception when others then
+    perform app._pm_fail('validation', 'Choose a valid time zone', 'timezone');
+  end;
+  if not exists (select 1 from pg_catalog.pg_timezone_names z where z.name = v_tz) then
+    perform app._pm_fail('validation', 'Choose a valid time zone', 'timezone');
+  end if;
+
+  select * into cur from public.site s where s.tenant_id = v_tenant;
+  if not found then
+    insert into public.site (tenant_id, name, timezone) values (v_tenant, v_name, v_tz) returning * into upd;
+    perform app._pm_audit(a, 'site.created', 'site', upd.id, null, to_jsonb(upd) - 'created_at' - 'updated_at', p_request_id, c_src);
+  else
+    update public.site s set name = v_name, timezone = v_tz, updated_at = now() where s.id = cur.id returning * into upd;
+    perform app._pm_audit(a, 'site.updated', 'site', upd.id,
+      to_jsonb(cur) - 'created_at' - 'updated_at', to_jsonb(upd) - 'created_at' - 'updated_at', p_request_id, c_src);
+  end if;
+  return jsonb_build_object('ok', true, 'id', upd.id);
+end
+$$;
+
+create function public.pm_save_line(p_request_id uuid, p_id uuid, p_name text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:pm_save_line';
+  a jsonb;
+  v_tenant uuid;
+  v_own text;
+  v_name text := btrim(p_name);
+  v_site public.site;
+  cur public.line;
+  upd public.line;
+  v_c text;
+begin
+  a := app._pm_authorise(p_request_id, c_src);
+  if not (a->>'ok')::boolean then return a; end if;
+  if a->>'done' is not null then return jsonb_build_object('ok', true, 'id', (a->>'done')::uuid, 'already', true); end if;
+  v_tenant := (a->>'tenant_id')::uuid;
+
+  if p_id is not null then
+    v_own := app._pm_owned('line', p_id, v_tenant);
+    if v_own <> 'ok' then return app._pm_deny(a, v_own, 'line', p_id, c_src); end if;
+  end if;
+  perform app._pm_len(v_name, 1, 60, 'name', 'Enter a name of 1 to 60 characters');
+
+  begin
+    if p_id is null then
+      select * into v_site from public.site s where s.tenant_id = v_tenant;
+      if not found then perform app._pm_fail('validation', 'Set up your site first', 'site'); end if;
+      insert into public.line (tenant_id, site_id, name) values (v_tenant, v_site.id, v_name) returning * into upd;
+    else
+      select * into cur from public.line l where l.id = p_id;
+      if cur.archived_at is not null then perform app._pm_fail('guard', 'This line is archived', 'archived'); end if;
+      update public.line l set name = v_name, updated_at = now() where l.id = p_id returning * into upd;
+    end if;
+  exception when unique_violation then
+    get stacked diagnostics v_c = constraint_name;
+    perform app._pm_dup(v_c);
+    raise;
+  end;
+
+  if p_id is null then
+    perform app._pm_audit(a, 'line.created', 'line', upd.id, null, to_jsonb(upd) - 'created_at' - 'updated_at', p_request_id, c_src);
+  else
+    perform app._pm_audit(a, 'line.updated', 'line', upd.id,
+      to_jsonb(cur) - 'created_at' - 'updated_at', to_jsonb(upd) - 'created_at' - 'updated_at', p_request_id, c_src);
+  end if;
+  return jsonb_build_object('ok', true, 'id', upd.id);
+end
+$$;
+
+create function public.pm_archive_line(p_request_id uuid, p_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:pm_archive_line';
+  a jsonb;
+  v_tenant uuid;
+  v_own text;
+  cur public.line;
+  upd public.line;
+  v_codes text[];
+begin
+  a := app._pm_authorise(p_request_id, c_src);
+  if not (a->>'ok')::boolean then return a; end if;
+  if a->>'done' is not null then return jsonb_build_object('ok', true, 'id', (a->>'done')::uuid, 'already', true); end if;
+  v_tenant := (a->>'tenant_id')::uuid;
+
+  v_own := app._pm_owned('line', p_id, v_tenant);
+  if v_own <> 'ok' then return app._pm_deny(a, v_own, 'line', p_id, c_src); end if;
+  select * into cur from public.line l where l.id = p_id;
+  if cur.archived_at is not null then return jsonb_build_object('ok', true, 'id', p_id, 'changed', false); end if;
+
+  select array_agg(m.code order by m.code) into v_codes
+    from public.machine m where m.line_id = p_id and m.retired_at is null;
+  if v_codes is not null then
+    perform app._pm_fail('guard', 'Move or retire its machines first', 'line', jsonb_build_object('machines', to_jsonb(v_codes)));
+  end if;
+
+  update public.line l set archived_at = now(), updated_at = now() where l.id = p_id returning * into upd;
+  perform app._pm_audit(a, 'line.archived', 'line', p_id,
+    to_jsonb(cur) - 'created_at' - 'updated_at', to_jsonb(upd) - 'created_at' - 'updated_at', p_request_id, c_src);
+  return jsonb_build_object('ok', true, 'id', p_id, 'changed', true);
+end
+$$;
+
+create function public.pm_save_machine(
+  p_request_id uuid, p_id uuid, p_code text, p_name text, p_asset_tag text, p_make text, p_model text,
+  p_controller text, p_line_id uuid, p_status text
+) returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:pm_save_machine';
+  a jsonb;
+  v_tenant uuid;
+  v_own text;
+  v_code text := btrim(p_code);
+  v_name text := btrim(p_name);
+  v_asset text := nullif(btrim(p_asset_tag), '');
+  v_make text := nullif(btrim(p_make), '');
+  v_model text := nullif(btrim(p_model), '');
+  v_ctrl text := nullif(btrim(p_controller), '');
+  v_site public.site;
+  v_line public.line;
+  cur public.machine;
+  upd public.machine;
+  v_c text;
+begin
+  a := app._pm_authorise(p_request_id, c_src);
+  if not (a->>'ok')::boolean then return a; end if;
+  if a->>'done' is not null then return jsonb_build_object('ok', true, 'id', (a->>'done')::uuid, 'already', true); end if;
+  v_tenant := (a->>'tenant_id')::uuid;
+
+  if p_id is not null then
+    v_own := app._pm_owned('machine', p_id, v_tenant);
+    if v_own <> 'ok' then return app._pm_deny(a, v_own, 'machine', p_id, c_src); end if;
+  end if;
+  if p_line_id is not null then
+    v_own := app._pm_owned('line', p_line_id, v_tenant);
+    if v_own <> 'ok' then return app._pm_deny(a, v_own, 'line', p_line_id, c_src); end if;
+  end if;
+
+  if v_code is null or v_code !~ '^[A-Za-z0-9_/-]{1,20}$' then
+    perform app._pm_fail('validation', 'Code: 1 to 20 letters, digits, - _ or /', 'code');
+  end if;
+  perform app._pm_len(v_name, 1, 80, 'name', 'Enter a name of 1 to 80 characters');
+  perform app._pm_len(v_asset, 0, 80, 'asset_tag', 'Asset tag: up to 80 characters');
+  perform app._pm_len(v_make, 0, 80, 'make', 'Make: up to 80 characters');
+  perform app._pm_len(v_model, 0, 80, 'model', 'Model: up to 80 characters');
+  perform app._pm_len(v_ctrl, 0, 80, 'controller', 'Controller: up to 80 characters');
+  if p_status is null or p_status not in ('active', 'under_maintenance') then
+    perform app._pm_fail('validation', 'Choose Active or Under maintenance', 'status');
+  end if;
+  if p_line_id is not null then
+    select * into v_line from public.line l where l.id = p_line_id;
+    if v_line.archived_at is not null then perform app._pm_fail('validation', 'This line is archived', 'line_id'); end if;
+  end if;
+
+  begin
+    if p_id is null then
+      select * into v_site from public.site s where s.tenant_id = v_tenant;
+      if not found then perform app._pm_fail('validation', 'Set up your site first', 'site'); end if;
+      insert into public.machine (tenant_id, site_id, line_id, code, name, asset_tag, make, model, controller, status)
+      values (v_tenant, v_site.id, p_line_id, v_code, v_name, v_asset, v_make, v_model, v_ctrl, p_status)
+      returning * into upd;
+    else
+      select * into cur from public.machine m where m.id = p_id;
+      if cur.retired_at is not null then perform app._pm_fail('guard', 'Reinstate this machine before editing it', 'retired'); end if;
+      update public.machine m
+      set line_id = p_line_id, code = v_code, name = v_name, asset_tag = v_asset, make = v_make, model = v_model,
+          controller = v_ctrl, status = p_status, updated_at = now()
+      where m.id = p_id returning * into upd;
+    end if;
+  exception when unique_violation then
+    get stacked diagnostics v_c = constraint_name;
+    perform app._pm_dup(v_c);
+    raise;
+  end;
+
+  if p_id is null then
+    perform app._pm_audit(a, 'machine.created', 'machine', upd.id, null, to_jsonb(upd) - 'created_at' - 'updated_at', p_request_id, c_src);
+  else
+    perform app._pm_audit(a, 'machine.updated', 'machine', upd.id,
+      to_jsonb(cur) - 'created_at' - 'updated_at', to_jsonb(upd) - 'created_at' - 'updated_at', p_request_id, c_src);
+  end if;
+  return jsonb_build_object('ok', true, 'id', upd.id);
+end
+$$;
+
+create function public.pm_set_machine_retired(p_request_id uuid, p_id uuid, p_retired boolean)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:pm_set_machine_retired';
+  a jsonb;
+  v_own text;
+  cur public.machine;
+  upd public.machine;
+begin
+  a := app._pm_authorise(p_request_id, c_src);
+  if not (a->>'ok')::boolean then return a; end if;
+  if a->>'done' is not null then return jsonb_build_object('ok', true, 'id', (a->>'done')::uuid, 'already', true); end if;
+
+  v_own := app._pm_owned('machine', p_id, (a->>'tenant_id')::uuid);
+  if v_own <> 'ok' then return app._pm_deny(a, v_own, 'machine', p_id, c_src); end if;
+  if p_retired is null then perform app._pm_fail('validation', 'Choose retire or reinstate', 'retired'); end if;
+  select * into cur from public.machine m where m.id = p_id;
+  if (cur.retired_at is not null) = p_retired then return jsonb_build_object('ok', true, 'id', p_id, 'changed', false); end if;
+
+  if p_retired then
+    update public.machine m set retired_at = now(), updated_at = now() where m.id = p_id returning * into upd;
+  else
+    -- A line archived while the machine was retired cannot be reused: the machine comes back without a line.
+    update public.machine m
+    set retired_at = null, updated_at = now(),
+        line_id = case when exists (select 1 from public.line l where l.id = m.line_id and l.archived_at is not null) then null else m.line_id end
+    where m.id = p_id returning * into upd;
+  end if;
+  perform app._pm_audit(a, case when p_retired then 'machine.retired' else 'machine.reinstated' end, 'machine', p_id,
+    to_jsonb(cur) - 'created_at' - 'updated_at', to_jsonb(upd) - 'created_at' - 'updated_at', p_request_id, c_src);
+  return jsonb_build_object('ok', true, 'id', p_id, 'changed', true);
+end
+$$;
+
+create function public.pm_save_product(p_request_id uuid, p_id uuid, p_code text, p_description text, p_uom text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:pm_save_product';
+  a jsonb;
+  v_tenant uuid;
+  v_own text;
+  v_code text := btrim(p_code);
+  v_desc text := btrim(p_description);
+  v_uom text := coalesce(nullif(btrim(p_uom), ''), 'pcs');
+  cur public.product;
+  upd public.product;
+  v_c text;
+begin
+  a := app._pm_authorise(p_request_id, c_src);
+  if not (a->>'ok')::boolean then return a; end if;
+  if a->>'done' is not null then return jsonb_build_object('ok', true, 'id', (a->>'done')::uuid, 'already', true); end if;
+  v_tenant := (a->>'tenant_id')::uuid;
+
+  if p_id is not null then
+    v_own := app._pm_owned('product', p_id, v_tenant);
+    if v_own <> 'ok' then return app._pm_deny(a, v_own, 'product', p_id, c_src); end if;
+  end if;
+  if v_code is null or v_code !~ '^[A-Za-z0-9_/-]{1,20}$' then
+    perform app._pm_fail('validation', 'Code: 1 to 20 letters, digits, - _ or /', 'code');
+  end if;
+  perform app._pm_len(v_desc, 1, 120, 'description', 'Enter a description of 1 to 120 characters');
+  perform app._pm_len(v_uom, 1, 10, 'uom', 'Unit of measure: 1 to 10 characters');
+
+  begin
+    if p_id is null then
+      insert into public.product (tenant_id, code, description, uom) values (v_tenant, v_code, v_desc, v_uom) returning * into upd;
+    else
+      select * into cur from public.product p where p.id = p_id;
+      if cur.retired_at is not null then perform app._pm_fail('guard', 'Reinstate this product before editing it', 'retired'); end if;
+      update public.product p set code = v_code, description = v_desc, uom = v_uom, updated_at = now() where p.id = p_id returning * into upd;
+    end if;
+  exception when unique_violation then
+    get stacked diagnostics v_c = constraint_name;
+    perform app._pm_dup(v_c);
+    raise;
+  end;
+
+  if p_id is null then
+    perform app._pm_audit(a, 'product.created', 'product', upd.id, null, to_jsonb(upd) - 'created_at' - 'updated_at', p_request_id, c_src);
+  else
+    perform app._pm_audit(a, 'product.updated', 'product', upd.id,
+      to_jsonb(cur) - 'created_at' - 'updated_at', to_jsonb(upd) - 'created_at' - 'updated_at', p_request_id, c_src);
+  end if;
+  return jsonb_build_object('ok', true, 'id', upd.id);
+end
+$$;
+
+create function public.pm_set_product_retired(p_request_id uuid, p_id uuid, p_retired boolean)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:pm_set_product_retired';
+  a jsonb;
+  v_tenant uuid;
+  v_own text;
+  v_today date;
+  v_codes text[];
+  cur public.product;
+  upd public.product;
+begin
+  a := app._pm_authorise(p_request_id, c_src);
+  if not (a->>'ok')::boolean then return a; end if;
+  if a->>'done' is not null then return jsonb_build_object('ok', true, 'id', (a->>'done')::uuid, 'already', true); end if;
+  v_tenant := (a->>'tenant_id')::uuid;
+
+  v_own := app._pm_owned('product', p_id, v_tenant);
+  if v_own <> 'ok' then return app._pm_deny(a, v_own, 'product', p_id, c_src); end if;
+  if p_retired is null then perform app._pm_fail('validation', 'Choose retire or reinstate', 'retired'); end if;
+  select * into cur from public.product p where p.id = p_id;
+  if (cur.retired_at is not null) = p_retired then return jsonb_build_object('ok', true, 'id', p_id, 'changed', false); end if;
+
+  if p_retired then
+    -- A product with a current or future target cannot be retired (AC-4): the Unit Admin ends the targets first.
+    v_today := app.plant_date(v_tenant);
+    select array_agg(m.code order by m.code) into v_codes
+    from public.machine m
+    where m.tenant_id = v_tenant
+      and exists (select 1 from public.target_version v where v.machine_id = m.id and v.product_id = p_id)
+      and (
+        app.target_for(m.id, p_id, v_today) is not null
+        or exists (select 1 from public.target_version f
+                   where f.machine_id = m.id and f.product_id = p_id and f.effective_from > v_today and f.pieces_per_shift is not null
+                     and app.target_for(m.id, p_id, f.effective_from) is not null) -- not cancelled by a same-day end
+      );
+    if v_codes is not null then
+      perform app._pm_fail('guard', 'End its targets first', 'product', jsonb_build_object('machines', to_jsonb(v_codes)));
+    end if;
+    update public.product p set retired_at = now(), updated_at = now() where p.id = p_id returning * into upd;
+  else
+    update public.product p set retired_at = null, updated_at = now() where p.id = p_id returning * into upd;
+  end if;
+  perform app._pm_audit(a, case when p_retired then 'product.retired' else 'product.reinstated' end, 'product', p_id,
+    to_jsonb(cur) - 'created_at' - 'updated_at', to_jsonb(upd) - 'created_at' - 'updated_at', p_request_id, c_src);
+  return jsonb_build_object('ok', true, 'id', p_id, 'changed', true);
+end
+$$;
+
+create function public.pm_set_target(p_request_id uuid, p_machine_id uuid, p_product_id uuid, p_pieces integer, p_effective_from date)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:pm_set_target';
+  a jsonb;
+  v_tenant uuid;
+  v_own text;
+  m public.machine;
+  p public.product;
+  v_before integer;
+  v_id uuid;
+begin
+  a := app._pm_authorise(p_request_id, c_src);
+  if not (a->>'ok')::boolean then return a; end if;
+  if a->>'done' is not null then return jsonb_build_object('ok', true, 'id', (a->>'done')::uuid, 'already', true); end if;
+  v_tenant := (a->>'tenant_id')::uuid;
+
+  v_own := app._pm_owned('machine', p_machine_id, v_tenant);
+  if v_own <> 'ok' then return app._pm_deny(a, v_own, 'machine', p_machine_id, c_src); end if;
+  v_own := app._pm_owned('product', p_product_id, v_tenant);
+  if v_own <> 'ok' then return app._pm_deny(a, v_own, 'product', p_product_id, c_src); end if;
+
+  if p_pieces is null or p_pieces < 1 or p_pieces > 1000000 then
+    perform app._pm_fail('validation', 'Enter a whole number from 1 to 1,000,000', 'pieces');
+  end if;
+  if p_effective_from is null then perform app._pm_fail('validation', 'Choose a start date', 'effective_from'); end if;
+  if p_effective_from < app.plant_date(v_tenant) then
+    perform app._pm_fail('validation', 'Targets can''t start in the past', 'effective_from');
+  end if;
+  select * into m from public.machine x where x.id = p_machine_id;
+  select * into p from public.product x where x.id = p_product_id;
+  if m.retired_at is not null then perform app._pm_fail('guard', 'This machine is retired', 'machine_id'); end if;
+  if p.retired_at is not null then perform app._pm_fail('guard', 'This product is retired', 'product_id'); end if;
+
+  v_before := app.target_for(p_machine_id, p_product_id, p_effective_from);
+  insert into public.target_version (tenant_id, machine_id, product_id, effective_from, pieces_per_shift, recorded_by, request_id)
+  values (v_tenant, p_machine_id, p_product_id, p_effective_from, p_pieces, (a->>'actor')::uuid, p_request_id)
+  returning id into v_id;
+  perform app._pm_audit(a, 'target.set', 'target_version', v_id,
+    jsonb_build_object('pieces_per_shift', v_before),
+    jsonb_build_object('machine_code', m.code, 'product_code', p.code, 'pieces_per_shift', p_pieces, 'effective_from', p_effective_from),
+    p_request_id, c_src);
+  return jsonb_build_object('ok', true, 'id', v_id);
+end
+$$;
+
+create function public.pm_end_target(p_request_id uuid, p_machine_id uuid, p_product_id uuid, p_effective_from date)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:pm_end_target';
+  a jsonb;
+  v_tenant uuid;
+  v_own text;
+  m public.machine;
+  p public.product;
+  v_before integer;
+  v_id uuid;
+begin
+  a := app._pm_authorise(p_request_id, c_src);
+  if not (a->>'ok')::boolean then return a; end if;
+  if a->>'done' is not null then return jsonb_build_object('ok', true, 'id', (a->>'done')::uuid, 'already', true); end if;
+  v_tenant := (a->>'tenant_id')::uuid;
+
+  v_own := app._pm_owned('machine', p_machine_id, v_tenant);
+  if v_own <> 'ok' then return app._pm_deny(a, v_own, 'machine', p_machine_id, c_src); end if;
+  v_own := app._pm_owned('product', p_product_id, v_tenant);
+  if v_own <> 'ok' then return app._pm_deny(a, v_own, 'product', p_product_id, c_src); end if;
+
+  if p_effective_from is null then perform app._pm_fail('validation', 'Choose an end date', 'effective_from'); end if;
+  if p_effective_from < app.plant_date(v_tenant) then
+    perform app._pm_fail('validation', 'Targets can''t end in the past', 'effective_from');
+  end if;
+  -- Ending works for retired machines and products too: that is how their targets get cleaned up.
+  v_before := app.target_for(p_machine_id, p_product_id, p_effective_from);
+  if v_before is null then perform app._pm_fail('guard', 'There is no target to end on that date', 'no_target'); end if;
+  select * into m from public.machine x where x.id = p_machine_id;
+  select * into p from public.product x where x.id = p_product_id;
+
+  insert into public.target_version (tenant_id, machine_id, product_id, effective_from, pieces_per_shift, recorded_by, request_id)
+  values (v_tenant, p_machine_id, p_product_id, p_effective_from, null, (a->>'actor')::uuid, p_request_id)
+  returning id into v_id;
+  perform app._pm_audit(a, 'target.ended', 'target_version', v_id,
+    jsonb_build_object('pieces_per_shift', v_before),
+    jsonb_build_object('machine_code', m.code, 'product_code', p.code, 'pieces_per_shift', null, 'effective_from', p_effective_from),
+    p_request_id, c_src);
+  return jsonb_build_object('ok', true, 'id', v_id);
+end
+$$;
+
+do $$
+declare f record;
+begin
+  for f in
+    select p.oid::regprocedure as sig, n.nspname
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where (n.nspname = 'app' and p.proname ~ '^_pm_') or (n.nspname = 'public' and p.proname ~ '^pm_')
+  loop
+    execute format('revoke all on function %s from public, anon, authenticated', f.sig);
+    if f.nspname = 'public' then
+      execute format('grant execute on function %s to authenticated', f.sig);
+    end if;
+  end loop;
+end $$;
