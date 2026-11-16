@@ -14,10 +14,10 @@ insert into public.tenant (id, name, status) values
   ('10000000-0000-4000-a000-00000000000a', 'tap org A', 'active'),
   ('10000000-0000-4000-a000-00000000000b', 'tap org B', 'active'),
   ('10000000-0000-4000-a000-00000000000d', 'tap org S', 'suspended');
-insert into public.membership (tenant_id, user_id, role) values
-  ('10000000-0000-4000-a000-00000000000a', '00000000-0000-4000-a000-0000000000a1', 'unit_admin'),
-  ('10000000-0000-4000-a000-00000000000b', '00000000-0000-4000-a000-0000000000b1', 'supervisor'),
-  ('10000000-0000-4000-a000-00000000000d', '00000000-0000-4000-a000-0000000000d1', 'supervisor');
+insert into public.membership (tenant_id, user_id, role, full_name, employee_id, phone_e164, must_change_password) values
+  ('10000000-0000-4000-a000-00000000000a', '00000000-0000-4000-a000-0000000000a1', 'unit_admin', 'Tap A', 'TAP-A', '+919000011001', false),
+  ('10000000-0000-4000-a000-00000000000b', '00000000-0000-4000-a000-0000000000b1', 'supervisor', 'Tap B', 'TAP-B', '+919000011002', false),
+  ('10000000-0000-4000-a000-00000000000d', '00000000-0000-4000-a000-0000000000d1', 'supervisor', 'Tap S', 'TAP-S', '+919000011003', false);
 
 -- Structure ------------------------------------------------------------------
 select ok((select relrowsecurity and relforcerowsecurity from pg_class where oid = 'public.tenant'::regclass),
@@ -25,8 +25,8 @@ select ok((select relrowsecurity and relforcerowsecurity from pg_class where oid
 select ok((select relrowsecurity and relforcerowsecurity from pg_class where oid = 'public.membership'::regclass),
   'RLS enabled and forced on membership');
 select throws_ok(
-  $$ insert into public.membership (tenant_id, user_id, role)
-     values ('10000000-0000-4000-a000-00000000000b', '00000000-0000-4000-a000-0000000000a1', 'supervisor') $$,
+  $$ insert into public.membership (tenant_id, user_id, role, full_name, employee_id, phone_e164, must_change_password)
+     values ('10000000-0000-4000-a000-00000000000b', '00000000-0000-4000-a000-0000000000a1', 'supervisor', 'Dup', 'TAP-DUP', '+919000011004', false) $$,
   '23505', null, 'a user can belong to only one tenant (unique user_id)');
 
 -- User A ---------------------------------------------------------------------
@@ -41,8 +41,8 @@ select throws_ok($$ insert into public.tenant (name) values ('evil') $$, '42501'
 select throws_ok($$ update public.tenant set name = 'x' $$, '42501', null, 'A cannot update tenant');
 select throws_ok($$ delete from public.membership $$, '42501', null, 'A cannot delete membership');
 select throws_ok(
-  $$ insert into public.membership (tenant_id, user_id, role)
-     values ('10000000-0000-4000-a000-00000000000a', '00000000-0000-4000-a000-0000000000c1', 'unit_admin') $$,
+  $$ insert into public.membership (tenant_id, user_id, role, full_name, employee_id, phone_e164, must_change_password)
+     values ('10000000-0000-4000-a000-00000000000a', '00000000-0000-4000-a000-0000000000c1', 'unit_admin', 'Evil', 'TAP-EVIL', '+919000011005', false) $$,
   '42501', null, 'A cannot insert membership');
 
 -- User B ---------------------------------------------------------------------

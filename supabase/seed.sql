@@ -34,9 +34,11 @@ begin
             'email', now(), now(), now());
   end loop;
 
-  insert into public.membership (tenant_id, user_id, role) values
-    ('20000000-0000-4000-a000-00000000000a', '30000000-0000-4000-a000-0000000000a1', 'unit_admin'),
-    ('20000000-0000-4000-a000-00000000000a', '30000000-0000-4000-a000-0000000000a2', 'supervisor'),
-    ('20000000-0000-4000-a000-00000000000b', '30000000-0000-4000-a000-0000000000b2', 'supervisor'),
-    ('20000000-0000-4000-a000-00000000000d', '30000000-0000-4000-a000-0000000000d2', 'supervisor');
+  -- Profile columns added in 02 (step 2). Phones are in the canonical fixture block +91 90000 00001-00099;
+  -- sign-in is still by email until step 5/6 switch fixtures to phone identities.
+  insert into public.membership (tenant_id, user_id, role, full_name, employee_id, phone_e164, must_change_password) values
+    ('20000000-0000-4000-a000-00000000000a', '30000000-0000-4000-a000-0000000000a1', 'unit_admin', 'Fixture Admin A', 'FX-A1', '+919000000001', false),
+    ('20000000-0000-4000-a000-00000000000a', '30000000-0000-4000-a000-0000000000a2', 'supervisor', 'Fixture Supervisor A', 'FX-A2', '+919000000002', false),
+    ('20000000-0000-4000-a000-00000000000b', '30000000-0000-4000-a000-0000000000b2', 'supervisor', 'Fixture Supervisor B', 'FX-B2', '+919000000003', false),
+    ('20000000-0000-4000-a000-00000000000d', '30000000-0000-4000-a000-0000000000d2', 'supervisor', 'Fixture Suspended S', 'FX-S2', '+919000000004', false);
 end $$;
