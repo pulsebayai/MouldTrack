@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
+import { evidenceSettings } from './e2e/evidence';
 
 const baseURL = process.env.BASE_URL ?? 'http://localhost:8081';
 const isLocal = /localhost|127\.0\.0\.1/.test(baseURL);
@@ -16,7 +17,8 @@ export default defineConfig({
     ['json', { outputFile: 'test-results/e2e.json' }],
     ['html', { outputFolder: 'playwright-report', open: 'never' }],
   ],
-  use: { baseURL, trace: 'retain-on-failure', screenshot: 'only-on-failure' },
+  // No traces/screenshots/video on hosted targets: they would contain typed credentials (R3). The `use` block applies to every project.
+  use: { baseURL, ...evidenceSettings(baseURL) },
   projects: [
     // API tests: Edge Functions + RLS through HTTP, no browser (02, D10).
     { name: 'api', testDir: './e2e/api', fullyParallel: false },
