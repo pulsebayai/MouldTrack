@@ -189,6 +189,24 @@ describe('summariseTargets (AC-7, AC-9)', () => {
     expect(s.current).toBeNull();
     expect(s.next).toEqual({ pieces: 500, from: '2026-12-01' });
   });
+  it('a scheduled change cancelled by a same-day end is not a next change', () => {
+    const [s] = summariseTargets([
+      v('4', '2026-11-18', null, 't4'), v('3', '2026-11-21', null, 't3'), v('2', '2026-11-21', 1300, 't2'), v('1', '2026-01-01', 1000, 't1'),
+    ], today);
+    expect(s.current).toBeNull(); // ended today
+    expect(s.next).toBeNull();
+  });
+  it('skips cancelled changes and reports the next real one', () => {
+    const [s] = summariseTargets([
+      v('5', '2026-12-10', 900, 't5'), v('4', '2026-11-18', null, 't4'), v('3', '2026-11-21', null, 't3'), v('2', '2026-11-21', 1300, 't2'), v('1', '2026-01-01', 1000, 't1'),
+    ], today);
+    expect(s.current).toBeNull();
+    expect(s.next).toEqual({ pieces: 900, from: '2026-12-10' });
+  });
+  it('a re-set to the same amount is not a change', () => {
+    const [s] = summariseTargets([v('2', '2026-11-25', 1000, 't2'), v('1', '2026-01-01', 1000, 't1')], today);
+    expect(s.next).toBeNull();
+  });
   it('keeps products apart', () => {
     const out = summariseTargets([v('1', '2026-01-01', 10, 't1', 'pA'), v('2', '2026-01-01', 20, 't2', 'pB')], today);
     expect(out.map((s) => [s.productId, s.current?.pieces])).toEqual([['pA', 10], ['pB', 20]]);

@@ -252,9 +252,18 @@ export function summariseTargets(versions: TargetVersion[], today: string): Pair
     const past = history.filter((v) => v.effective_from <= today);
     const cur = past[0];
     const future = history.filter((v) => v.effective_from > today);
-    // Earliest future date; on that date the latest recorded version wins (history is newest first, so scan from the end).
-    const nextDate = future.length ? future[future.length - 1].effective_from : null;
-    const nextV = nextDate ? future.find((v) => v.effective_from === nextDate) : undefined;
+    // Walk the future dates in order (on each, the latest recorded version wins). The next change is the first date whose
+    // outcome differs from what is in force before it; a same-day end that cancels a scheduled change is not a change.
+    let inForce = cur ? cur.pieces_per_shift : null;
+    let nextV: TargetVersion | undefined;
+    const dates = [...new Set(future.map((v) => v.effective_from))].sort();
+    for (const d of dates) {
+      const winner = future.find((v) => v.effective_from === d)!; // history is newest first within a date
+      if (winner.pieces_per_shift !== inForce) {
+        nextV = winner;
+        break;
+      }
+    }
     out.push({
       productId,
       current: cur && cur.pieces_per_shift !== null ? { pieces: cur.pieces_per_shift, from: cur.effective_from } : null,
