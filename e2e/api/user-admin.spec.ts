@@ -7,8 +7,8 @@ import {
   phoneToAuthEmail, provisionOrg, requireApi, service, signIn, signInFails, throwawayEmpId, throwawayPhone, uuid, FIXTURE_PASSWORD, type Session,
 } from './helpers';
 
-const org = orgDef(1, 'e2e org U');
-const other = orgDef(5, 'e2e org U-other'); // supplies a phone that belongs to a different tenant
+const org = orgDef(1, 'e2e api org 1');
+const other = orgDef(5, 'e2e api org 5'); // supplies a phone that belongs to a different tenant
 let ua1: Session;
 let ua2: Session;
 

@@ -5,7 +5,7 @@ import {
   requireApi, service, signIn, signInFails, type Session,
 } from './helpers';
 
-const org = orgDef(2, 'e2e org U-acct');
+const org = orgDef(2, 'e2e api org 2');
 let ua1: Session;
 
 test.beforeAll(async () => {

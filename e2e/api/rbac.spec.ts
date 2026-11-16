@@ -6,8 +6,8 @@ import {
   requireApi, service, signIn, throwawayEmpId, throwawayPhone, uuid, API_URL, type Session,
 } from './helpers';
 
-const R = orgDef(3, 'e2e org U-rbac');
-const Q = orgDef(4, 'e2e org U-other-rbac');
+const R = orgDef(3, 'e2e api org 3');
+const Q = orgDef(4, 'e2e api org 4');
 let ua: Session;
 let sup: Session;
 let qua: Session;
