@@ -1,7 +1,7 @@
 # Plan: Plant masters
 Spec: ./spec.md · Status: approved · Date: 2026-11-16
 Batch A with 03 (04 merges first). Locks: schema split — 04 owns site, line, machine, product, target_version (logged in roadmap at launch). No architecture lock: architecture items are flagged in the session log and applied on main at merge.
-**Prerequisite (separate tiny PR on main, before both builds):** `20261116200000_audit_action_format.sql` replaces `audit_event.action`'s fixed list with `check (action ~ '^[a-z_]+\.[a-z_]+$')` + pgTAP `006_audit_action_format.test.sql` (all 02 actions still accepted; `bad`, `UPPER.case`, `a.b.c` refused). Opus writes it; owner merges. Spec's "04 owns the audit change" moves to this PR (deviation).
+**Prerequisite (PR #6, merged before both builds):** `20261116200000_audit_action_registry.sql` — audit actions are registered in `app.audit_action`; `audit_event` checks `app.is_known_audit_action(action)` (unknown → 23514, so 02's "unknown action rejected" test is unchanged). **04 registers its actions** (`site.*`, `line.*`, `machine.*`, `product.*`, `target.*`) with inserts in its own migration.
 
 ## Decisions (Opus)
 - D1 Files: migration `20261117000000_plant_masters.sql`; pgTAP `010_plant_tables.test.sql`, `011_plant_rpcs.test.sql` (03 uses 02x numbers — no clashes).
@@ -46,7 +46,7 @@ Batch A with 03 (04 merges first). Locks: schema split — 04 owns site, line, m
 AC-1–14 → tests (spec table); full suite green on PR CI; dev regression green incl. Android.
 
 ## Deviations from plan
-- The audit-action format change moved from 04 to a separate prerequisite PR (so 03 doesn't depend on 04's merge for its tests).
+- The audit-action change moved from 04 to prerequisite PR #6, and became a **registry** instead of a format rule (a format rule would accept `user.exploded`, breaking 02's test). Spec "Proposed architecture changes" 1 is superseded accordingly.
 
 ## Session log
 ### 2026-11-16
