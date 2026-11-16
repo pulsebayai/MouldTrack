@@ -51,7 +51,8 @@
     "test:e2e:android": "maestro test e2e/maestro",
     "build": "expo export -p web --output-dir ${WEB_DIST:-dist} && bash scripts/android-prebuild-check.sh",
     "fixtures:reset": "tsx scripts/fixtures-reset.ts",
-    "serve:web": "serve ${WEB_DIST:-dist} -s -l 8081"
+    "serve:web": "serve ${WEB_DIST:-dist} -s -l 8081",
+    "test:api": "playwright test --project=api"
   },
   "private": true,
   "engines": {

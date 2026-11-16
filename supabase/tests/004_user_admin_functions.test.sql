@@ -3,7 +3,7 @@
 -- Self-contained; rolled back. Phones come from the throwaway block +91 90000 14xxx.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(90);
+select plan(95);
 
 -- helper: run a statement, return {code, field, message, sqlstate} of the error it raises (or {raised:false})
 create function pg_temp.err(q text) returns jsonb language plpgsql as $f$
@@ -53,7 +53,20 @@ select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.
 select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
            where n.nspname = 'app' and p.proname ~ '^(ua_|account_|audit_denied|_ua_)' and (not p.prosecdef or p.proconfig is null or not ('search_path=""' = any (p.proconfig)))), 0,
   'every service function is security definer with an empty search_path');
+select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname ~ '^svc_' and (has_function_privilege('anon', p.oid, 'execute') or has_function_privilege('authenticated', p.oid, 'execute'))), 0,
+  'no public.svc_* wrapper is executable by anon or authenticated');
+select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname ~ '^svc_' and not has_function_privilege('service_role', p.oid, 'execute')), 0,
+  'service_role can execute every public.svc_* wrapper');
+select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname ~ '^svc_'), 8,
+  'there are 8 svc_* wrappers (one per Edge Function entry point)');
+set local role service_role;
+select is((public.svc_ua_set_status('00000000-0000-4000-b200-0000000000a1', '17000000-0000-4000-b200-000000000009', '00000000-0000-4000-b200-0000000000a3', 'active'))->>'ok', 'true',
+  'service_role can call a wrapper (end to end through app.ua_set_status)');
+reset role;
 set local role authenticated;
+select throws_ok($$ select public.svc_ua_set_status('00000000-0000-4000-b200-0000000000a1', gen_random_uuid(), '00000000-0000-4000-b200-0000000000a3', 'inactive') $$, '42501', null, 'authenticated cannot call a wrapper');
 select throws_ok($$ select app.ua_set_status('00000000-0000-4000-b200-0000000000a1', gen_random_uuid(), '00000000-0000-4000-b200-0000000000a3', 'inactive') $$, '42501', null, 'authenticated cannot call ua_set_status');
 reset role;
 set local role anon;

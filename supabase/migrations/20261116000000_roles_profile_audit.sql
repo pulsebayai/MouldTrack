@@ -592,6 +592,41 @@ begin
 end
 $$;
 
+-- PostgREST exposes only `public`, so the Edge Functions reach the service-only app.* functions through thin
+-- public.svc_* wrappers. They run as the caller (security invoker), so only roles that can execute app.* can use them,
+-- and execute on the wrappers themselves is service_role only (loop below).
+create function public.svc_ua_check_create(p_actor uuid, p_request_id uuid, p_full_name text, p_employee_id text, p_phone text, p_role text)
+returns jsonb language sql security invoker set search_path = ''
+as $$ select app.ua_check_create(p_actor, p_request_id, p_full_name, p_employee_id, p_phone, p_role) $$;
+
+create function public.svc_ua_create_user(p_actor uuid, p_request_id uuid, p_user_id uuid, p_full_name text, p_employee_id text, p_phone text, p_role text)
+returns jsonb language sql security invoker set search_path = ''
+as $$ select app.ua_create_user(p_actor, p_request_id, p_user_id, p_full_name, p_employee_id, p_phone, p_role) $$;
+
+create function public.svc_ua_check_update(p_actor uuid, p_request_id uuid, p_user_id uuid, p_full_name text, p_employee_id text, p_phone text, p_role text)
+returns jsonb language sql security invoker set search_path = ''
+as $$ select app.ua_check_update(p_actor, p_request_id, p_user_id, p_full_name, p_employee_id, p_phone, p_role) $$;
+
+create function public.svc_ua_update_user(p_actor uuid, p_request_id uuid, p_user_id uuid, p_full_name text, p_employee_id text, p_phone text, p_role text)
+returns jsonb language sql security invoker set search_path = ''
+as $$ select app.ua_update_user(p_actor, p_request_id, p_user_id, p_full_name, p_employee_id, p_phone, p_role) $$;
+
+create function public.svc_ua_set_status(p_actor uuid, p_request_id uuid, p_user_id uuid, p_status text)
+returns jsonb language sql security invoker set search_path = ''
+as $$ select app.ua_set_status(p_actor, p_request_id, p_user_id, p_status) $$;
+
+create function public.svc_ua_reset_password(p_actor uuid, p_request_id uuid, p_user_id uuid)
+returns jsonb language sql security invoker set search_path = ''
+as $$ select app.ua_reset_password(p_actor, p_request_id, p_user_id) $$;
+
+create function public.svc_account_password_changed(p_user_id uuid)
+returns jsonb language sql security invoker set search_path = ''
+as $$ select app.account_password_changed(p_user_id) $$;
+
+create function public.svc_audit_denied(p_actor uuid, p_tenant uuid, p_role text, p_reason text, p_entity_type text, p_entity_id uuid, p_source text)
+returns void language sql security invoker set search_path = ''
+as $$ select app.audit_denied(p_actor, p_tenant, p_role, p_reason, p_entity_type, p_entity_id, p_source) $$;
+
 -- Service role only.
 do $$
 declare f record;
@@ -599,7 +634,8 @@ begin
   for f in
     select p.oid::regprocedure as sig
     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-    where n.nspname = 'app' and p.proname ~ '^(_ua_|ua_|account_|audit_denied)'
+    where (n.nspname = 'app' and p.proname ~ '^(_ua_|ua_|account_|audit_denied)')
+       or (n.nspname = 'public' and p.proname ~ '^svc_')
   loop
     execute format('revoke all on function %s from public, anon, authenticated', f.sig);
     execute format('grant execute on function %s to service_role', f.sig);

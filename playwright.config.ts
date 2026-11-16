@@ -18,8 +18,10 @@ export default defineConfig({
   ],
   use: { baseURL, trace: 'retain-on-failure', screenshot: 'only-on-failure' },
   projects: [
-    { name: 'e2e', testIgnore: /smoke\.spec\.ts/, use: { ...devices['Pixel 7'] } },
-    { name: 'smoke', testMatch: /smoke\.spec\.ts/, use: { ...devices['Desktop Chrome'] } },
+    // API tests: Edge Functions + RLS through HTTP, no browser (02, D10).
+    { name: 'api', testDir: './e2e/api', fullyParallel: false },
+    { name: 'e2e', testDir: './e2e/web', testIgnore: /smoke\.spec\.ts/, use: { ...devices['Pixel 7'] } },
+    { name: 'smoke', testDir: './e2e/web', testMatch: /smoke\.spec\.ts/, use: { ...devices['Desktop Chrome'] } },
   ],
   webServer: isLocal && !process.env.NO_WEB_SERVER
     ? { command: 'npm run serve:web', url: baseURL, reuseExistingServer: true, timeout: 60_000 }

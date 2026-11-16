@@ -93,6 +93,9 @@ jobs:
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      # This job runs the edge runtime (02, D7): the Edge Functions are part of what it tests.
+      SUPABASE_EXCLUDE: studio,imgproxy,logflare,vector,realtime,storage-api,postgres-meta
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -101,10 +104,34 @@ jobs:
       - name: Start ephemeral Supabase (migrations + seed only)
         run: npx supabase start -x "$SUPABASE_EXCLUDE"
       - run: bash scripts/ci-supabase-env.sh
+      - name: Ensure the Edge Functions are served (D7)
+        run: |
+          wait_fn() {
+            for i in $(seq 1 30); do
+              code=$(curl -s -o /dev/null -w '%{http_code}' -X OPTIONS http://127.0.0.1:54321/functions/v1/account || true)
+              [ "$code" = "204" ] && return 0
+              sleep 2
+            done
+            return 1
+          }
+          if ! wait_fn; then
+            echo "supabase start did not serve supabase/functions; falling back to functions serve"
+            nohup npx supabase functions serve --no-verify-jwt=false > functions-serve.log 2>&1 &
+            wait_fn || { cat functions-serve.log; exit 1; }
+          fi
+      - name: API test env (local stack keys from the CLI; not secrets)
+        run: |
+          eval "$(npx supabase status -o env 2>/dev/null | grep -E '^[A-Z_]+=')"
+          {
+            echo "E2E_API_URL=$API_URL"
+            echo "E2E_ANON_KEY=${ANON_KEY:-$PUBLISHABLE_KEY}"
+            echo "E2E_SERVICE_ROLE_KEY=${SERVICE_ROLE_KEY:-$SECRET_KEY}"
+            echo "E2E_REQUIRE_API=1"
+          } >> "$GITHUB_ENV"
       - name: Build web
         run: npx expo export -p web --output-dir dist
       - run: npx playwright install --with-deps chromium
-      - name: Playwright (e2e + smoke)
+      - name: Playwright (api + e2e + smoke)
         env:
           CI: 'true'
           BASE_URL: http://localhost:8081
