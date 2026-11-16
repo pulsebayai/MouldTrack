@@ -124,3 +124,10 @@ Locks held: architecture + schema (roadmap, 2026-11-16).
 - Reviewed: svc_* wrappers (security invoker + execute revoked from anon/authenticated, asserted in pgTAP), no temp passwords outside create/reset responses, logs carry error codes only. Deviations 1–7 accepted.
 - Added: hosted CORS check to step 10. CI `db` port-bind flake recurred → fix by moving local Supabase ports in `config.toml` (01 note), done with step 5.
 - Next step: Sonnet executes steps 5–7.
+
+### 2026-11-16 (Sonnet, steps 5–7)
+- Done: **Step 5** local Supabase ports +1000, phone-identity seed with org U, `fixtures-reset.ts` rewrite (all refusals kept), commit b37f90d, CI run 43819993514 green. **Step 6** phone sign-in, forced Change-password screen, Home links, Sentry scrub, `api.ts`, ui components; commit 120af8e; CI run 43820581136 failed e2e-web only (axe `document-title`, strict-mode `sign-out` selector, both in my new spec/layout). **Step 7** Users screen (`users/index|new|[id]`, `user-form`, `temp-password-panel`, `lib/users`), 55 new Jest tests (242 total) and `e2e/web/users.spec.ts`; commit 0a08382, fixes 7409617 (document title), 7128450 (visible-only selectors), 57f1f89 (ConfirmDialog without fade, named). Final PR CI run 43823330799 on 57f1f89: changes, static, db, e2e-web, summary, ci-ok all success (e2e-web 3m27s, db 1m36s, static 1m14s). That run also proves step 6. Runs 43821310722 and 43822535605 failed e2e-web only (axe findings and selectors in new tests, fixed in code).
+- In progress: —
+- Blocked / failing: nothing. No db port-bind flake since the port move (3 runs).
+- Next step: step 8 (Android Maestro flows), then 9–11.
+- Decisions made: none beyond the plan; deviations listed under "Deviations from plan" (new helper files, runtime document title, ConfirmDialog no fade, visible-only e2e selectors, `users.spec` extras).
