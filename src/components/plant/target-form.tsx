@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { Text, View } from 'react-native';
 import { Button, ErrorText, Field, colors } from '@/components/ui';
 import { toUserMessage } from '@/lib/errors';
-import { PlantError, RequestIds, parsePieces, plantApi, validateTargetForm, type FieldErrors } from '@/lib/plant';
+import { PlantError, RequestIds, formatPieces, formatPlantDate, isValidDate, parsePieces, plantApi, scheduledAfter, validateTargetForm, type FieldErrors, type TargetVersion } from '@/lib/plant';
 import { useSession } from '@/lib/session-provider';
 
 export type TargetFormProps = {
@@ -11,12 +11,15 @@ export type TargetFormProps = {
   productId: string;
   productLabel: string;
   today: string | null;
+  /** This pair's versions: ending also cancels the scheduled changes after the chosen date, and the form says which. */
+  versions?: TargetVersion[];
+  unit?: string;
   onDone: () => void;
   onCancel: () => void;
 };
 
 /** Set (pieces + start date) or end (date only) a target. The date must be today or later in plant time; the server decides. */
-export function TargetForm({ mode, machineId, productId, productLabel, today, onDone, onCancel }: TargetFormProps) {
+export function TargetForm({ mode, machineId, productId, productLabel, today, versions = [], unit = 'pcs/shift', onDone, onCancel }: TargetFormProps) {
   const { client } = useSession();
   const [pieces, setPieces] = useState('');
   const [date, setDate] = useState(today ?? '');
@@ -24,6 +27,7 @@ export function TargetForm({ mode, machineId, productId, productLabel, today, on
   const [busy, setBusy] = useState(false);
   const ids = useRef(new RequestIds());
   const setting = mode === 'set';
+  const cancelled = !setting && isValidDate(date.trim()) ? scheduledAfter(versions, date.trim()) : [];
 
   async function submit() {
     const e = validateTargetForm({ pieces, date }, today, { needPieces: setting });
@@ -71,6 +75,11 @@ export function TargetForm({ mode, machineId, productId, productLabel, today, on
         autoCapitalize="none"
         autoComplete="off"
       />
+      {cancelled.length ? (
+        <Text testID="target-end-cancels" style={{ fontSize: 15, color: colors.text }}>
+          This also cancels the scheduled changes: {cancelled.map((c) => `${formatPieces(c.pieces)} ${unit} from ${formatPlantDate(c.from)}`).join(', ')}
+        </Text>
+      ) : null}
       {errors.form ? <ErrorText testID="target-form-error">{errors.form}</ErrorText> : null}
       <View style={{ flexDirection: 'row', gap: 12, flexWrap: 'wrap' }}>
         <Button title={setting ? 'Save target' : 'End target'} testID="target-submit" onPress={submit} disabled={busy} busy={busy} />

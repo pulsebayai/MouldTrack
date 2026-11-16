@@ -163,3 +163,27 @@ describe('Set and end a target (AC-5, AC-6, AC-8)', () => {
     for (const id of ['target-add', 'target-set-p-1', 'target-end-p-1']) expect(screen.getByTestId(id)).toHaveStyle({ minHeight: 48 });
   });
 });
+
+describe('End target names what it cancels (R1)', () => {
+  const versions = [version('v3', 'p-1', '2026-12-01', 1300, 't3'), version('v2', 'p-1', '2026-11-18', 1200, 't2')];
+  it('defaults the end date to the plant date and lists the scheduled changes that ending cancels', async () => {
+    const { ui } = setup(versions);
+    await ui;
+    await fireEvent.press(await screen.findByTestId('target-end-p-1'));
+    expect(screen.getByTestId('target-date').props.value).toBe(TODAY);
+    expect(screen.getByTestId('target-end-cancels')).toHaveTextContent('This also cancels the scheduled changes: 1,300 pcs/shift from 1 Dec 2026');
+  });
+  it('updates the list as the date changes and hides it when nothing is cancelled', async () => {
+    const { ui } = setup(versions);
+    await ui;
+    await fireEvent.press(await screen.findByTestId('target-end-p-1'));
+    await fireEvent.changeText(screen.getByTestId('target-date'), '2026-12-01');
+    expect(screen.queryByTestId('target-end-cancels')).toBeNull();
+  });
+  it('offers End target for a pair that has only a future target', async () => {
+    const { ui } = setup([version('v9', 'p-1', '2026-12-05', 500, 't9')]);
+    await ui;
+    await fireEvent.press(await screen.findByTestId('target-end-p-1'));
+    expect(screen.getByTestId('target-end-cancels')).toHaveTextContent(/500 pcs\/shift from 5 Dec 2026/);
+  });
+});

@@ -1,6 +1,6 @@
 import { ApiError } from '@/lib/api';
 import {
-  PLANT_PAGE_SIZE, PlantError, RequestIds, fetchActiveProducts, fetchLines, fetchMachine, fetchMachines, fetchPlantToday, fetchProducts, fetchRecorderNames,
+  PLANT_PAGE_SIZE, PlantError, RequestIds, scheduledAfter, fetchActiveProducts, fetchLines, fetchMachine, fetchMachines, fetchPlantToday, fetchProducts, fetchRecorderNames,
   fetchProductsByIds, fetchHasTargets, fetchSite, fetchTargetVersions, fetchTenantTimezone, formatPieces, formatPlantDate, isValidDate, machineStatusLabel, parsePieces, plantApi, productStatusLabel, sanitiseSearch,
   summariseTargets, validateMachineForm, validateProductForm, validateTargetForm, type MachineQuery, type TargetVersion,
 } from '@/lib/plant';
@@ -323,4 +323,22 @@ describe('step 6a client changes (R2, R4)', () => {
     expect(db.queries[0].filters).toEqual([['or', 'code.ilike.%M\\_1%,name.ilike.%M\\_1%']]);
     expect(db.queries[1].filters).toEqual([['or', 'code.ilike.%a\\_b%,description.ilike.%a\\_b%']]);
   });
+});
+
+describe('scheduledAfter (R1: what ending would cancel)', () => {
+  const v = (id: string, from: string, pieces: number | null, rec: string): TargetVersion => ({
+    id, machine_id: 'm1', product_id: 'p1', effective_from: from, pieces_per_shift: pieces, recorded_by: 'u1', recorded_at: rec,
+  });
+  const versions = [v('1', '2026-11-18', 1000, 't1'), v('2', '2026-12-01', 1300, 't2'), v('3', '2026-12-10', null, 't3'), v('4', '2026-12-20', 900, 't4')];
+  it('lists the later scheduled targets, in date order', () => {
+    expect(scheduledAfter(versions, '2026-11-18')).toEqual([{ from: '2026-12-01', pieces: 1300 }, { from: '2026-12-20', pieces: 900 }]);
+  });
+  it('lists only those after the chosen date (not on it)', () => {
+    expect(scheduledAfter(versions, '2026-12-01')).toEqual([{ from: '2026-12-20', pieces: 900 }]);
+    expect(scheduledAfter(versions, '2026-12-20')).toEqual([]);
+  });
+  it('ignores a change that was already cancelled by a later-recorded end on the same date', () => {
+    expect(scheduledAfter([...versions, v('5', '2026-12-01', null, 't5')], '2026-11-18')).toEqual([{ from: '2026-12-20', pieces: 900 }]);
+  });
+  it('is empty with no versions', () => expect(scheduledAfter([], '2026-11-18')).toEqual([]));
 });
