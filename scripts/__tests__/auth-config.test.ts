@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
 import { join } from 'node:path';
 
@@ -43,13 +43,12 @@ beforeEach(() => {
 
 function run(args: string[], env: Record<string, string> = {}): Promise<{ code: number; out: string }> {
   return new Promise((resolve) => {
-    const p = spawn('node', [SCRIPT, ...args], {
-      env: { PATH: process.env.PATH ?? '', SUPABASE_ACCESS_TOKEN: 'sbp_test_token', DEV_SUPABASE_PROJECT_REF: REF, STAGING_SUPABASE_PROJECT_REF: 'zzzzzzzzzzzzzzzzzzzz', SUPABASE_API_URL: `http://127.0.0.1:${port}`, ...env },
-    });
-    let out = '';
-    p.stdout.on('data', (d) => (out += d));
-    p.stderr.on('data', (d) => (out += d));
-    p.on('close', (code) => resolve({ code: code ?? -1, out }));
+    execFile(
+      'node',
+      [SCRIPT, ...args],
+      { env: { NODE_ENV: 'test', PATH: process.env.PATH ?? '', SUPABASE_ACCESS_TOKEN: 'sbp_test_token', DEV_SUPABASE_PROJECT_REF: REF, STAGING_SUPABASE_PROJECT_REF: 'zzzzzzzzzzzzzzzzzzzz', SUPABASE_API_URL: `http://127.0.0.1:${port}`, ...env } },
+      (err: Error | null, stdout: string | Buffer, stderr: string | Buffer) => resolve({ code: err ? ((err as { code?: number }).code ?? 1) : 0, out: `${stdout}${stderr}` }),
+    );
   });
 }
 
