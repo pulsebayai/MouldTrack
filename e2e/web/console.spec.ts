@@ -17,8 +17,12 @@ const tid = (page: Page, id: string) => page.locator(`[data-testid="${id}"]:visi
 const national = (e164: string) => e164.replace(/^\+91/, '');
 
 async function signOut(page: Page) {
+  const loggedOut = page.waitForResponse((r) => /\/auth\/v1\/logout/.test(r.url()));
   await tid(page, 'sign-out').click();
-  await expect(page).toHaveURL(/\/sign-in$/);
+  await loggedOut;
+  // The no-access screen stays put after sign-out (02 behaviour), so go to sign-in explicitly; it is a no-op elsewhere.
+  await page.goto('/sign-in');
+  await expect(tid(page, 'sign-in-submit')).toBeVisible();
 }
 
 test.beforeAll(async () => {

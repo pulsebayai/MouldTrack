@@ -21,7 +21,7 @@ export default function PlatformAudit() {
   const pages = Math.max(1, Math.ceil(total / AUDIT_PAGE_SIZE));
 
   return (
-    <ScrollView testID="audit-screen" contentContainerStyle={{ alignItems: 'center', padding: 24 }}>
+    <ScrollView testID="audit-screen" tabIndex={0} contentContainerStyle={{ alignItems: 'center', padding: 24 }}>
       <View style={{ width: '100%', maxWidth: 960, gap: 16 }}>
         <Text accessibilityRole="header" style={{ fontSize: 26, fontWeight: '700', color: colors.text }}>Platform audit</Text>
         <Text style={{ fontSize: 15, color: colors.muted }}>Actions by Super Admins, newest first. Tenant users&apos; own events are not shown here.</Text>
