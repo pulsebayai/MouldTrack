@@ -44,7 +44,7 @@ jobs:
         run: npx supabase functions deploy user-admin account --project-ref "$DEV_SUPABASE_PROJECT_REF" --use-api --yes
 
       - name: Set function secrets (CORS origin of the dev web app, D8)
-        run: npx supabase secrets set ALLOWED_ORIGINS=https://mouldtrack--dev.expo.app --project-ref "$DEV_SUPABASE_PROJECT_REF"
+        run: npx supabase secrets set ALLOWED_ORIGINS=https://mouldtrack--dev.expo.app --project-ref "$DEV_SUPABASE_PROJECT_REF" --yes
 
       - name: Apply hosted Auth config to dev (D9)
         run: node scripts/auth-config.mjs --apply --ref dev
