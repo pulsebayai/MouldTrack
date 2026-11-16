@@ -1,6 +1,6 @@
 # Plan: Tenant console (Platform Super Admin)
 Spec: ./spec.md · Status: approved · Date: 2026-11-16
-Batch A with 04 (03 merges **after** 04). Locks: **architecture: 03**; schema split — 03 owns `tenant` changes, `platform_admin`, `phone_claim` (logged in roadmap at launch). Prerequisite: the audit-action format PR (see 04 plan) is merged before step 1.
+Batch A with 04 (03 merges **after** 04). Locks: **architecture: 03**; schema split — 03 owns `tenant` changes, `platform_admin`, `phone_claim` (logged in roadmap at launch). Prerequisite: PR #6 (audit action registry `app.audit_action`) is merged before step 1; **03 registers its actions** (`tenant.*`, `platform_admin.*`) with inserts in its own migration.
 
 ## Decisions (Opus)
 - D1 Files: migration `20261117100000_platform_admin.sql` (timestamp after 04's, matching merge order); pgTAP `020_platform_admin.test.sql`, `021_platform_functions.test.sql`, `022_platform_boundary.test.sql` (04 uses 01x).
@@ -51,7 +51,7 @@ Batch A with 04 (03 merges **after** 04). Locks: **architecture: 03**; schema sp
 AC-1–16 → tests (spec table); full suite green after rebase on 04; dev regression green incl. Android.
 
 ## Deviations from plan
-(filled in during build)
+- Spec says new actions "rely on 04's format rule"; replaced by the PR #6 registry (03 inserts its own actions).
 
 ## Session log
 ### 2026-11-16
