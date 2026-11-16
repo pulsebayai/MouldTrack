@@ -21,6 +21,9 @@ export const USERS = {
   u4: '+919000000009', // org U: fresh, must change password
 } as const;
 
+/** Platform Super Admin fixtures (03): must match supabase/seed.sql and e2e/api/helpers.ts SA_FIXTURES. */
+export const SUPER_ADMINS = { sa1: '+919000000090', sa2: '+919000000091' } as const;
+
 /** Signs in through the UI with a phone in +91XXXXXXXXXX form (the screen has a fixed +91 prefix). */
 export async function signIn(page: Page, phone: string, password = FIXTURE_PASSWORD) {
   await page.goto('/sign-in');
