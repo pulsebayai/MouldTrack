@@ -291,6 +291,12 @@ begin
   if v_name is not null and app._pa_name_taken(v_name, p_tenant) then
     perform app._ua_fail('duplicate', 'A tenant with this name already exists', 'name');
   end if;
+  -- A save that changes nothing writes nothing: no update, no audit row (N-6).
+  if v_name is not distinct from cur.name or v_name is null then
+    if (v_tz is null or v_tz = cur.timezone) and (v_plan is null or v_plan = cur.plan_label::text) then
+      return jsonb_build_object('ok', true, 'tenant_id', p_tenant, 'changed', false);
+    end if;
+  end if;
   begin
     update public.tenant t
     set name = coalesce(v_name, t.name), timezone = coalesce(v_tz, t.timezone),
@@ -765,6 +771,9 @@ as $$ select app.pa_sa_set_status(p_actor, p_request_id, p_user_id, p_status, p_
 create function public.psvc_pa_sa_reset_password(p_actor uuid, p_request_id uuid, p_user_id uuid)
 returns jsonb language sql security invoker set search_path = ''
 as $$ select app.pa_sa_reset_password(p_actor, p_request_id, p_user_id) $$;
+create function public.psvc_pa_authorise(p_actor uuid)
+returns jsonb language sql security invoker set search_path = ''
+as $$ select app._pa_authorise(p_actor) $$;
 create function public.psvc_pa_setup_check()
 returns jsonb language sql security invoker set search_path = ''
 as $$ select app.pa_setup_check() $$;
@@ -788,14 +797,22 @@ set search_path = ''
 as $$
 declare
   m record;
+  a public.platform_admin;
   v_role text;
+  v_reason text;
 begin
   if app.is_platform_admin() then return true; end if;
   if auth.uid() is null then return false; end if;
   select mm.tenant_id, mm.role::text as role into m from public.membership mm where mm.user_id = auth.uid();
   v_role := m.role;
-  if exists (select 1 from public.platform_admin pa where pa.user_id = auth.uid()) then v_role := 'platform_admin'; end if;
-  perform app.audit_denied(auth.uid(), m.tenant_id, v_role, 'not_platform_admin', null, null, p_source);
+  v_reason := 'not_platform_admin';
+  select * into a from public.platform_admin pa where pa.user_id = auth.uid();
+  if found then
+    -- A Super Admin who is not currently allowed in: same reasons as the write path (N-8).
+    v_role := 'platform_admin';
+    v_reason := case when a.status <> 'active' then 'inactive' else 'must_change_password' end;
+  end if;
+  perform app.audit_denied(auth.uid(), m.tenant_id, v_role, v_reason, null, null, p_source);
   return false;
 end
 $$;
@@ -957,5 +974,25 @@ begin
   loop
     execute format('revoke all on function %s from public, anon', f.sig);
     execute format('grant execute on function %s to authenticated, service_role', f.sig);
+  end loop;
+end $$;
+
+-- 11. 02's duplicate-phone handlers also map the phone_claim constraint (N-1). membership.phone_e164 is now claimed in app.phone_claim by a
+-- trigger, so a race between two creates of the same phone surfaces as phone_claim_phone_e164_key, not membership_phone_e164_key. The two
+-- bodies are patched in place (only that comparison changes) so 02's source stays the single copy of the logic.
+do $$
+declare
+  f text;
+  def text;
+begin
+  foreach f in array array['app.ua_create_user', 'app.ua_update_user'] loop
+    select pg_get_functiondef(p.oid) into def
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'app' and p.proname = split_part(f, '.', 2);
+    if position('if v_constraint = ''membership_phone_e164_key'' then' in def) = 0 then
+      raise exception 'expected duplicate-phone handler not found in %', f;
+    end if;
+    execute replace(def, 'if v_constraint = ''membership_phone_e164_key'' then',
+                         'if v_constraint in (''membership_phone_e164_key'', ''phone_claim_phone_e164_key'') then');
   end loop;
 end $$;

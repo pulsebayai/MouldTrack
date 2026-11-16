@@ -2,7 +2,7 @@
 -- Self-contained; rolled back. Phones from the throwaway block +91 90000 21xxx.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(157);
+select plan(167);
 
 create function pg_temp.err(q text) returns jsonb language plpgsql as $f$
 declare d text; m text; st text;
@@ -85,6 +85,11 @@ select is((app.pa_tenant_update('00000000-0000-4000-b900-0000000000a1', gen_rand
 select is((select name from public.tenant where id = '19000000-0000-4000-b900-00000000000a'), 'tap21 org X2', 'update: omitted fields are untouched');
 select is(pg_temp.err($$ select app.pa_tenant_update('00000000-0000-4000-b900-0000000000a1', gen_random_uuid(), '19000000-0000-4000-b900-00000000000a', 'zone co', null, null) $$) @> '{"code":"duplicate","field":"name"}', true, 'update: name of another tenant -> duplicate');
 select is((app.pa_tenant_update('00000000-0000-4000-b900-0000000000a1', gen_random_uuid(), '19000000-0000-4000-b900-00000000000a', 'TAP21 ORG X2', null, null))->>'ok', 'true', 'update: re-casing the own name is not a duplicate');
+create temp table tap21_n6 as select (select count(*) from public.audit_event where action = 'tenant.updated' and tenant_id = '19000000-0000-4000-b900-00000000000a') as audits,
+  (select updated_at from public.tenant where id = '19000000-0000-4000-b900-00000000000a') as updated_at;
+select is((app.pa_tenant_update('00000000-0000-4000-b900-0000000000a1', gen_random_uuid(), '19000000-0000-4000-b900-00000000000a', 'TAP21 ORG X2', 'Asia/Dubai', 'trial'))->>'changed', 'false', 'update: saving without a change reports changed = false');
+select is((select count(*) from public.audit_event where action = 'tenant.updated' and tenant_id = '19000000-0000-4000-b900-00000000000a'), (select audits from tap21_n6), 'update: a no-op save writes no audit row (N-6)');
+select is((select updated_at from public.tenant where id = '19000000-0000-4000-b900-00000000000a'), (select updated_at from tap21_n6), 'update: a no-op save does not touch updated_at');
 select is(pg_temp.err($$ select app.pa_tenant_update('00000000-0000-4000-b900-0000000000a1', gen_random_uuid(), gen_random_uuid(), 'x', null, null) $$) @> '{"code":"guard","field":"not_found"}', true, 'update: unknown tenant -> guard/not_found');
 
 -- Suspend / activate ----------------------------------------------------------------------------------------------------------------------------
@@ -203,6 +208,25 @@ select is(pg_temp.err($$ select app.pa_sa_reset_password('00000000-0000-4000-b90
 select is(pg_temp.err($$ select app.pa_sa_reset_password('00000000-0000-4000-b900-0000000000a2', gen_random_uuid(), gen_random_uuid()) $$) @> '{"code":"guard","field":"not_found"}', true, 'sa reset: unknown Super Admin');
 select is(app.pa_sa_reset_password('00000000-0000-4000-b900-0000000000b1', gen_random_uuid(), '00000000-0000-4000-b900-0000000000a2'), '{"ok": false, "code": "not_allowed"}'::jsonb, 'sa reset: a tenant UA is denied');
 
+-- N-8: read denials for a Super Admin who is not allowed in carry the write path's reasons -------------------------------------------------------
+update public.platform_admin set status = 'inactive' where user_id = '00000000-0000-4000-b900-0000000000a3';
+update public.platform_admin set status = 'active', must_change_password = true where user_id = '00000000-0000-4000-b900-0000000000a4';
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-b900-0000000000a3","role":"authenticated"}', true);
+select is((select count(*)::int from public.pa_super_admins()), 0, 'read guard: an inactive SA gets nothing');
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-b900-0000000000a4","role":"authenticated"}', true);
+select is((select count(*)::int from public.pa_super_admins()), 0, 'read guard: an SA with a temporary password gets nothing');
+reset role;
+select results_eq($$ select actor_role, reason, source from public.audit_event where action = 'access.denied' and actor_user_id = '00000000-0000-4000-b900-0000000000a3' and source = 'rpc:pa_super_admins' $$,
+  $$ values ('platform_admin'::text, 'inactive'::text, 'rpc:pa_super_admins'::text) $$, 'read guard: the inactive SA is audited as inactive');
+select results_eq($$ select actor_role, reason from public.audit_event where action = 'access.denied' and actor_user_id = '00000000-0000-4000-b900-0000000000a4' and source = 'rpc:pa_super_admins' $$,
+  $$ values ('platform_admin'::text, 'must_change_password'::text) $$, 'read guard: the temporary-password SA is audited as must_change_password');
+select is((select count(*)::int from public.audit_event where action = 'access.denied' and reason = 'not_platform_admin' and actor_user_id in ('00000000-0000-4000-b900-0000000000a3', '00000000-0000-4000-b900-0000000000a4')), 0, 'read guard: never as not_platform_admin');
+
+-- N-1: 02's duplicate-phone handlers map the phone_claim constraint too ------------------------------------------------------------------------
+select ok((select prosrc from pg_proc where proname = 'ua_create_user' and pronamespace = 'app'::regnamespace) like '%phone_claim_phone_e164_key%', 'ua_create_user maps a phone_claim race to the duplicate-phone error');
+select ok((select prosrc from pg_proc where proname = 'ua_update_user' and pronamespace = 'app'::regnamespace) like '%phone_claim_phone_e164_key%', 'ua_update_user maps a phone_claim race to the duplicate-phone error');
+
 -- Setup -----------------------------------------------------------------------------------------------------------------------------------------------------
 select is(app.pa_setup_check(), '{"ok": false, "code": "setup_closed"}'::jsonb, 'setup: refused while any SA exists');
 select is((select count(*)::int from public.audit_event where action = 'access.denied' and reason = 'setup_closed' and source = 'edge:platform-setup' and actor_user_id is null and tenant_id is null), 1, 'setup: the refusal is audited');
@@ -261,7 +285,7 @@ select is((select count(*)::int from public.pa_super_admins()), 2, 'super admins
 select is((select count(*)::int from public.pa_super_admins() where is_self), 1, 'super admins: marks the caller');
 select ok((select count(*) from public.pa_audit(0)) > 0, 'audit: an SA sees platform events');
 select is((select count(*)::int from public.pa_audit(0) where action = 'access.denied' and reason = 'not_platform_admin'), 0, 'audit: denials of tenant users are not platform events');
-select ok((select bool_and(source in ('edge:platform', 'edge:platform-setup', 'edge:account') ) from public.pa_audit(0)), 'audit: only platform sources');
+select ok((select bool_and(source in ('edge:platform', 'edge:platform-setup', 'edge:account') or source like 'rpc:pa\_%') from public.pa_audit(0)), 'audit: only platform sources (including Super Admin read denials)');
 select is((select count(*)::int from public.pa_audit(0) where tenant_id is not null and tenant_name is null), 0, 'audit: tenant names are resolved');
 select is((select count(*)::int from public.pa_audit(0)), (select least(50, count(*))::int from public.pa_audit(0)), 'audit: pages hold at most 50');
 select set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-b900-0000000000b1","role":"authenticated"}', true);

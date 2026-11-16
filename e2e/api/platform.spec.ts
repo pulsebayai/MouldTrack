@@ -372,6 +372,23 @@ test.describe('AC-14 role checks', () => {
     expect((await service().from('tenant').select('name').eq('id', org.id).single()).data!.name).toBe(org.name);
     expect((await callFn(request, 'platform', null, { action: 'tenant_create', request_id: uuid(), name: 'x' })).status).toBe(401);
   });
+
+  test('N-2: a Unit Admin gets the generic 403 and an audit row even for malformed or unknown requests', async ({ request }) => {
+    const ua = await signIn(org.users.ua1.phone, FIXTURE_PASSWORD);
+    const before = (await auditRows({ action: 'access.denied', actor: ua.userId, reason: 'not_platform_admin' })).length;
+    const bodies: Record<string, unknown>[] = [
+      { action: 'tenant_create' }, // no request id, no name
+      { action: 'ua_create', request_id: 'not-a-uuid' },
+      { action: 'no_such_action', request_id: uuid() },
+      { request_id: uuid() },
+    ];
+    for (const b of bodies) {
+      const r = await callFn(request, 'platform', ua.token, b);
+      expect(r.status, JSON.stringify(b)).toBe(403);
+      expect(r.body).toEqual({ code: 'not_allowed', message: 'Not allowed' });
+    }
+    expect((await auditRows({ action: 'access.denied', actor: ua.userId, reason: 'not_platform_admin' })).length).toBe(before + bodies.length);
+  });
 });
 
 test.describe('AC-11 / AC-12 / AC-13 boundary and audit visibility', () => {

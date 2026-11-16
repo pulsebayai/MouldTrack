@@ -145,6 +145,9 @@ async function saSetStatus(sb: SupabaseClient, actor: string, body: Body) {
 serveJson(async (req, body) => {
   const sb = serviceClient();
   const actor = await callerId(req, sb);
+  // Authorise before anything is validated (N-2): a Unit Admin or Supervisor always gets the same generic 403 and an audited denial,
+  // whatever they send, and never learns which fields or actions exist.
+  unwrap(await sb.rpc('psvc_pa_authorise', { p_actor: actor }));
   switch (body.action) {
     case 'tenant_create': return await tenantCreate(sb, actor, body);
     case 'tenant_update': return await tenantUpdate(sb, actor, body);

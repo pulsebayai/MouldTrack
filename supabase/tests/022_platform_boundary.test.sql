@@ -22,7 +22,7 @@ insert into public.platform_admin (user_id, full_name, phone_e164, status, must_
 -- tenant events, an SA event, and a denial exist, so "0 rows" is meaningful
 select app.ua_set_status('00000000-0000-4000-ba00-0000000000b1', gen_random_uuid(), '00000000-0000-4000-ba00-0000000000b2', 'inactive');
 select app.ua_set_status('00000000-0000-4000-ba00-0000000000b1', gen_random_uuid(), '00000000-0000-4000-ba00-0000000000b2', 'active');
-select app.pa_tenant_update('00000000-0000-4000-ba00-0000000000a1', gen_random_uuid(), '1f000000-0000-4000-ba00-00000000000a', 'tap22 org X', 'Asia/Kolkata', 'trial');
+select app.pa_tenant_update('00000000-0000-4000-ba00-0000000000a1', gen_random_uuid(), '1f000000-0000-4000-ba00-00000000000a', 'tap22 org X', 'Asia/Kolkata', 'active');
 select app.pa_tenant_update('00000000-0000-4000-ba00-0000000000a1', gen_random_uuid(), '1f000000-0000-4000-ba00-00000000000a', 'tap22 org X renamed', null, null);
 
 -- Reusable discovery: every public table, view and materialised view that carries tenant_id (tenant itself is the tenant-level fact an SA may read).

@@ -306,7 +306,7 @@ async function main() {
   // Super Admins: reuse the Auth user, reset password + unban, and put the platform_admin row in its canonical state.
   for (const f of SUPER_ADMINS) {
     let id = existing.get(f.email);
-    if (id) {
+    if (id && !doomed.has(id)) {
       const { error } = await admin.auth.admin.updateUserById(id, { password, email_confirm: true, ban_duration: 'none' });
       if (error) throw error;
     } else {
