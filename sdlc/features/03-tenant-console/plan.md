@@ -28,7 +28,7 @@ Batch A with 04 (03 merges **after** 04). Locks: **architecture: 03**; schema sp
 `20261117100000_platform_admin.sql`. Additive except the `tenant` columns (defaults) and the `phone_claim` backfill.
 
 ## Steps
-- [ ] 1. **Schema + SA identity (tests first).** `020`: platform_admin RLS (own row only), phone_claim uniqueness across membership ↔ platform_admin both directions incl. updates and phone changes, backfill complete, `is_platform_admin()` gate (inactive/must-change false), tenant plan_label default + unique lower(name), SA `select` on tenant only. Then the migration (tables, triggers, helpers, tenant columns, policies). — proof: CI `db`
+- [x] 1. **Schema + SA identity (tests first).** `020`: platform_admin RLS (own row only), phone_claim uniqueness across membership ↔ platform_admin both directions incl. updates and phone changes, backfill complete, `is_platform_admin()` gate (inactive/must-change false), tenant plan_label default + unique lower(name), SA `select` on tenant only. Then the migration (tables, triggers, helpers, tenant columns, policies). — proof: CI `db`
 - [ ] 2. **Platform SQL functions (tests first).** `021`: each `pa_*` (tenant create/update/set_status with reason, SA create/status/reset with self + last-SA guards, UA create, UA reset refusing supervisors, setup_first refusing when an SA exists) — success + one audit row (tenant-scoped where it acts on a tenant, `actor_role='platform_admin'`), denials audited for tenant users / inactive / must-change SA, idempotent repeats; read functions return nothing for non-SAs. — proof: CI `db`
 - [ ] 3. **Boundary tests.** `022`: an SA reads 0 rows from membership, audit_event (tenant users' rows), and every tenant-owned table present on the branch; SA calls to 02 `svc_ua_*` paths / `pm_*` (after rebase) are denied + audited; every `psvc_*` is service-only. Add a reusable pgTAP helper query listing tenant-owned tables (`tenant_id` column) so new tables are covered automatically. — proof: CI `db`
 - [ ] 4. **Edge Functions + API tests (tests first).** `e2e/api/platform.spec.ts` (every action, 403 for UA/SUP + audit row, compensation, idempotency, suspended tenant → its UA's next RLS read is empty and `pm_*`/user-admin writes denied, activation restores) and `platform-setup.spec.ts` (local only: no token configured → 403; wrong token → 403; right token → SA + temp password; second call → 403 `setup_closed`). Then implement D4–D5. — proof: CI `e2e-web` (api project) green; 02's API suite unchanged and green
@@ -52,6 +52,8 @@ AC-1–16 → tests (spec table); full suite green after rebase on 04; dev regre
 
 ## Deviations from plan
 - Spec says new actions "rely on 04's format rule"; replaced by the PR #6 registry (03 inserts its own actions).
+
+- Step 1: `phone_claim` lives in schema `app` (not exposed by PostgREST, no client grants) instead of `public`. The SA `tenant` select policy inlines the platform_admin check instead of calling `app.is_platform_admin()`: 02's test 004 forbids any client-executable `app` function besides the two RLS helpers. `app._ua_dupcheck` was redefined (additive) to read `phone_claim`, so 02's duplicate-phone message also covers Super Admin phones. Local pgTAP harness (PG16 + pgTAP via apt, mocked auth schema) runs 001-006 + 020 green; CI `db` is still the proof.
 
 ## Session log
 ### 2026-11-16
