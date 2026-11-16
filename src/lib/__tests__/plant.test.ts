@@ -1,7 +1,7 @@
 import { ApiError } from '@/lib/api';
 import {
   PLANT_PAGE_SIZE, PlantError, RequestIds, fetchActiveProducts, fetchLines, fetchMachine, fetchMachines, fetchPlantToday, fetchProducts, fetchRecorderNames,
-  fetchSite, fetchTargetVersions, formatPieces, formatPlantDate, isValidDate, machineStatusLabel, parsePieces, plantApi, productStatusLabel, sanitiseSearch,
+  fetchProductsByIds, fetchSite, fetchTargetVersions, fetchTenantTimezone, formatPieces, formatPlantDate, isValidDate, machineStatusLabel, parsePieces, plantApi, productStatusLabel, sanitiseSearch,
   summariseTargets, validateMachineForm, validateProductForm, validateTargetForm, type MachineQuery, type TargetVersion,
 } from '@/lib/plant';
 import { fakeDb } from '@/test/fake-db';
@@ -132,6 +132,22 @@ describe('reads', () => {
     expect(db.queries).toHaveLength(0);
     expect(await fetchRecorderNames(db.client as never, ['u1', 'u1'])).toEqual({ u1: 'Asha' });
     expect(db.queries[0].filters).toEqual([['in', 'user_id', ['u1']]]);
+  });
+});
+
+describe('more reads', () => {
+  it('reads the tenant timezone', async () => {
+    const db = fakeDb(() => ({ data: { timezone: 'Asia/Tokyo' }, error: null }));
+    expect(await fetchTenantTimezone(db.client as never)).toBe('Asia/Tokyo');
+    expect(db.queries[0].table).toBe('tenant');
+    expect(await fetchTenantTimezone(fakeDb(() => ({ data: null, error: null })).client as never)).toBeNull();
+  });
+  it('reads products by id (deduplicated, retired included) and skips the query for no ids', async () => {
+    const db = fakeDb(() => ({ data: [{ id: 'p1' }], error: null }));
+    expect(await fetchProductsByIds(db.client as never, [])).toEqual([]);
+    expect(db.queries).toHaveLength(0);
+    expect(await fetchProductsByIds(db.client as never, ['p1', 'p1'])).toEqual([{ id: 'p1' }]);
+    expect(db.queries[0].filters).toEqual([['in', 'id', ['p1']]]);
   });
 });
 

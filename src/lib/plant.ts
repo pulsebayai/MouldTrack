@@ -130,6 +130,13 @@ export async function fetchSite(client: Db): Promise<Site | null> {
   return (data as unknown as Site) ?? null;
 }
 
+/** The tenant's default timezone (offered when the site is first set up). */
+export async function fetchTenantTimezone(client: Db): Promise<string | null> {
+  const { data, error } = await client.from('tenant').select('timezone').maybeSingle();
+  if (error) throw error;
+  return (data as { timezone: string } | null)?.timezone ?? null;
+}
+
 /** The site's plant date as the server computes it (never derived from the device clock). */
 export async function fetchPlantToday(client: Db): Promise<string | null> {
   const { data, error } = await client.from('plant_today').select('plant_date').maybeSingle();
@@ -191,6 +198,14 @@ export async function fetchProduct(client: Db, id: string): Promise<Product | nu
 /** Active products for the target picker. */
 export async function fetchActiveProducts(client: Db): Promise<Product[]> {
   const { data, error } = await client.from('product').select(PRODUCT_COLUMNS).is('retired_at', null).order('code', { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as unknown as Product[];
+}
+
+/** Products by id, retired ones included (target history keeps naming a product after it is retired). */
+export async function fetchProductsByIds(client: Db, ids: string[]): Promise<Product[]> {
+  if (ids.length === 0) return [];
+  const { data, error } = await client.from('product').select(PRODUCT_COLUMNS).in('id', [...new Set(ids)]);
   if (error) throw error;
   return (data ?? []) as unknown as Product[];
 }

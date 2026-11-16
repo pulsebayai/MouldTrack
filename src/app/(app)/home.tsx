@@ -42,6 +42,9 @@ export default function Home() {
       {ctx.role === 'unit_admin' && Platform.OS === 'web' ? (
         <Button title="Users" testID="users-link" onPress={() => router.push('/users')} />
       ) : null}
+      {ctx.role === 'unit_admin' && Platform.OS === 'web' ? (
+        <Button title="Plant" testID="plant-link" onPress={() => router.push('/plant')} />
+      ) : null}
       <Button title="Change password" variant="secondary" testID="change-password-link" onPress={() => router.push('/change-password')} />
       <SignOutButton />
       {appEnv === 'development' ? (

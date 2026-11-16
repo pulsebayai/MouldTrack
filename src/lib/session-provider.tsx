@@ -7,7 +7,7 @@ export type SessionState = {
   status: 'loading' | 'ready' | 'error';
   ctx: SessionContext | null;
   appEnv: AppEnv;
-  client: Pick<SupabaseClient, 'auth' | 'from'>;
+  client: Pick<SupabaseClient, 'auth' | 'from' | 'rpc'>;
   refresh: () => Promise<void>;
   /** One-shot message for the sign-in screen (D14: after a password change the user signs in again). */
   notice: SignInNotice | null;
