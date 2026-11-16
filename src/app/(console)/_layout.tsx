@@ -17,7 +17,7 @@ function NavItem({ id, label, selected, onPress }: { id: string; label: string; 
     <Pressable
       testID={id}
       accessibilityRole="button"
-      accessibilityLabel={label}
+      accessibilityLabel={selected ? `${label} Current page` : label} // the visible words must be part of the accessible name
       accessibilityState={{ selected }}
       onPress={onPress}
       style={{
