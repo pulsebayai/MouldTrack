@@ -6,7 +6,7 @@ const local = { APP_ENV: 'local', SUPABASE_URL: 'http://127.0.0.1:15321' };
 
 describe('fixtures-reset 03 Super Admin fixtures (D8)', () => {
   it('defines two Super Admins in the canonical block, with emails derived from their phones', () => {
-    expect(SUPER_ADMINS.map((s) => s.phone)).toEqual(['+919000000090', '+919000000091']);
+    expect(SUPER_ADMINS.map((s) => s.phone)).toEqual(['+919000000098', '+919000000099']);
     for (const s of SUPER_ADMINS) {
       expect(isCanonicalPhone(s.phone)).toBe(true);
       expect(s.email).toBe(`${s.phone.slice(3)}@phone.mouldtrack.invalid`);

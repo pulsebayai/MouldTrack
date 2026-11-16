@@ -139,10 +139,10 @@ export const throwawayEmpId = () => `T${Math.random().toString(36).slice(2, 9).t
 
 export const created: string[] = [];
 
-// ---- Platform Super Admin fixtures (03, D8): canonical block +91 90000 00090-00091 -------------------------------------------------------
+// ---- Platform Super Admin fixtures (03, D8): canonical block +91 90000 00098-00099 -------------------------------------------------------
 export const SA_FIXTURES = {
-  sa1: { phone: '+919000000090', name: 'Fixture Super Admin 1' },
-  sa2: { phone: '+919000000091', name: 'Fixture Super Admin 2' },
+  sa1: { phone: '+919000000098', name: 'Fixture Super Admin 1' },
+  sa2: { phone: '+919000000099', name: 'Fixture Super Admin 2' },
 } as const;
 
 /** Idempotently (re)creates a fixture Super Admin in its canonical state (active, normal password) and returns its user id. */

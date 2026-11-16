@@ -25,9 +25,9 @@ begin
       ('30000000-0000-4000-a000-0000000000e2'::uuid, '9000000007'),
       ('30000000-0000-4000-a000-0000000000e3'::uuid, '9000000008'),
       ('30000000-0000-4000-a000-0000000000e4'::uuid, '9000000009'),
-      -- 03: fixture Platform Super Admins (+91 90000 00090-91)
-      ('30000000-0000-4000-a000-0000000000f0'::uuid, '9000000090'),
-      ('30000000-0000-4000-a000-0000000000f1'::uuid, '9000000091')
+      -- 03: fixture Platform Super Admins (+91 90000 00098-99)
+      ('30000000-0000-4000-a000-0000000000f0'::uuid, '9000000098'),
+      ('30000000-0000-4000-a000-0000000000f1'::uuid, '9000000099')
     ) as t(id, digits)
   loop
     insert into auth.users (
@@ -57,8 +57,8 @@ begin
 
   -- 03: Super Admins are not tenant members; they live in platform_admin. Plan labels on fixture tenants.
   insert into public.platform_admin (user_id, full_name, phone_e164, must_change_password, temp_password_expires_at) values
-    ('30000000-0000-4000-a000-0000000000f0', 'Fixture Super Admin 1', '+919000000090', false, null),
-    ('30000000-0000-4000-a000-0000000000f1', 'Fixture Super Admin 2', '+919000000091', false, null);
+    ('30000000-0000-4000-a000-0000000000f0', 'Fixture Super Admin 1', '+919000000098', false, null),
+    ('30000000-0000-4000-a000-0000000000f1', 'Fixture Super Admin 2', '+919000000099', false, null);
   update public.tenant set plan_label = 'active' where name in ('e2e org A', 'e2e org U');
 end $$;
 

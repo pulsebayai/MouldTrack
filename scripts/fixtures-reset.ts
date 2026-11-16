@@ -97,8 +97,8 @@ export const TENANT_PLANS: Record<string, 'trial' | 'active'> = { 'e2e org A': '
 
 /** 03: Platform Super Admins (not tenant members). Canonical block, same safety rules as USERS. */
 export const SUPER_ADMINS: Fixture[] = [
-  fx('sa1', '+919000000090', 'Fixture Super Admin 1', '', null),
-  fx('sa2', '+919000000091', 'Fixture Super Admin 2', '', null),
+  fx('sa1', '+919000000098', 'Fixture Super Admin 1', '', null),
+  fx('sa2', '+919000000099', 'Fixture Super Admin 2', '', null),
 ];
 
 /** Tenants created by 03's tests are named with this prefix; reset suspends them (tenants are never deleted). */

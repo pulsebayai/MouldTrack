@@ -1,5 +1,5 @@
 // 03 AC-3..14 through the platform Edge Function: every action, role checks with audit, idempotency, compensation, suspension
-// effects on a tenant's users, and the Super Admin data boundary over PostgREST. Own fixtures: Super Admins +91 90000 00090-91,
+// effects on a tenant's users, and the Super Admin data boundary over PostgREST. Own fixtures: Super Admins +91 90000 00098-99,
 // org "e2e api org 7" for tenant-user denials, throwaway tenants "e2e t3 ..." (never deleted; fixtures-reset suspends them).
 import { expect, test } from '@playwright/test';
 import {

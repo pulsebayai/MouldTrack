@@ -117,8 +117,8 @@ describe('tenant detail', () => {
 
 describe('super admins', () => {
   const rows = [
-    { user_id: 'sa1', full_name: 'Me', phone_masked: '+91******0090', status: 'active', must_change_password: false, is_self: true },
-    { user_id: 'sa2', full_name: 'Other', phone_masked: '+91******0091', status: 'active', must_change_password: false, is_self: false },
+    { user_id: 'sa1', full_name: 'Me', phone_masked: '+91******0098', status: 'active', must_change_password: false, is_self: true },
+    { user_id: 'sa2', full_name: 'Other', phone_masked: '+91******0099', status: 'active', must_change_password: false, is_self: false },
   ];
   it('offers no actions on your own row', async () => {
     m.fetchSuperAdmins.mockResolvedValue(rows);

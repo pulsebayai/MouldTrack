@@ -5,7 +5,7 @@ const calls: [Table, string, string][] = [];
 
 function fakeClient(opts: { session?: boolean; membership?: unknown; platform?: unknown; platformError?: Error }): SessionClient {
   return {
-    auth: { getSession: async () => ({ data: { session: opts.session === false ? null : { user: { id: 'sa1', email: '9000000090@phone.mouldtrack.invalid' } } }, error: null }) },
+    auth: { getSession: async () => ({ data: { session: opts.session === false ? null : { user: { id: 'sa1', email: '9000000098@phone.mouldtrack.invalid' } } }, error: null }) },
     from: (table: Table) => ({
       select: () => ({
         eq: (col: string, val: string) => {
@@ -22,7 +22,7 @@ function fakeClient(opts: { session?: boolean; membership?: unknown; platform?: 
   } as unknown as SessionClient;
 }
 
-const user = { id: 'sa1', email: '9000000090@phone.mouldtrack.invalid' };
+const user = { id: 'sa1', email: '9000000098@phone.mouldtrack.invalid' };
 const future = new Date(Date.now() + 3600_000).toISOString();
 const past = new Date(Date.now() - 3600_000).toISOString();
 beforeEach(() => (calls.length = 0));
