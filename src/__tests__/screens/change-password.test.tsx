@@ -68,25 +68,32 @@ describe('Change password screen (AC-3, AC-13)', () => {
     expect(mockChange).not.toHaveBeenCalled();
   });
 
-  it('submits current + new, refreshes the session and lands on Home when the change was forced', async () => {
+  // D14 (owner-approved 2026-11-16): Auth ends every session on a password change, so the client signs out locally and
+  // asks for a fresh sign-in, for the forced change and for the change from Home alike.
+  it.each([
+    ['forced change', forced],
+    ['change from Home', member],
+  ])('after a successful %s: signs out locally, shows the sign-in notice, and does not go Home', async (_n, ctx) => {
     mockChange.mockResolvedValue({ ok: true });
+    const { value } = await renderWithSession(<ChangePassword />, { ctx });
+    await fillForm('Temp-pass-1234', 'Brand-new-77x');
+    await fireEvent.press(screen.getByTestId('change-password-submit'));
+    await waitFor(() => expect(mockChange).toHaveBeenCalledWith(value.client, 'Temp-pass-1234', 'Brand-new-77x'));
+    await waitFor(() => expect((value.client.auth.signOut as jest.Mock)).toHaveBeenCalledWith({ scope: 'local' }));
+    expect(value.setNotice).toHaveBeenCalledWith('password_changed');
+    await waitFor(() => expect(value.refresh).toHaveBeenCalled());
+    expect(mockReplace).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('password-changed')).toBeNull();
+  });
+
+  it('a failed change does not sign out and sets no notice', async () => {
+    mockChange.mockRejectedValue(new ApiError(403, 'current_password', 'Current password is incorrect'));
     const { value } = await renderWithSession(<ChangePassword />, { ctx: forced });
     await fillForm();
     await fireEvent.press(screen.getByTestId('change-password-submit'));
-    await waitFor(() => expect(mockChange).toHaveBeenCalledWith(value.client, 'Temp-pass-1234', 'Brand-new-77x'));
-    await waitFor(() => expect(value.refresh).toHaveBeenCalled());
-    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/home'));
-  });
-
-  it('for a signed-in member shows a confirmation instead of redirecting, and offers Back', async () => {
-    mockChange.mockResolvedValue({ ok: true });
-    await renderWithSession(<ChangePassword />, { ctx: member });
-    await fillForm('Current-pass-1', 'Brand-new-77x');
-    await fireEvent.press(screen.getByTestId('change-password-submit'));
-    expect(await screen.findByTestId('password-changed')).toHaveTextContent('Password changed');
-    expect(mockReplace).not.toHaveBeenCalled();
-    await fireEvent.press(screen.getByTestId('change-password-done'));
-    expect(mockReplace).toHaveBeenCalledWith('/home');
+    await screen.findByTestId('current-password-error');
+    expect(value.client.auth.signOut).not.toHaveBeenCalled();
+    expect(value.setNotice).not.toHaveBeenCalled();
   });
 
   it('forced users have no Back button; members do', async () => {

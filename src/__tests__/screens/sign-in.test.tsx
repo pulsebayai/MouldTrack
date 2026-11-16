@@ -141,4 +141,21 @@ describe('Sign-in screen', () => {
     expect(screen.getByLabelText('Hide password')).toBeTruthy();
     expect(screen.getByLabelText('Password').props.secureTextEntry).toBe(false);
   });
+
+  it('shows the password-changed notice as text when one is set (D14)', async () => {
+    await renderWithSession(<SignIn />, { notice: 'password_changed' });
+    expect(screen.getByTestId('sign-in-notice')).toHaveTextContent('Password changed. Sign in with your new password.');
+  });
+
+  it('shows no notice by default', async () => {
+    await renderWithSession(<SignIn />);
+    expect(screen.queryByTestId('sign-in-notice')).toBeNull();
+  });
+
+  it('clears the notice once the user submits', async () => {
+    const { value } = await renderWithSession(<SignIn />, { notice: 'password_changed' });
+    await fill();
+    await fireEvent.press(screen.getByTestId('sign-in-submit'));
+    await waitFor(() => expect(value.setNotice).toHaveBeenCalledWith(null));
+  });
 });

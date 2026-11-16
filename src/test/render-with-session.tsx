@@ -19,6 +19,8 @@ export async function renderWithSession(ui: ReactElement, state: Partial<Session
     appEnv: 'local',
     client: fakeAuthClient() as unknown as SessionState['client'],
     refresh: jest.fn(async () => {}),
+    notice: null,
+    setNotice: jest.fn(),
     ...state,
   };
   const utils = await render(<SessionStateContext.Provider value={value}>{ui}</SessionStateContext.Provider>);

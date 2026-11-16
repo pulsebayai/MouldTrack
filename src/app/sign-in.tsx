@@ -1,33 +1,47 @@
-import { Redirect } from 'expo-router';
-import { useState } from 'react';
-import { Text } from 'react-native';
-import { Button, ErrorText, Field, PasswordField, Screen, colors } from '@/components/ui';
-import { toUserMessage } from '@/lib/errors';
-import { normalisePhone, phoneToAuthEmail } from '@/lib/identity';
-import { useSession } from '@/lib/session-provider';
+import { Redirect } from "expo-router";
+import { useState } from "react";
+import { Text } from "react-native";
+import {
+  Button,
+  ErrorText,
+  Field,
+  PasswordField,
+  Screen,
+  colors,
+} from "@/components/ui";
+import { toUserMessage } from "@/lib/errors";
+import { normalisePhone, phoneToAuthEmail } from "@/lib/identity";
+import { useSession } from "@/lib/session-provider";
 
 export default function SignIn() {
-  const { ctx, client, refresh } = useSession();
-  const [phone, setPhone] = useState('');
-  const [password, setPassword] = useState('');
+  const { ctx, client, refresh, notice, setNotice } = useSession();
+  const [phone, setPhone] = useState("");
+  const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [fieldErrors, setFieldErrors] = useState<{ phone?: string; password?: string }>({});
+  const [fieldErrors, setFieldErrors] = useState<{
+    phone?: string;
+    password?: string;
+  }>({});
 
   if (ctx) return <Redirect href="/" />;
 
   async function onSubmit() {
     setError(null);
+    if (notice) setNotice(null);
     const errs: { phone?: string; password?: string } = {};
     const normalised = phone.trim() ? normalisePhone(phone) : null;
-    if (!phone.trim()) errs.phone = 'Enter your phone number';
+    if (!phone.trim()) errs.phone = "Enter your phone number";
     else if (normalised && !normalised.ok) errs.phone = normalised.message;
-    if (!password) errs.password = 'Enter your password';
+    if (!password) errs.password = "Enter your password";
     setFieldErrors(errs);
     if (errs.phone || errs.password || !normalised || !normalised.ok) return; // nothing is sent
     setSubmitting(true);
     try {
-      const { error: authError } = await client.auth.signInWithPassword({ email: phoneToAuthEmail(normalised.e164), password });
+      const { error: authError } = await client.auth.signInWithPassword({
+        email: phoneToAuthEmail(normalised.e164),
+        password,
+      });
       if (authError) {
         setError(toUserMessage(authError));
         return;
@@ -42,10 +56,25 @@ export default function SignIn() {
 
   return (
     <Screen testID="sign-in-screen">
-      <Text accessibilityRole="header" style={{ fontSize: 28, fontWeight: '700', color: colors.primary }}>
+      <Text
+        accessibilityRole="header"
+        style={{ fontSize: 28, fontWeight: "700", color: colors.primary }}
+      >
         MouldTrack
       </Text>
-      <Text style={{ fontSize: 16, color: colors.muted }}>Sign in to your manufacturing unit</Text>
+      <Text style={{ fontSize: 16, color: colors.muted }}>
+        Sign in to your manufacturing unit
+      </Text>
+      {notice === "password_changed" ? (
+        <Text
+          testID="sign-in-notice"
+          accessibilityRole="alert"
+          accessibilityLiveRegion="polite"
+          style={{ fontSize: 16, fontWeight: "600", color: colors.text }}
+        >
+          Password changed. Sign in with your new password.
+        </Text>
+      ) : null}
       <Field
         label="Phone number"
         testID="phone"

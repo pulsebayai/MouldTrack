@@ -17,6 +17,7 @@ Locks held: architecture + schema (roadmap, 2026-11-16).
 - D12 Sentry `beforeSend` drops request bodies/breadcrumb data for `/functions/v1/*` and strips keys matching `/phone|password|full_name|employee_id/i`.
 
 - D13 **Denials are returned, not raised** (resolves step 3 blocker). Authorisation denials (`not_allowed`: role, cross_tenant, inactive actor/suspended tenant) and an expired temporary password (`expired`) **commit** an `access.denied` row and return `{ok:false, code}` (jsonb); the Edge Function maps `not_allowed` → 403 "Not allowed" and `expired` → 403 with the AC-4 message. Success returns `{ok:true, ...}`. Validation, duplicate and guard failures still `raise` P0001 with `detail` `{code, field?}` (nothing to audit; rollback is correct). Reason: denial + audit stay atomic; option B could lose the audit between two calls. Denied rows store `request_id = null` (each retry is audited again; the unique index guards successful events only). AC-6 clarification: "no data" means no tenant data; an inactive user may still read their **own** membership row so the client can show the no-access state (01 behaviour, kept).
+- D14 **After a successful password change (forced or from Home) the client signs out locally and shows the sign-in screen with the notice "Password changed. Sign in with your new password."** Reason: Auth revokes all sessions on admin password update, so the old session would fail at the next refresh (≤ 1 h). Owner-approved 2026-11-16.
 
 ## Files that change
 - `supabase/migrations/20261116000000_roles_profile_audit.sql` — new — membership columns, helpers, RLS, audit_event, service-only functions
@@ -62,6 +63,7 @@ Locks held: architecture + schema (roadmap, 2026-11-16).
   - **R8 (nits 5–6) SQL:** tenant lock `for no key update`; RLS policies use `(select app.current_tenant_id())` / `(select app."current_role"())`. pgTAP unchanged and green.
   - **R9 (nits 8–9) CI:** `static` job runs `deno check` + `deno lint` on `supabase/functions` (denoland/setup-deno, pinned major 2). `E2E_REQUIRE_API=1` whenever the regression target is dev.
   - **R10 (nits 10–12) docs:** architecture "Known debt": synthetic `.invalid` identity, users-search index not added (fine ≤ 500 users), staging hosted checks at R1; intent note that fixture phones are real-format but never contacted. Deviations line for unlisted test/support files.
+  - **R11 (D14) Sign in again after a password change.** Screen test (notice shown, signed out locally, no stale session, no navigation Home), web e2e `change-password.spec` (forced and from-Home change → sign-in notice → new password → Home), Maestro `first-sign-in.yaml` the same, API test asserts the caller's old refresh token fails. `spec.md` AC-3/AC-13 updated.
   - Proof: PR CI green on the last code commit; one regression dispatch-equivalent on dev is **not** possible without temporary triggers → re-add the dev-only `pull_request` trigger on regression.yml + deploy-dev.yml for this step, prove, remove again (log both).
 - [ ] 12. **Review + PR.** Remove temporary triggers; run `sdlc-reviewer`; fix Important findings; full suite green on the last code commit; open PR with AC → test → result table. — proof: PR CI green, reviewer findings recorded below
 
@@ -124,7 +126,7 @@ Locks held: architecture + schema (roadmap, 2026-11-16).
 - **12a unlisted files:** `e2e/evidence.ts`, `e2e/api/review-fixes.spec.ts`, `supabase/tests/005_review_fixes.test.sql`, `scripts/consistency-check.ts` (+ test), `scripts/__tests__/playwright-evidence.test.ts`. The scratch Postgres harness got an `auth.sessions` stub (local only; CI uses the real table).
 - **12a: temporary dev-only `pull_request` triggers re-added** to `deploy-dev.yml` and `regression.yml` (identical to 867773a, incl. the deploy wait) for the R-item proof run; removed again in a separate commit afterwards (see the session log for SHAs).
 - **12a: `rbac.spec.ts` assertions** `toEqual({ message: 'Not allowed' })` became `toEqual({ code: 'not_allowed', message: 'Not allowed' })` (R5: 403 bodies carry the code; still exact equality, and the no-existence-leak equality of cross-tenant vs unknown id is unchanged).
-- **12a R1 finding:** the own-session-survives assertion was dropped from `review-fixes.spec.ts` (see `Blocked - needs Opus` in the session log).
+- **12a R1 finding / R11:** CI showed Auth's admin password update ends the caller's own session too; resolved by Opus as D14/R11 (owner-approved): the own-session assertion became a positive "old refresh token fails" assertion. Existing tests changed by R11 (approved requirement change): `change-password.test.tsx` success cases (Home redirect / confirmation replaced by sign-out + notice), `change-password.spec.ts` forced and from-Home flows, Maestro `first-sign-in.yaml`; `SessionState` gained `notice`/`setNotice`.
 
 ## Session log
 ### 2026-11-16

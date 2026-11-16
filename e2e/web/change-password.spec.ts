@@ -50,12 +50,14 @@ test.describe('AC-3 first sign-in (fresh fixture U4)', () => {
     await page.getByLabel('Confirm new password', { exact: true }).fill('Fresh-start-2026');
     await page.getByTestId('change-password-submit').click();
 
-    await expect(page).toHaveURL(/\/home$/);
-    await expect(page.getByTestId('home-tenant')).toHaveText('e2e org U');
-    await page.locator('[data-testid="sign-out"]:visible').click();
+    // D14: Auth ends every session on a password change, so the user is returned to sign-in with a notice.
     await expectOnSignIn(page);
+    await expect(page.getByTestId('sign-in-notice')).toHaveText('Password changed. Sign in with your new password.');
+    await expect(page.getByTestId('home-tenant')).toHaveCount(0);
     await signIn(page, USERS.u4, 'Fresh-start-2026');
     await expect(page).toHaveURL(/\/home$/);
+    await expect(page.getByTestId('home-tenant')).toHaveText('e2e org U');
+    await expect(page.getByTestId('sign-in-notice')).toHaveCount(0);
   });
 
   test('a wrong current password is shown next to the field and nothing changes', async ({ page }) => {
@@ -104,11 +106,9 @@ test.describe('AC-13 self-service change from Home', () => {
     await page.getByLabel('New password', { exact: true }).fill('Self-service-2026');
     await page.getByLabel('Confirm new password', { exact: true }).fill('Self-service-2026');
     await page.getByTestId('change-password-submit').click();
-    await expect(page.getByTestId('password-changed')).toBeVisible();
-    await page.getByTestId('change-password-done').click();
-    await expect(page).toHaveURL(/\/home$/);
-    await page.locator('[data-testid="sign-out"]:visible').click();
+    // D14: same as the forced change: back to sign-in with the notice, then the new password lands on Home.
     await expectOnSignIn(page);
+    await expect(page.getByTestId('sign-in-notice')).toHaveText('Password changed. Sign in with your new password.');
     await signIn(page, u.phone, 'Self-service-2026');
     await expect(page.getByTestId('home-tenant')).toHaveText('e2e org U');
   });
