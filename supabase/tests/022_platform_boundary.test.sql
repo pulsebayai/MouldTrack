@@ -3,7 +3,7 @@
 -- added by a later feature fails this test until it is covered. Self-contained; rolled back. Phones +91 90000 22xxx.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(23);
+select plan(25);
 
 insert into auth.users (id, email, aud, role) values
   ('00000000-0000-4000-ba00-0000000000a1', 'tap22-sa@example.test', 'authenticated', 'authenticated'),
@@ -25,13 +25,15 @@ select app.ua_set_status('00000000-0000-4000-ba00-0000000000b1', gen_random_uuid
 select app.pa_tenant_update('00000000-0000-4000-ba00-0000000000a1', gen_random_uuid(), '1f000000-0000-4000-ba00-00000000000a', 'tap22 org X', 'Asia/Kolkata', 'trial');
 select app.pa_tenant_update('00000000-0000-4000-ba00-0000000000a1', gen_random_uuid(), '1f000000-0000-4000-ba00-00000000000a', 'tap22 org X renamed', null, null);
 
--- Reusable discovery: every public table that carries tenant_id (tenant itself is the tenant-level fact an SA may read).
+-- Reusable discovery: every public table, view and materialised view that carries tenant_id (tenant itself is the tenant-level fact an SA may read).
 create function public.tap22_tenant_tables() returns setof text language sql stable as $$
-  select c.table_name::text from information_schema.columns c
-  join information_schema.tables t on t.table_schema = c.table_schema and t.table_name = c.table_name and t.table_type = 'BASE TABLE'
-  where c.table_schema = 'public' and c.column_name = 'tenant_id' order by 1
+  select c.relname::text from pg_class c
+  join pg_namespace n on n.oid = c.relnamespace and n.nspname = 'public'
+  where c.relkind in ('r', 'p', 'v', 'm')
+    and exists (select 1 from pg_attribute a where a.attrelid = c.oid and a.attname = 'tenant_id' and a.attnum > 0 and not a.attisdropped)
+  order by 1
 $$;
--- Rows the caller can read across every tenant-owned table, as "table:count" pairs with a non-zero count.
+-- Rows the caller can read across every tenant-owned relation, as "name:count" pairs with a non-zero count.
 create function public.tap22_visible() returns text language plpgsql as $$
 declare t text; n bigint; out text := '';
 begin
@@ -41,18 +43,31 @@ begin
   end loop;
   return btrim(out);
 end $$;
-grant execute on function public.tap22_tenant_tables(), public.tap22_visible() to authenticated;
+-- Relations the caller reads ZERO rows from (R1: the boundary test is only meaningful when every table has rows to hide).
+create function public.tap22_unseen() returns text language plpgsql as $$
+declare t text; n bigint; out text := '';
+begin
+  for t in select * from public.tap22_tenant_tables() loop
+    execute format('select count(*) from public.%I', t) into n;
+    if n = 0 then out := out || t || ' '; end if;
+  end loop;
+  return btrim(out);
+end $$;
+grant execute on function public.tap22_tenant_tables(), public.tap22_visible(), public.tap22_unseen() to authenticated;
 
 select ok((select count(*) from public.tap22_tenant_tables()) >= 2, 'discovery finds the tenant-owned tables (membership, audit_event at least)');
 select is((select count(*)::int from public.tap22_tenant_tables() t(name)
-           where not (select relrowsecurity and relforcerowsecurity from pg_class where oid = ('public.' || quote_ident(t.name))::regclass)), 0,
+           where (select relkind from pg_class where oid = ('public.' || quote_ident(t.name))::regclass) in ('r', 'p')
+             and not (select relrowsecurity and relforcerowsecurity from pg_class where oid = ('public.' || quote_ident(t.name))::regclass)), 0,
   'every tenant-owned table has RLS enabled and forced');
+select is(public.tap22_unseen(), '', 'R1: every tenant-owned table, view and materialised view has at least one row (empty ones are listed here; add fixtures)');
 select ok((select count(*) from public.membership) >= 2 and (select count(*) from public.audit_event) >= 4, 'fixtures: memberships and audit events exist');
 
 -- The Unit Admin sees them (control) ----------------------------------------------------------------------------------------------------------
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-ba00-0000000000b1","role":"authenticated"}', true);
 select ok(public.tap22_visible() like '%membership:%' and public.tap22_visible() like '%audit_event:%', 'control: a Unit Admin does see membership and audit_event');
+select is(public.tap22_unseen(), '', 'R1 control: a Unit Admin sees at least one row in every tenant-owned relation');
 
 -- The Super Admin sees none ----------------------------------------------------------------------------------------------------------------------
 select set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-ba00-0000000000a1","role":"authenticated"}', true);
