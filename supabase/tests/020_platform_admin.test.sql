@@ -37,7 +37,7 @@ select throws_ok($$ insert into public.platform_admin (user_id, full_name, phone
 -- phone_claim ---------------------------------------------------------------------------------------------------------------
 select is((select count(*)::int from public.membership m left join app.phone_claim c on c.user_id = m.user_id and c.phone_e164 = m.phone_e164 and c.kind = 'membership' where c.user_id is null), 0,
   'every membership has a phone claim (backfill + trigger)');
-select is((select count(*)::int from app.phone_claim where kind = 'platform_admin'), 3, 'every platform_admin has a phone claim');
+select is((select count(*)::int from app.phone_claim where kind = 'platform_admin' and user_id::text like '00000000-0000-4000-b800-%'), 3, 'every platform_admin has a phone claim');
 select throws_ok($$ insert into public.platform_admin (user_id, full_name, phone_e164) values ('00000000-0000-4000-b800-0000000000c1', 'Clash', '+919000020101') $$, '23505', null,
   'an SA cannot take a phone that a member already has');
 select throws_ok($$ insert into public.membership (tenant_id, user_id, role, full_name, employee_id, phone_e164, must_change_password)

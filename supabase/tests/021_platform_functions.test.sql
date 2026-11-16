@@ -184,7 +184,7 @@ select is((app.pa_sa_set_status('00000000-0000-4000-b900-0000000000a1', gen_rand
 select is((app.pa_sa_set_status('00000000-0000-4000-b900-0000000000a2', gen_random_uuid(), '00000000-0000-4000-b900-0000000000a1', 'inactive'))->>'ok', 'true', 'sa status: a2 deactivates a1');
 select is(pg_temp.err($$ select app.pa_sa_set_status('00000000-0000-4000-b900-0000000000a2', gen_random_uuid(), '00000000-0000-4000-b900-0000000000a2', 'inactive') $$) @> '{"code":"guard","field":"self"}', true, 'sa status: the last acting SA cannot deactivate themself');
 select is(app.pa_sa_set_status('00000000-0000-4000-b900-0000000000a1', gen_random_uuid(), '00000000-0000-4000-b900-0000000000a2', 'inactive'), '{"ok": false, "code": "not_allowed"}'::jsonb, 'sa status: the deactivated a1 cannot remove a2 either');
-select is((select count(*)::int from public.platform_admin where status = 'active' and must_change_password = false), 1, 'sa status: exactly one usable active SA remains');
+select is((select count(*)::int from public.platform_admin where status = 'active' and must_change_password = false and user_id::text like '00000000-0000-4000-b900-%'), 1, 'sa status: exactly one usable active SA remains');
 -- last_admin guard fires when the only other active SA is the target (deactivate while the caller is the sole active one is impossible, so
 -- reactivate a1 then check the guard text via a direct row state: a2 active, a1 target active, no third active)
 update public.platform_admin set status = 'inactive' where user_id in ('00000000-0000-4000-b900-0000000000a4', '00000000-0000-4000-b900-0000000000e3');
@@ -243,8 +243,8 @@ select set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-b900-0000000
 select ok((select count(*) from public.pa_tenant_summaries()) >= 3, 'summaries: an SA sees the tenants');
 select results_eq($$ select name, status, plan_label, active_users, active_unit_admins from public.pa_tenant_summaries('org x2') $$,
   $$ values ('TAP21 ORG X2'::text, 'active'::text, 'trial'::text, 3, 2) $$, 'summaries: search by name with user counts (inactive members not counted)');
-select is((select count(*)::int from public.pa_tenant_summaries(null, 'suspended')), 0, 'summaries: status filter');
-select is((select count(*)::int from public.pa_tenant_summaries(null, null, 'active')), 1, 'summaries: plan filter');
+select is((select count(*)::int from public.pa_tenant_summaries('tap21', 'suspended')), 0, 'summaries: status filter');
+select is((select count(*)::int from public.pa_tenant_summaries('zone co', null, 'active')), 1, 'summaries: plan filter');
 select is((select count(*)::int from public.pa_tenant_summaries('%')), 0, 'summaries: LIKE wildcards in the search are literal');
 select is((select count(*)::int from public.pa_tenant_summaries(null, null, null, 5)), 0, 'summaries: a page past the end is empty');
 select is((select max(total_count)::int from public.pa_tenant_summaries()), (select count(*)::int from public.tenant), 'summaries: total_count is the full match count');
