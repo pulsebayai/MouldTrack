@@ -1,0 +1,76 @@
+# Plan: Tenancy and roles
+Spec: ./spec.md · Status: approved · Date: 2026-11-16
+Locks held: architecture + schema (roadmap, 2026-11-16).
+
+## Decisions (Opus, made here so no step needs a design call)
+- D1 **Shared identity module** lives once in `supabase/functions/_shared/identity.ts` (pure TS, no imports, no Deno APIs) and is re-exported by `src/lib/identity.ts` for the app and Jest. Contents: `normalisePhone`, `phoneToAuthEmail`, `authEmailToPhone`, `passwordPolicy`, `maskPhone`, `generateTempPassword(randomBytes)` (CSPRNG injected: `crypto.getRandomValues` in Deno, `expo-crypto`/node `crypto` in tests).
+- D2 **Fixture phone block widened:** `+91 90000 00001–00099` = canonical fixtures (seed + fixtures-reset); `+91 90000 10000–99999` = throwaway users created by tests (random per test). `fixtures-reset` deletes every non-canonical user whose membership is in a fixture tenant **or** whose auth email is in the block. Supersedes spec's "00001–00099" wording (recorded under Deviations when built).
+- D3 **Mutation tests use their own tenant** `e2e org U` (UA `U1`, UA `U2`, SUP `U3`, plus a "fresh" must-change user `U4`). Fixtures in orgs A/B/S stay read-only so 01's tests keep their meaning. Last-UA and concurrency guards are proven in pgTAP (rollback) and in API tests on org U only.
+- D4 **Two-step writes:** create = SQL `app.ua_check_create` (validate + authorise, no write) → `auth.admin.createUser` → SQL `app.ua_create_user` (re-check + insert + audit; same txn) → on SQL failure `auth.admin.deleteUser`. Phone change = SQL check → `updateUserById(email)` → SQL `ua_update_user` → on failure restore old email. Status = SQL `ua_set_status` first, then ban/unban; on Auth failure call SQL again to revert and return 500.
+- D5 **Change password** (`account`): load own membership via service client → refuse if temp expired (AC-4) → verify `current_password` with a throwaway anon-client `signInWithPassword` (then sign that session out) → `passwordPolicy` → `updateUserById(password)` → SQL `app.account_password_changed` (clears flag + expiry, audit).
+- D6 **Banned/inactive sign-in errors** from Auth ("User is banned", invalid credentials) map to the single generic sign-in message in `src/lib/errors.ts`.
+- D7 **Functions run in PR CI:** e2e job starts Supabase with edge runtime (remove `edge-runtime` from that job's exclude list only). If `supabase start` does not serve `supabase/functions` on CLI 3.1.0, the step runs `npx supabase functions serve --no-verify-jwt=false &` and waits on `/functions/v1/account` (OPTIONS 204) — no other fallback.
+- D8 **CORS:** functions allow `ALLOWED_ORIGINS` (comma list, env) plus `http://localhost:8081`/`http://127.0.0.1:8081`. deploy-dev sets `ALLOWED_ORIGINS=https://mouldtrack--dev.expo.app`.
+- D9 **Hosted Auth config as code:** `scripts/auth-config.mjs --check|--apply --ref <ref>` via Management API (`SUPABASE_ACCESS_TOKEN`): `disable_signup=true`, `password_min_length=10`, `password_required_characters` = letters+digits. deploy-dev runs `--apply` for dev; nightly runs `--check` for the target; staging gets `--apply` at the R1 release. If the Free plan rejects a field, log `Blocked - needs Opus` (the function still enforces the policy).
+- D10 **API tests** are a Playwright project `api` (`e2e/api/*.spec.ts`, `request` fixture, no browser) so they share reporters/evidence. They run in PR CI (local) and nightly (dev).
+- D11 **a11y scan:** add devDependency `@axe-core/playwright`; Users and Change-password screens must have 0 serious/critical violations.
+- D12 Sentry `beforeSend` drops request bodies/breadcrumb data for `/functions/v1/*` and strips keys matching `/phone|password|full_name|employee_id/i`.
+
+## Files that change
+- `supabase/migrations/20261116000000_roles_profile_audit.sql` — new — membership columns, helpers, RLS, audit_event, service-only functions
+- `supabase/tests/002_membership_profile.test.sql`, `003_audit_event.test.sql`, `004_user_admin_functions.test.sql` — new
+- `supabase/tests/001_tenant_isolation.test.sql` — modified only if inserts need the new NOT NULL columns (no assertion changes)
+- `supabase/seed.sql` — modified — phone identities, org U, profile columns
+- `supabase/config.toml` — modified — signup off, password policy, `[functions.*]` verify_jwt
+- `supabase/functions/_shared/{identity,http,clients,errors}.ts`, `supabase/functions/user-admin/index.ts`, `supabase/functions/account/index.ts` — new
+- `src/lib/identity.ts` (+ `__tests__/identity.test.ts`) — new; `src/lib/api.ts` (+ test) — new (typed function calls, request ids)
+- `src/lib/session.ts`, `session-provider.tsx`, `errors.ts`, `sentry.ts` (+ their tests) — modified
+- `src/app/sign-in.tsx`, `src/app/(app)/home.tsx`, `src/app/(app)/_layout.tsx` — modified; `src/app/(app)/change-password.tsx`, `src/app/(app)/users/index.tsx`, `users/new.tsx`, `users/[id].tsx` — new; `src/components/ui.tsx` — modified (TextField with error, ConfirmDialog, StatusLabel)
+- `src/__tests__/screens/{sign-in,home}.test.tsx` — modified (phone field); `change-password.test.tsx`, `users.test.tsx`, `user-form.test.tsx` — new
+- `scripts/fixtures-reset.ts` (+ `scripts/__tests__`) — modified; `scripts/auth-config.mjs` (+ test), `scripts/orphan-check.ts` — new
+- `e2e/web/fixtures.ts`, `auth.spec.ts`, `smoke.spec.ts` — modified; `e2e/web/users.spec.ts`, `change-password.spec.ts` — new; `e2e/api/user-admin.spec.ts`, `account.spec.ts`, `rbac.spec.ts` — new
+- `e2e/maestro/{sign-in,bad-password,relaunch,sign-out}.yaml` — modified (phone); `e2e/maestro/first-sign-in.yaml` — new
+- `playwright.config.ts` — modified (projects `api`, `e2e`, `smoke` with own testDirs); `package.json` — modified (`@axe-core/playwright`, script `test:api` alias)
+- `.github/workflows/ci.yml` (e2e job edge runtime), `deploy-dev.yml` (functions deploy, secrets, auth config), `regression.yml` (hosted checks: auth config, functions present, orphan users) — modified
+- `sdlc/product/architecture.md`, `CLAUDE.md` — modified (lock held; step 11)
+
+## Migrations
+`20261116000000_roles_profile_audit.sql` (one file, schema lock 02). Additive; backfills existing dev fixture rows (`full_name='Fixture'`, `employee_id='FX-'||left(id::text,8)`, `phone_e164` = `+9190000` + 5-digit sequence, `must_change_password=false`) before adding NOT NULL/unique constraints.
+
+## Steps
+- [ ] 1. **Identity module (tests first).** Write `src/lib/__tests__/identity.test.ts` (normalise: `98765 43210`, `098765-43210`, `+91 9876543210` → `+919876543210`; rejects `5876543210`, 9 digits, letters; mask → `+91******3210`; email mapping round-trip; policy: <10, no digit, no letter, = current rejected; temp password 12 chars, alphabet, has letter+digit, 1 000 samples unique). Then implement D1. — proof: `npm run test`, `npm run typecheck`, `npm run lint`
+- [ ] 2. **Schema: profile, helpers, RLS, audit table (tests first).** Write `002_membership_profile` (constraints, unique phone/employee-ID case-insensitive, must-change gate makes `current_tenant_id()` null, `current_role()`, UA reads tenant memberships, SUP reads only own, B invisible to A) and `003_audit_event` (UA reads own tenant only, SUP none, insert/update/delete denied for anon/authenticated, update/delete raise for service_role via trigger). Then write the migration (tables/helpers/RLS part) and update `seed.sql`. — proof: CI `db` job green (`supabase test db`; no Docker on the Mac), drift-free migration order
+- [ ] 3. **Service-only SQL functions (tests first).** `004_user_admin_functions`: each `ua_*` success path writes exactly one audit row with masked phone; SUP actor → generic error + `access.denied` (role); cross-tenant target → generic + `access.denied` (cross_tenant) under actor's tenant; inactive actor / suspended tenant → denied (AC-12); self deactivate/demote/reset refused; last active UA refused; duplicate phone / employee ID → distinct error codes with field name; idempotent `request_id`; `account_password_changed` refuses expired temp; functions not executable by anon/authenticated. Implement in the same migration file (still unmerged). Error contract: `raise exception using errcode = 'P0001'` + `detail` JSON `{code, field?}` with codes `not_allowed|validation|duplicate|guard|expired`. — proof: CI `db` green
+- [ ] 4. **Edge Functions + API tests (tests first).** Write `e2e/api/{user-admin,account,rbac}.spec.ts` covering AC-1, 2, 4–10, 12 on org U (create → sign in with temp → forced state; idempotent retry; duplicates 409; guards 422; SUP 403 + audit row via service client; cross-tenant 403; deactivate → data query empty + refresh fails + sign-in fails; reactivate → old password works; phone change → new works, old fails; compensation: simulate SQL failure with a duplicate employee ID raced after the check → no orphan auth user). Then implement `_shared/*`, `user-admin`, `account` per D4–D8; `config.toml` (`enable_signup=false`, `minimum_password_length=10`, `password_requirements="letters_digits"`, `[functions.user-admin]`/`[functions.account]` `verify_jwt=true`); Playwright projects (D10); ci.yml e2e job edge runtime (D7). — proof: PR CI `e2e-web` job green with the `api` project; no secrets used
+- [ ] 5. **Fixtures.** Seed + `fixtures-reset.ts` switch to phone identities (D2, D3): canonical users A-admin, A-sup, B-sup, nomember, S-suspended, U1–U4; reset deletes throwaway users; safety refusals kept, new refusals: non-block phone, non-`.invalid` email. `e2e/web/fixtures.ts` exports phones; `signIn(page, phone)`. Extend `scripts/__tests__`. — proof: `npm run test`; CI green
+- [ ] 6. **Client: session, sign-in, change password (tests first).** Screen/unit tests: sign-in phone field (+91 prefix, numeric keypad, empty-field errors, no request sent), generic error for banned/invalid (D6); session context returns `{mustChangePassword, expired}` from own membership before tenant lookup; layout routes must-change users to `/change-password`; change-password form + live checklist + expired state + sign out; Home shows Users (UA only) and Change password. Then implement; `src/lib/api.ts` with request ids; Sentry scrub (D12, test). Update `e2e/web/auth.spec.ts` (email → phone; assertions unchanged or stricter) and add `change-password.spec.ts` (AC-3, 4, 13 incl. axe). — proof: `npm run lint/typecheck/test`; CI green
+- [ ] 7. **Users screen (tests first).** Screen tests: list renders status labels, search/filter/pagination (25), empty/loading/error states, temp-password panel shown once and cleared on Done, confirm dialogs name the person, field errors mapped from 400/409/422, SUP sees "Not allowed". Then implement `users/index|new|[id]`. `e2e/web/users.spec.ts`: add, edit phone, deactivate/reactivate, reset → panel, SUP blocked, axe 0 serious. — proof: CI green
+- [ ] 8. **Android flows.** Maestro flows sign in by phone; new `first-sign-in.yaml` (U4-style fresh fixture → forced change → home). Fresh fixture is reset each run. — proof: proven in step 10's dev regression run (Android 5/5)
+- [ ] 9. **Smoke.** `smoke.spec.ts` adds "sign-in shows phone field" (read-only, prod-safe). — proof: CI green
+- [ ] 10. **Hosted: deploy + nightly checks.** deploy-dev: `supabase functions deploy user-admin account --project-ref $DEV_SUPABASE_PROJECT_REF`, `supabase secrets set ALLOWED_ORIGINS=…`, `node scripts/auth-config.mjs --apply --ref dev`. regression: new `hosted-checks` job (auth-config `--check`, functions list contains both, `orphan-check.ts` lists auth users with no membership except `nomember` → fail). Temporary `pull_request` triggers allowed as in 01 (**remove in step 12**). — proof: deploy-dev run green; regression dispatch on dev green (web incl. api project, Android 5/5, hosted-checks); evidence artifact
+- [ ] 11. **Docs.** architecture.md: apply spec's "Proposed architecture changes" 1–7 (auth model, cross-cutting rules, external integrations "later" line, environments: functions deploy, fixture rule), decision log rows dated 2026-11-16 · 02. CLAUDE.md: note `api` project in `test:e2e`. Flag for main: roadmap "Later" += "SMS (temp password delivery, OTP, self-service reset) via AWS End User Messaging SMS after DLT; email via SES". — proof: docs-only diff reviewed
+- [ ] 12. **Review + PR.** Remove temporary triggers; run `sdlc-reviewer`; fix Important findings; full suite green on the last code commit; open PR with AC → test → result table. — proof: PR CI green, reviewer findings recorded below
+
+## Risks
+- **Highest: step 4 two-step Auth/DB writes.** Mitigation D4 compensation + orphan check (step 10). Rollback: functions are new; reverting the PR removes them; migration is additive.
+- **Step 2 must-change gate** changes `current_tenant_id()`, which every future RLS policy uses; a bug locks everyone out. Mitigation: pgTAP for each flag combination; 01's isolation tests still run.
+- **Step 7/6 a11y and RN-web form quirks** (numeric keypad, password managers on web). Mitigation: e2e on Pixel 7 profile + Android flow.
+- **D7 edge runtime in CI** may push PR CI over 10 min. Mitigation: measure in step 4; if > 10 min, split `api` into its own job (parallel), not a design change.
+- **Auth API behaviour assumptions** (ban blocks refresh; admin createUser works with signup disabled) [Likely]; each is asserted by an API test, so a wrong assumption fails loudly in step 4 → escalate.
+- **Hosted Free-plan Auth settings** may not accept the character rule (D9) → escalate; function enforcement remains.
+
+## Proof of done
+- Every AC → test (table in the PR): AC-1–16 as in spec Test strategy.
+- Full regression green: PR CI (static, db, e2e-web incl. api) on the last code commit; dev regression dispatch incl. Android 5/5 and hosted-checks.
+- 01's behaviour unchanged except sign-in identifier (email → phone), documented.
+
+## Deviations from plan
+(filled in during build)
+
+## Session log
+### 2026-11-16
+- Done: intent approved (SMS deferred; phone + password; employee ID unique per tenant; Super Admin resets last UA), spec approved (reactivation keeps password; Users web-only), plan drafted.
+- In progress: plan approved; owner chose model routing (a): Sonnet subagent executes steps, Opus reviews.
+- Blocked / failing: —
+- Next step: owner approves plan → Sonnet executes step 1.
+- Decisions made (cross-cutting → flag for architecture.md): spec "Proposed architecture changes" 1–7 (applied in step 11 under the lock); roadmap Later += SMS/email (main, at merge).
