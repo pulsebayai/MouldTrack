@@ -68,12 +68,12 @@ select is((pg_temp.err($$ select public.pm_save_site(gen_random_uuid(), 'Plant X
 select is((pg_temp.err($$ select public.pm_save_site(null, 'Plant X', null) $$))->>'field', 'request_id', 'a null request id is refused');
 insert into ids values ('rq_site', gen_random_uuid());
 select is((pg_temp.keep('site_x', public.pm_save_site(pg_temp.id('rq_site'), '  Plant X  ', null)))->>'ok', 'true', 'site: created');
-select results_eq($$ select name, timezone, tenant_id from public.site $$, $$ values ('Plant X'::text, 'Asia/Kolkata'::text, '50000000-0000-4000-c200-00000000000a'::uuid) $$,
+select results_eq($$ select name, timezone, tenant_id from public.site where tenant_id = pg_temp.id('tx') $$, $$ values ('Plant X'::text, 'Asia/Kolkata'::text, '50000000-0000-4000-c200-00000000000a'::uuid) $$,
   'site: name trimmed and timezone defaults to the tenant''s');
 select is(pg_temp.n_audit('site.created'), 1, 'site: one audit row');
 select is((public.pm_save_site(pg_temp.id('rq_site'), '  Plant X  ', null))->>'already', 'true', 'site: a repeat reports already done');
 select is(pg_temp.n_audit('site.created'), 1, 'site: the repeat writes no second audit row');
-select is((select count(*)::int from public.site), 1, 'site: the repeat creates no second site');
+select is((select count(*)::int from public.site where tenant_id = pg_temp.id('tx')), 1, 'site: the repeat creates no second site');
 select is((public.pm_save_site(gen_random_uuid(), 'Plant X2', 'Asia/Tokyo'))->>'id', pg_temp.id('site_x')::text, 'site: saving again updates the one site (a second is impossible)');
 select results_eq($$ select before->>'name', after->>'name', after->>'timezone' from public.audit_event where action = 'site.updated' $$,
   $$ values ('Plant X'::text, 'Plant X2'::text, 'Asia/Tokyo'::text) $$, 'site: update audited with before and after');

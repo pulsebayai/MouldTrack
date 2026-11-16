@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { assertSafeTarget, isCanonicalPhone, isFixtureAuthEmail, isThrowawayAuthEmail, TENANTS, USERS } from '../fixtures-reset';
+import { assertSafeTarget, isCanonicalPhone, isFixtureAuthEmail, isThrowawayAuthEmail, isThrowawayPlantName, PLANT, TENANTS, USERS } from '../fixtures-reset';
 
 const dev = { APP_ENV: 'development', DEV_SUPABASE_PROJECT_REF: 'abcdefghijklmnopqrst', SUPABASE_URL: 'https://abcdefghijklmnopqrst.supabase.co' };
 
@@ -79,5 +79,50 @@ describe('fixtures-reset 02 identities (D2, D3)', () => {
       }
     }
     expect(seed).not.toContain('@example.test');
+  });
+});
+
+describe('fixtures-reset 04 plant fixtures (D8)', () => {
+  const seed = readFileSync(join(__dirname, '../../supabase/seed.sql'), 'utf8');
+  const byTenant = (t: string) => PLANT.find((p) => p.tenant === t)!;
+
+  it('covers orgs A, B and U only (S has no plant)', () => expect(PLANT.map((p) => p.tenant)).toEqual(['e2e org A', 'e2e org B', 'e2e org U']));
+  it('orgs A and B hold one machine and one product each; org U holds 2 lines, 3 machines, 3 products', () => {
+    for (const t of ['e2e org A', 'e2e org B']) expect([byTenant(t).machines.length, byTenant(t).products.length, byTenant(t).lines.length]).toEqual([1, 1, 0]);
+    const u = byTenant('e2e org U');
+    expect([u.lines.length, u.machines.length, u.products.length]).toEqual([2, 3, 3]);
+  });
+  it('org U keeps a machine without a target, and every target names a fixture machine and product', () => {
+    const u = byTenant('e2e org U');
+    expect(u.machines.some((m) => !u.targets.some((t) => t.machine === m.code))).toBe(true);
+    for (const p of PLANT) for (const t of p.targets) {
+      expect(p.machines.map((m) => m.code)).toContain(t.machine);
+      expect(p.products.map((x) => x.code)).toContain(t.product);
+      expect(Number.isInteger(t.pieces) && t.pieces >= 1 && t.pieces <= 1_000_000).toBe(true);
+    }
+  });
+  it('fixture machine and product codes are valid and never look like throwaway rows', () => {
+    for (const p of PLANT) {
+      for (const m of p.machines) { expect(m.code).toMatch(/^[A-Za-z0-9_/-]{1,20}$/); expect(isThrowawayPlantName(m.code)).toBe(false); }
+      for (const x of p.products) { expect(x.code).toMatch(/^[A-Za-z0-9_/-]{1,20}$/); expect(isThrowawayPlantName(x.code)).toBe(false); }
+      for (const l of p.lines) expect(isThrowawayPlantName(l)).toBe(false);
+    }
+  });
+  it('recognises throwaway e2e rows by their E2E- prefix only', () => {
+    expect(isThrowawayPlantName('E2E-ab12cd34')).toBe(true);
+    expect(isThrowawayPlantName('E2E-ABC')).toBe(true);
+    expect(isThrowawayPlantName('FX-MU1')).toBe(false);
+    expect(isThrowawayPlantName('E2E-')).toBe(false);
+    expect(isThrowawayPlantName('e2e-abc123')).toBe(false);
+    expect(isThrowawayPlantName('E2E-abc123 extra')).toBe(false);
+  });
+  it('the seed file defines every fixture site, line, machine and product, and each target amount', () => {
+    for (const p of PLANT) {
+      expect(seed).toContain(`'${p.site}'`);
+      for (const l of p.lines) expect(seed).toContain(`'${l}'`);
+      for (const m of p.machines) { expect(seed).toContain(`'${m.code}'`); expect(seed).toContain(`'${m.name}'`); }
+      for (const x of p.products) { expect(seed).toContain(`'${x.code}'`); expect(seed).toContain(`'${x.description}'`); }
+      for (const t of p.targets) expect(seed).toMatch(new RegExp(`date '2026-01-01', ${t.pieces},`));
+    }
   });
 });
