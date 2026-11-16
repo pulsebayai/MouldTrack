@@ -86,4 +86,4 @@ AC-1–16 → tests (spec table); full suite green after rebase on 04; dev regre
 
 ### 2026-11-17 (Sonnet, step 7a)
 - Done: R1-R6 and nits N-1, N-2, N-3, N-5, N-6, N-8, N-9 (details in the Step 7a deviation note). Deferred as decided: N-7, N-10, `_pa_authorise` for 04's `pm_*`, `/plant` e2e (step 8); runbook and hosted token check (steps 10 and 9).
-- Local: Jest 362 tests green, lint and typecheck clean, deno check clean for `platform` and `platform-setup`; local pgTAP 001-006, 020 (41), 021 (167), 022 (25) green. CI proof below once the run finishes.
+- Local: Jest 362 tests green, lint and typecheck clean, deno check clean for `platform` and `platform-setup`; local pgTAP 001-006, 020 (41), 021 (167), 022 (25) green. Commits: R6 99d8376, R5 7620d61, R1 (boundary test), R2+R3+N-3 295203f, spec note 487927e, R4 995c731, nav fixes 54780fa and 0464245. Proof: PR #9 CI run 43936457775 on 0464245, all jobs green (changes, static, db, e2e-web, ci-ok), about 5 min. Two earlier runs failed only on axe `label-content-name-mismatch` of the new nav (fixed by dropping the explicit aria-label so the accessible name is the visible text).
