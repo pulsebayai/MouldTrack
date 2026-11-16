@@ -20,5 +20,10 @@ security definer
 set search_path = ''
 as $$ select exists (select 1 from app.audit_action a where a.action = p_action) $$;
 
+-- Only the roles that write audit rows need it (security definer writers run as the owner); 02's test 004 requires
+-- that no app function except the two RLS helpers is executable by anon/authenticated.
+revoke all on function app.is_known_audit_action(text) from public, anon, authenticated;
+grant execute on function app.is_known_audit_action(text) to service_role;
+
 alter table public.audit_event drop constraint audit_event_action_check;
 alter table public.audit_event add constraint audit_event_action_known check (app.is_known_audit_action(action));
