@@ -30,7 +30,7 @@ Batch A with 03 (04 merges first). Locks: schema split — 04 owns site, line, m
 `20261117000000_plant_masters.sql` (after the prerequisite). Additive.
 
 ## Steps
-- [ ] 1. **Tables, RLS, append-only targets, `target_for` (tests first).** `010`: per table — RLS enabled+forced, member of A reads A only (UA and SUP), B invisible, anon nothing, no client insert/update/delete; composite FK rejects cross-tenant parent; one site per tenant; uniqueness rules (case-insensitive); target_version UPDATE/DELETE fail for every role incl. service_role; `target_for` cases of spec AC-7; `plant_date` at 23:30 IST vs UTC date; `current_target` view hides ended. Then the migration (tables, indexes incl. `(machine_id, product_id, effective_from desc, recorded_at desc)`, helpers, view). — proof: CI `db`
+- [x] 1. **Tables, RLS, append-only targets, `target_for` (tests first).** `010`: per table — RLS enabled+forced, member of A reads A only (UA and SUP), B invisible, anon nothing, no client insert/update/delete; composite FK rejects cross-tenant parent; one site per tenant; uniqueness rules (case-insensitive); target_version UPDATE/DELETE fail for every role incl. service_role; `target_for` cases of spec AC-7; `plant_date` at 23:30 IST vs UTC date; `current_target` view hides ended. Then the migration (tables, indexes incl. `(machine_id, product_id, effective_from desc, recorded_at desc)`, helpers, view). — proof: CI `db`
 - [ ] 2. **Write RPCs (tests first).** `011`: each `pm_*` success + exactly one audit row (actions per spec), validation/duplicate/guard codes with field, denials audited for SUP / must-change / suspended tenant / no membership / cross-tenant id, idempotent repeat, no backdating (`effective_from < plant_date` → validation `effective_from`), product retire blocked with current or future target (detail lists machine codes), line archive blocked with non-retired machines, retired machine/product can't get a target, reinstate. Then implement per D2–D4. — proof: CI `db`
 - [ ] 3. **Fixtures.** seed + fixtures-reset per D8; extend fixtures-reset tests (new tables only refused outside local/dev — existing refusals unchanged). — proof: `npm run test`, CI green
 - [ ] 4. **Client data layer (tests first).** `src/lib/plant.ts` typed reads + RPC calls, error → field mapping, request-id rule; `timezones.ts`. — proof: lint/typecheck/test
@@ -50,6 +50,9 @@ AC-1–14 → tests (spec table); full suite green on PR CI; dev regression gree
 
 ## Deviations from plan
 - The audit-action change moved from 04 to prerequisite PR #6, and became a **registry** instead of a format rule (a format rule would accept `user.exploded`, breaking 02's test). Spec "Proposed architecture changes" 1 is superseded accordingly.
+
+- (Sonnet, step 1) D9 applied: `supabase/tests/006_audit_action_registry.test.sql` — only the literal `machine.created` → `tap_example.created` (3 lines). Otherwise unchanged.
+- (Sonnet, step 1) Added helper `app.plant_date_at(tenant, timestamptz)` (plant_date = plant_date_at(…, now())) so the 23:30/00:30 IST edge can be tested deterministically; revoked from clients like the other helpers. Extra view `public.plant_today` per D10.
 
 ## Session log
 ### 2026-11-16
