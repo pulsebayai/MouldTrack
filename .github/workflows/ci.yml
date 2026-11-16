@@ -43,7 +43,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      EXPO_PUBLIC_SUPABASE_URL: http://127.0.0.1:55321
+      EXPO_PUBLIC_SUPABASE_URL: http://127.0.0.1:15321
       EXPO_PUBLIC_SUPABASE_ANON_KEY: build-only-placeholder
       EXPO_PUBLIC_APP_ENV: local
     steps:
@@ -108,7 +108,7 @@ jobs:
         run: |
           wait_fn() {
             for i in $(seq 1 30); do
-              code=$(curl -s -o /dev/null -w '%{http_code}' -X OPTIONS http://127.0.0.1:55321/functions/v1/account || true)
+              code=$(curl -s -o /dev/null -w '%{http_code}' -X OPTIONS http://127.0.0.1:15321/functions/v1/account || true)
               [ "$code" = "204" ] && return 0
               sleep 2
             done

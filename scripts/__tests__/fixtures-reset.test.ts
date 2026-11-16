@@ -58,15 +58,15 @@ describe('fixtures-reset 02 identities (D2, D3)', () => {
   });
   it('refuses a fixture with a phone outside the canonical block', () => {
     const bad = { ...USERS[0], phone: '+919876543210', email: '9876543210@phone.mouldtrack.invalid' };
-    expect(() => assertSafeTarget({ APP_ENV: 'local', SUPABASE_URL: 'http://127.0.0.1:55321' }, [bad, ...USERS.slice(1)])).toThrow(/Refusing.*phone/);
+    expect(() => assertSafeTarget({ APP_ENV: 'local', SUPABASE_URL: 'http://127.0.0.1:15321' }, [bad, ...USERS.slice(1)])).toThrow(/Refusing.*phone/);
   });
   it('refuses a fixture with a non-.invalid email', () => {
     const bad = { ...USERS[0], email: 'e2e-admin-a@example.test' };
-    expect(() => assertSafeTarget({ APP_ENV: 'local', SUPABASE_URL: 'http://127.0.0.1:55321' }, [bad, ...USERS.slice(1)])).toThrow(/Refusing.*email/);
+    expect(() => assertSafeTarget({ APP_ENV: 'local', SUPABASE_URL: 'http://127.0.0.1:15321' }, [bad, ...USERS.slice(1)])).toThrow(/Refusing.*email/);
   });
   it('refuses a mismatch between phone and email', () => {
     const bad = { ...USERS[0], email: '9000000099@phone.mouldtrack.invalid' };
-    expect(() => assertSafeTarget({ APP_ENV: 'local', SUPABASE_URL: 'http://127.0.0.1:55321' }, [bad, ...USERS.slice(1)])).toThrow(/Refusing/);
+    expect(() => assertSafeTarget({ APP_ENV: 'local', SUPABASE_URL: 'http://127.0.0.1:15321' }, [bad, ...USERS.slice(1)])).toThrow(/Refusing/);
   });
   it('the seed file defines every fixture tenant, phone and email so local CI and hosted dev agree', () => {
     const seed = readFileSync(join(__dirname, '../../supabase/seed.sql'), 'utf8');
