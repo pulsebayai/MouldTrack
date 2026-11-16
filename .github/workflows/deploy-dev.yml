@@ -6,6 +6,10 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  # TEMPORARY (02 step 10 proof before merge; remove in step 12): dispatch only works once the file is on main. Dev target only.
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/deploy-dev.yml', 'supabase/functions/**', 'supabase/migrations/**', 'scripts/auth-config.mjs']
 
 permissions:
   contents: read
@@ -25,6 +29,8 @@ jobs:
     env:
       EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
       DEV_SUPABASE_DB_URL: ${{ secrets.DEV_SUPABASE_DB_URL }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      DEV_SUPABASE_PROJECT_REF: ${{ secrets.DEV_SUPABASE_PROJECT_REF }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -33,6 +39,15 @@ jobs:
 
       - name: Apply migrations to dev
         run: npx supabase db push --db-url "$DEV_SUPABASE_DB_URL" --include-all --yes
+
+      - name: Deploy Edge Functions to dev (02 D4-D8)
+        run: npx supabase functions deploy user-admin account --project-ref "$DEV_SUPABASE_PROJECT_REF" --use-api
+
+      - name: Set function secrets (CORS origin of the dev web app, D8)
+        run: npx supabase secrets set ALLOWED_ORIGINS=https://mouldtrack--dev.expo.app --project-ref "$DEV_SUPABASE_PROJECT_REF"
+
+      - name: Apply hosted Auth config to dev (D9)
+        run: node scripts/auth-config.mjs --apply --ref dev
 
       - name: Ensure EAS project exists (first run prints the projectId to commit)
         run: |

@@ -16,10 +16,15 @@ on:
       base_url:
         description: 'Web URL (defaults per target)'
         required: false
+  # TEMPORARY (02 step 10 proof before merge; remove in step 12): dispatch/schedule only work from main. Runs the DEV target only.
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/regression.yml', 'scripts/auth-config.mjs', 'scripts/orphan-check.ts', 'scripts/hosted-checks.sh', 'e2e/maestro/**']
 
 permissions:
   contents: read
   issues: write
+  actions: read
 
 concurrency:
   group: regression-${{ inputs.target || 'dev' }}
@@ -37,6 +42,20 @@ jobs:
       base_url: ${{ steps.t.outputs.base_url }}
       full: ${{ steps.t.outputs.full }}
     steps:
+      # TEMPORARY with the pull_request trigger: test what this commit deployed, not the previous deploy.
+      - name: Wait for deploy-dev of this commit (pull_request only)
+        if: github.event_name == 'pull_request'
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: |
+          sha="${{ github.event.pull_request.head.sha }}"
+          for i in $(seq 1 40); do
+            r=$(gh api "repos/${{ github.repository }}/actions/workflows/deploy-dev.yml/runs?head_sha=$sha&per_page=1" --jq '.workflow_runs[0] | "\(.status) \(.conclusion)"' 2>/dev/null || true)
+            echo "deploy-dev for $sha: ${r:-not started}"
+            case "$r" in "completed success") exit 0;; completed*) echo "deploy-dev failed"; exit 1;; esac
+            [ -z "$r" ] && [ "$i" -ge 6 ] && { echo "no deploy-dev run for this commit; testing current dev"; exit 0; }
+            sleep 15
+          done
+          echo "timed out waiting for deploy-dev"; exit 1
       - id: t
         run: |
           t="$TARGET"
@@ -78,6 +97,10 @@ jobs:
     env:
       BASE_URL: ${{ needs.setup.outputs.base_url }}
       E2E_FIXTURE_PASSWORD: ${{ secrets.E2E_FIXTURE_PASSWORD }}
+      # API project (02 D10): Auth, PostgREST and the Edge Functions of the target project. Dev only; staging joins at the R1 release.
+      E2E_API_URL: ${{ needs.setup.outputs.target == 'dev' && secrets.DEV_SUPABASE_URL || '' }}
+      E2E_ANON_KEY: ${{ needs.setup.outputs.target == 'dev' && secrets.DEV_SUPABASE_ANON_KEY || '' }}
+      E2E_SERVICE_ROLE_KEY: ${{ needs.setup.outputs.target == 'dev' && secrets.DEV_SUPABASE_SERVICE_ROLE_KEY || '' }}
       CI: 'true'
     steps:
       - uses: actions/checkout@v4
@@ -106,6 +129,29 @@ jobs:
           retention-days: 90
           if-no-files-found: warn
 
+  hosted-checks:
+    needs: setup
+    if: needs.setup.outputs.target == 'dev'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      DEV_SUPABASE_PROJECT_REF: ${{ secrets.DEV_SUPABASE_PROJECT_REF }}
+      APP_ENV: development
+      SUPABASE_URL: ${{ secrets.DEV_SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.DEV_SUPABASE_SERVICE_ROLE_KEY }}
+      WEB_ORIGIN: ${{ needs.setup.outputs.base_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '${{ env.NODE_VERSION }}', cache: npm }
+      - run: npm ci
+      - name: Auth config, functions deployed, no orphan users, CORS (read-only)
+        run: bash scripts/hosted-checks.sh
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: 'regression-hosted', path: test-results/, retention-days: 90, if-no-files-found: warn }
+
   android:
     needs: [setup, web] # web resets the fixtures first
     if: always() && needs.setup.outputs.full == 'true'
@@ -122,6 +168,15 @@ jobs:
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: '17' }
       - run: npm ci
+      - name: Reset fixtures again (web e2e changed U4's password; first-sign-in needs it fresh). Dev only.
+        if: needs.setup.outputs.target == 'dev'
+        env:
+          APP_ENV: development
+          SUPABASE_URL: ${{ secrets.DEV_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.DEV_SUPABASE_SERVICE_ROLE_KEY }}
+          DEV_SUPABASE_PROJECT_REF: ${{ secrets.DEV_SUPABASE_PROJECT_REF }}
+          E2E_FIXTURE_PASSWORD: ${{ secrets.E2E_FIXTURE_PASSWORD }}
+        run: npm run fixtures:reset
       - name: Build release APK on the runner (no EAS credits)
         run: bash scripts/build-android-ci.sh
       - name: Enable KVM
@@ -132,7 +187,7 @@ jobs:
         run: |
           curl -fsSL "https://get.maestro.mobile.dev" | bash
           echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
-      - name: Maestro on emulator (AC-1, 2, 3, 5)
+      - name: Maestro on emulator (01 AC-1, 2, 3, 5 + 02 first-sign-in)
         uses: reactivecircus/android-emulator-runner@v2
         env:
           PASSWORD: ${{ secrets.E2E_FIXTURE_PASSWORD }}
@@ -150,7 +205,7 @@ jobs:
         with: { name: 'regression-android', path: test-results/, retention-days: 90, if-no-files-found: warn }
 
   evidence:
-    needs: [setup, drift, web, android]
+    needs: [setup, drift, hosted-checks, web, android]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -169,7 +224,7 @@ jobs:
         with: { name: 'regression-evidence-${{ needs.setup.outputs.target }}', path: evidence/, retention-days: 90 }
       - name: Fail if any suite failed
         run: |
-          r='${{ needs.drift.result }} ${{ needs.web.result }} ${{ needs.android.result }}'
+          r='${{ needs.drift.result }} ${{ needs['hosted-checks'].result }} ${{ needs.web.result }} ${{ needs.android.result }}'
           echo "results: $r"; ! echo "$r" | grep -Eq 'failure|cancelled'
 
   notify:
