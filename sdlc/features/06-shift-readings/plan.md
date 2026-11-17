@@ -28,11 +28,11 @@ Batch B with 07 (**07 merges first**). Locks: schema — 06's share (production_
 `20261117400000_readings.sql`. Additive (new columns with defaults on `machine`).
 
 ## Steps
-- [ ] 1. **Tables + counter settings + cavities (tests first).** 050: RLS (UA reads all; SUP no direct table select; SA nothing), composite FKs, append-only readings/summaries/cavities incl. service_role + trigger, machine columns + `rd_set_machine_counter` (unit lock, max change), cavities set/end/`cavities_for`, registry, audit. — proof: CI `db`
-- [ ] 2. **Reading RPCs (tests first).** 051: opening/closing windows (D5 incl. overnight), late flag at boundary + 30 min (just before/after), one current reading per kind, corrections (SUP window, UA any time, earliest-late rule), who (owner, cover, UA → entered_by_ua, other SUP, unassigned → UA only, must-change, suspended, SA), idempotency, isolation, audit. — proof: CI `db`
-- [ ] 3. **Summary calculation (tests first).** 052: every spec AC-10 case + snapshot contents + versioning (correction appends a new summary; old stays). — proof: CI `db`
-- [ ] 4. **Reads (tests first).** 053: `reading_state_at` states (opening due / done late / closing due / closed) and default product; `today_board_at` (assigned only, current + previous occurrence, totals, flags; UA only); `reading_capture` (on time, late, missing, unassigned excluded, open occurrences excluded). — proof: CI `db`
-- [ ] 5. **Fixtures + 022** per D11 (additions only). — proof: CI green
+- [x] 1. **Tables + counter settings + cavities (tests first).** 050: RLS (UA reads all; SUP no direct table select; SA nothing), composite FKs, append-only readings/summaries/cavities incl. service_role + trigger, machine columns + `rd_set_machine_counter` (unit lock, max change), cavities set/end/`cavities_for`, registry, audit. — proof: CI `db`
+- [x] 2. **Reading RPCs (tests first).** 051: opening/closing windows (D5 incl. overnight), late flag at boundary + 30 min (just before/after), one current reading per kind, corrections (SUP window, UA any time, earliest-late rule), who (owner, cover, UA → entered_by_ua, other SUP, unassigned → UA only, must-change, suspended, SA), idempotency, isolation, audit. — proof: CI `db`
+- [x] 3. **Summary calculation (tests first).** 052: every spec AC-10 case + snapshot contents + versioning (correction appends a new summary; old stays). — proof: CI `db`
+- [x] 4. **Reads (tests first).** 053: `reading_state_at` states (opening due / done late / closing due / closed) and default product; `today_board_at` (assigned only, current + previous occurrence, totals, flags; UA only); `reading_capture` (on time, late, missing, unassigned excluded, open occurrences excluded). — proof: CI `db`
+- [x] 5. **Fixtures + 022** per D11 (additions only). — proof: CI green
 - [ ] 6. **Rebase on 07 (after 07 merges).** Resolve shared files; add attachment entity type `production_reading` + its visibility (owner in that occurrence, UAs) to 07's `can_see_attachment` path via 06's migration (additive redefinition); extend 07's Storage tests with additions for the new entity; full suite green. — proof: CI green
 - [ ] 7. **Client (tests first).** readings.ts; My shift card states/actions (keeping 07's "Report issue"); opening form (product chips with default, counter, optional photo via 07's photo pipeline, remarks), closing form (counter, good, reject), summary card with flags as text; Counter panel in Plant; UA Today board + Home entry; drafts + refresh pattern. — proof: lint/typecheck/test/build
 - [ ] 8. **E2E.** web `readings.spec.ts` (SUP opening → closing → summary; correction; UA Today board; counter panel; axe), api `readings.spec.ts` (other SUP denied + audited; UA on behalf; photo on a reading; SA denied), Maestro `opening-closing.yaml` (no photo, as 07 D8). — proof: CI `e2e-web` green
@@ -50,9 +50,17 @@ Batch B with 07 (**07 merges first**). Locks: schema — 06's share (production_
 AC-1–16 → tests (spec table); full suite green after rebase on 07; dev regression green incl. Android `opening-closing.yaml`.
 
 ## Deviations from plan
-(filled in during build)
+- Step 4 migration fix found by 053: `reading_capture_at` treats an occurrence as ended when `upper(window) <= p_at` (end is exclusive), not `<`.
+- 052's last test (summaries carry their tenant) is scoped to the test's own machines because seed.sql (step 5) adds fixture summaries; this is 06's own new test, not an 01-05 test.
+- Board rule pinned by 053: a retired machine appears on the board only when it has a reading in that occurrence (so M5-style rows show on the day they have data, not on days without).
 
 ## Session log
 ### 2026-11-17
 - Done: intent + spec approved (counter unit per machine, optional max, rollover recorded, good + reject only, photo optional, late accepted + flagged, UA may enter on behalf, SUP correction window until the next occurrence).
 - Next step: owner approves plan; Sonnet executes steps 1–5 now; 6+ after 07 merges.
+
+### 2026-11-17 (Sonnet, steps 1-5)
+- Done: steps 1-5 (b059467, 9389a76, 148aef7 [052 tests], 7a86645 [step 4], 947bb0f [step 5]). One migration `20261117400000_readings.sql`; tests 050-053; 022 fixture-block additions; seed.sql + `scripts/fixtures-reset.ts` (READINGS, resetReadings) + Jest additions.
+- Local: pgTAP 23 files / 1699 tests green (also with seed applied); lint, typecheck clean; Jest 47 suites / 638 tests.
+- CI on 947bb0f (run 44121134776): changes, static, db, e2e-web, ci-ok green (earlier step pushes were cancelled by newer pushes; step 1 db/static had been green).
+- Blockers: none. Next: step 6 after 07 merges.
