@@ -2,7 +2,7 @@
 -- Self-contained; rolled back. Phones from the throwaway block +91 90000 21xxx.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(186);
+select plan(190);
 
 create function pg_temp.err(q text) returns jsonb language plpgsql as $f$
 declare d text; m text; st text;
@@ -81,6 +81,14 @@ select is((select bool_and(app._pa_timezone_ok(z)) from unnest(array['Asia/Kolka
 select is((select bool_or(coalesce(app._pa_timezone_ok(z), false)) from unnest(array['POSIX/Asia/Kolkata', 'right/Asia/Kolkata', 'Mars/Base', '', 'Asia/Kolkata; drop table x', null]) z), false, 'posix/, right/, unknown, empty and malformed zones are refused');
 select is(pg_temp.err($$ select app.pa_tenant_create('00000000-0000-4000-b900-0000000000a1', gen_random_uuid(), 'Bad Plan', null, 'gold') $$) @> '{"code":"validation","field":"plan_label"}', true, 'create: unknown plan -> validation/plan_label');
 select is((select count(*)::int from public.tenant where name in ('ACME MOULDS', 'Bad Zone', 'Bad Plan')), 0, 'create: refused inputs leave no tenant');
+
+-- F5 N-7: a request id belongs to its action. Reusing the id of tenant.created for a different action is refused, not answered with the first outcome.
+select is(pg_temp.err($$ select app.pa_tenant_update('00000000-0000-4000-b900-0000000000a1', '1a000000-0000-4000-b900-000000000001', '19000000-0000-4000-b900-00000000000a', 'renamed by mistake', null, null) $$) @> '{"code":"validation","field":"request_id","sqlstate":"P0001"}', true,
+  'a request id used by another action -> validation/request_id');
+select is((select name from public.tenant where id = '19000000-0000-4000-b900-00000000000a'), 'tap21 org X', 'and nothing was changed');
+select is((select count(*)::int from public.audit_event where request_id = '1a000000-0000-4000-b900-000000000001'), 1, 'and no second audit row carries that id');
+select ok(exists (select 1 from pg_indexes where schemaname = 'public' and tablename = 'audit_event' and indexname = 'audit_event_platform_idx' and indexdef like '%platform_admin%' and indexdef like '%edge:platform-setup%'),
+  'F5 N-8: a partial index serves the platform audit list');
 
 -- Tenant update ---------------------------------------------------------------------------------------------------------------------------------
 select is((app.pa_tenant_update('00000000-0000-4000-b900-0000000000a1', '1a000000-0000-4000-b900-000000000002', '19000000-0000-4000-b900-00000000000a', 'tap21 org X2', 'Asia/Dubai', 'active'))->>'ok', 'true', 'update: succeeds');

@@ -169,16 +169,39 @@ begin
 end
 $$;
 
+-- Idempotency lookup scoped to the action(s) the calling function records (like 04's per-RPC source): the same request id on a different action is not a replay.
+create function app._pa_done(p_actor uuid, p_request uuid, p_actions text[])
+returns uuid
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select e.entity_id from public.audit_event e
+  where p_request is not null and e.actor_user_id = p_actor and e.request_id = p_request and e.action = any (p_actions)
+$$;
+
 create function app._pa_audit(
   p_actor uuid, p_tenant uuid, p_action text, p_entity_type text, p_entity uuid,
   p_before jsonb, p_after jsonb, p_request uuid, p_reason text default null, p_source text default 'edge:platform'
 ) returns void
-language sql
+language plpgsql
 security definer
 set search_path = ''
 as $$
+declare
+  v_constraint text;
+begin
   insert into public.audit_event (tenant_id, actor_user_id, actor_role, action, entity_type, entity_id, before, after, reason, source, request_id)
-  values (p_tenant, p_actor, 'platform_admin', p_action, p_entity_type, p_entity, p_before, p_after, p_reason, p_source, p_request)
+  values (p_tenant, p_actor, 'platform_admin', p_action, p_entity_type, p_entity, p_before, p_after, p_reason, p_source, p_request);
+exception when unique_violation then
+  -- The same request id already recorded by this actor for another action: a clear validation error, not a 500 (nothing else was written).
+  get stacked diagnostics v_constraint = constraint_name;
+  if v_constraint = 'audit_event_actor_request_key' then
+    perform app._ua_fail('validation', 'This request id was already used for another action', 'request_id');
+  end if;
+  raise;
+end
 $$;
 
 create function app._pa_tenant_snapshot(t public.tenant)
@@ -268,7 +291,7 @@ declare
 begin
   v_auth := app._pa_authorise(p_actor);
   if not (v_auth->>'ok')::boolean then return v_auth; end if;
-  v_done := app._ua_done(p_actor, p_request_id);
+  v_done := app._pa_done(p_actor, p_request_id, array['tenant.created']);
   if v_done is not null then
     return jsonb_build_object('ok', true, 'already', true, 'tenant_id', v_done);
   end if;
@@ -303,7 +326,7 @@ declare
 begin
   v_auth := app._pa_authorise(p_actor);
   if not (v_auth->>'ok')::boolean then return v_auth; end if;
-  v_done := app._ua_done(p_actor, p_request_id);
+  v_done := app._pa_done(p_actor, p_request_id, array['tenant.updated']);
   if v_done is not null then
     return jsonb_build_object('ok', true, 'already', true, 'tenant_id', v_done);
   end if;
@@ -349,7 +372,7 @@ declare
 begin
   v_auth := app._pa_authorise(p_actor);
   if not (v_auth->>'ok')::boolean then return v_auth; end if;
-  v_done := app._ua_done(p_actor, p_request_id);
+  v_done := app._pa_done(p_actor, p_request_id, array['tenant.suspended', 'tenant.activated']);
   if v_done is not null then
     return jsonb_build_object('ok', true, 'already', true, 'tenant_id', v_done,
       'status', (select t.status from public.tenant t where t.id = v_done));
@@ -397,7 +420,7 @@ declare
 begin
   v_auth := app._pa_authorise(p_actor);
   if not (v_auth->>'ok')::boolean then return v_auth; end if;
-  v_done := app._ua_done(p_actor, p_request_id);
+  v_done := app._pa_done(p_actor, p_request_id, array['user.created']);
   if v_done is not null then
     return jsonb_build_object('ok', true, 'already', true, 'user_id', v_done);
   end if;
@@ -427,7 +450,7 @@ declare
 begin
   v_auth := app._pa_authorise(p_actor);
   if not (v_auth->>'ok')::boolean then return v_auth; end if;
-  v_done := app._ua_done(p_actor, p_request_id);
+  v_done := app._pa_done(p_actor, p_request_id, array['user.created']);
   if v_done is not null then
     return jsonb_build_object('ok', true, 'already', true, 'user_id', v_done);
   end if;
@@ -481,7 +504,7 @@ begin
     perform app.audit_denied(p_actor, cur.tenant_id, 'platform_admin', v_reason, 'user', p_user_id, 'edge:platform');
     return jsonb_build_object('ok', false, 'code', 'not_allowed');
   end if;
-  v_done := app._ua_done(p_actor, p_request_id);
+  v_done := app._pa_done(p_actor, p_request_id, array['user.password_reset']);
   if v_done is not null then
     return jsonb_build_object('ok', true, 'already', true, 'user_id', v_done);
   end if;
@@ -527,7 +550,7 @@ declare
 begin
   v_auth := app._pa_authorise(p_actor);
   if not (v_auth->>'ok')::boolean then return v_auth; end if;
-  v_done := app._ua_done(p_actor, p_request_id);
+  v_done := app._pa_done(p_actor, p_request_id, array['platform_admin.created']);
   if v_done is not null then
     return jsonb_build_object('ok', true, 'already', true, 'user_id', v_done);
   end if;
@@ -551,7 +574,7 @@ declare
 begin
   v_auth := app._pa_authorise(p_actor);
   if not (v_auth->>'ok')::boolean then return v_auth; end if;
-  v_done := app._ua_done(p_actor, p_request_id);
+  v_done := app._pa_done(p_actor, p_request_id, array['platform_admin.created']);
   if v_done is not null then
     return jsonb_build_object('ok', true, 'already', true, 'user_id', v_done);
   end if;
@@ -583,7 +606,7 @@ declare
 begin
   v_auth := app._pa_authorise(p_actor);
   if not (v_auth->>'ok')::boolean then return v_auth; end if;
-  v_done := app._ua_done(p_actor, p_request_id);
+  v_done := app._pa_done(p_actor, p_request_id, array['platform_admin.deactivated', 'platform_admin.reactivated']);
   if v_done is not null then
     return jsonb_build_object('ok', true, 'already', true, 'user_id', v_done,
       'status', (select pa.status from public.platform_admin pa where pa.user_id = v_done));
@@ -633,7 +656,7 @@ declare
 begin
   v_auth := app._pa_authorise(p_actor);
   if not (v_auth->>'ok')::boolean then return v_auth; end if;
-  v_done := app._ua_done(p_actor, p_request_id);
+  v_done := app._pa_done(p_actor, p_request_id, array['platform_admin.password_reset']);
   if v_done is not null then
     return jsonb_build_object('ok', true, 'already', true, 'user_id', v_done);
   end if;
@@ -1052,6 +1075,8 @@ end $$;
 -- 12. 04's pm_* authorisation denies a Super Admin with an SA-specific reason (step 8). Same branch as _ua_authorise (section 10): a caller with no
 -- membership but an own platform_admin row is denied with reason and actor role `platform_admin`, so the denial reaches the platform audit (pa_audit)
 -- instead of looking like a stray no_membership. Everything else is 04's definition unchanged (04's pgTAP 010-014 pass unchanged).
+-- Serialises per tenant (row lock first, so authorisation sees committed state), then authorises the caller as a Unit Admin.
+-- Returns {ok:true, tenant_id, actor, role[, done]} (done = entity of an already-recorded request) or the generic denial.
 create or replace function app._pm_authorise(p_request_id uuid, p_source text)
 returns jsonb
 language plpgsql
@@ -1100,6 +1125,8 @@ begin
   if p_request_id is null then
     perform app._pm_fail('validation', 'A request id is required', 'request_id');
   end if;
+  -- Idempotency: a request id already recorded by this actor for THIS RPC (source) is a replay and returns the first outcome.
+  -- The same id on a different RPC is not a replay: it falls through and trips the unique (actor, request_id) audit key.
   select e.entity_id into v_done from public.audit_event e where e.actor_user_id = v_actor and e.request_id = p_request_id and e.source = p_source;
   return jsonb_build_object('ok', true, 'tenant_id', a.tenant_id, 'actor', v_actor, 'role', a.role, 'done', v_done);
 end
@@ -1203,3 +1230,7 @@ end $$;
 
 revoke all on function app.timezone_shape_ok(text), app.timezone_ok(text), app.tenant_timezone_valid() from public, anon, authenticated;
 grant execute on function app.timezone_shape_ok(text), app.timezone_ok(text), app.tenant_timezone_valid() to service_role;
+
+-- 14. The platform audit list reads platform events newest first (F5 N-8): a partial index with the same predicate as pa_audit.
+create index audit_event_platform_idx on public.audit_event (occurred_at desc, id)
+  where actor_role = 'platform_admin' or source = 'edge:platform-setup';
