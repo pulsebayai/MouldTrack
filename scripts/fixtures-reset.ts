@@ -71,6 +71,64 @@ export const PLANT: PlantFixture[] = [
     ], // FX-MU3 deliberately has no target ("No target set")
   },
 ];
+// 05-shifts-and-assignments (D12): fixture shifts and the recurring plan. Must match supabase/seed.sql (a Jest test checks this file against it).
+// Org A: two shifts that together cover all 24 hours, so the supervisor fixture (supA) always has a running occurrence (Android/web "My shift").
+// Org U: Morning and Night; supervisor U3 owns two machines on both. Org B has none. Plan versions start on a fixed past date.
+export type ShiftFixture = {
+  id: string;
+  tenant: string;
+  name: string;
+  start: string; // HH:MM, site time zone
+  end: string;
+  assignments: { machine: string; supervisor: string }[]; // supervisor = USERS key
+};
+export const SHIFTS: ShiftFixture[] = [
+  { id: '54000000-0000-4000-a000-0000000000a1', tenant: 'e2e org A', name: 'Fixture Shift A1', start: '00:00', end: '12:00', assignments: [{ machine: 'FX-MA1', supervisor: 'supA' }] },
+  { id: '54000000-0000-4000-a000-0000000000a2', tenant: 'e2e org A', name: 'Fixture Shift A2', start: '12:00', end: '00:00', assignments: [{ machine: 'FX-MA1', supervisor: 'supA' }] },
+  {
+    id: '54000000-0000-4000-a000-0000000000e1', tenant: 'e2e org U', name: 'Fixture Morning', start: '06:00', end: '14:00',
+    assignments: [{ machine: 'FX-MU1', supervisor: 'u3' }, { machine: 'FX-MU2', supervisor: 'u3' }],
+  },
+  {
+    id: '54000000-0000-4000-a000-0000000000e2', tenant: 'e2e org U', name: 'Fixture Night', start: '22:00', end: '06:00',
+    assignments: [{ machine: 'FX-MU1', supervisor: 'u3' }, { machine: 'FX-MU2', supervisor: 'u3' }],
+  },
+];
+export const FIXTURE_PLAN_FROM = '2026-01-01';
+export const FIXTURE_COVER_REASON = 'Fixture reset';
+
+export type PlanRow = { id: string; effective_from: string; supervisor_id: string | null; recorded_at: string };
+export type CoverRow = { id: string; shift_date: string; supervisor_id: string | null; recorded_at: string };
+const cmpDesc = (a: string, b: string): number => (a === b ? 0 : a < b ? 1 : -1);
+const newest = <T extends { id: string; recorded_at: string }>(rows: T[], key: (r: T) => string): T | undefined =>
+  [...rows].sort((a, b) => cmpDesc(key(a), key(b)) || cmpDesc(a.recorded_at, b.recorded_at) || cmpDesc(a.id, b.id))[0];
+
+/**
+ * The plan versions to APPEND so that, from FIXTURE_PLAN_FROM (and for every date an e2e run scheduled a change), the fixture supervisor
+ * owns the machine again. History is append-only: nothing is deleted. Returns the effective dates to append at (sorted).
+ */
+export function planCorrections(rows: PlanRow[], supervisorId: string, today: string): string[] {
+  const dates = new Set<string>([FIXTURE_PLAN_FROM, today]);
+  for (const r of rows) if (r.effective_from > today) dates.add(r.effective_from);
+  const out: string[] = [];
+  for (const d of [...dates].sort()) {
+    const winner = newest(rows.filter((r) => r.effective_from <= d), (r) => r.effective_from);
+    if (!winner || winner.supervisor_id !== supervisorId) out.push(d);
+  }
+  return out;
+}
+
+/** Shift dates (from yesterday on, so a running overnight occurrence counts) whose latest cover names someone else than the fixture supervisor. */
+export function coverCorrections(rows: CoverRow[], supervisorId: string, yesterday: string): string[] {
+  const dates = new Set(rows.filter((r) => r.shift_date >= yesterday).map((r) => r.shift_date));
+  const out: string[] = [];
+  for (const d of [...dates].sort()) {
+    const winner = newest(rows.filter((r) => r.shift_date === d), () => '');
+    if (winner && winner.supervisor_id !== supervisorId) out.push(d);
+  }
+  return out;
+}
+
 /** Rows created by e2e tests carry this code/name prefix; fixtures-reset removes (or retires) them. */
 export const isThrowawayPlantName = (name: string): boolean => /^E2E-[A-Za-z0-9]{3,16}$/.test(name);
 const FIXTURE_TARGET_FROM = '2026-01-01';
@@ -136,6 +194,16 @@ const must = <T>(r: { data: T; error: { message: string } | null }): T => {
   return r.data;
 };
 
+
+/** True when any of the given tables (append-only history) still references the row: such rows are retired, never deleted. */
+async function referenced(admin: Admin, refs: [string, string][], id: string): Promise<boolean> {
+  for (const [table, column] of refs) {
+    const r = must(await admin.from(table).select('id').eq(column, id).limit(1));
+    if (r && r.length > 0) return true;
+  }
+  return false;
+}
+
 /** The fixture site exists with its fixture name and time zone (an e2e run may have renamed it; targets never touch it). Returns its id. */
 export async function ensureFixtureSite(admin: Admin, tenantId: string, fx: Pick<PlantFixture, 'site'>): Promise<string> {
   const want = { name: fx.site, timezone: 'Asia/Kolkata' };
@@ -192,16 +260,16 @@ async function resetPlant(admin: Admin, tenantIds: Map<string, string>) {
     const stale = must(await admin.from('machine').select('id, code, retired_at').eq('tenant_id', tenantId).like('code', 'E2E-%'));
     for (const m of stale ?? []) {
       if (!isThrowawayPlantName(m.code as string)) continue;
-      const used = must(await admin.from('target_version').select('id').eq('machine_id', m.id).limit(1));
-      if (used && used.length > 0) {
+      const used = await referenced(admin, [['target_version', 'machine_id'], ['assignment_version', 'machine_id'], ['assignment_cover', 'machine_id'], ['target_override_version', 'machine_id']], m.id as string);
+      if (used) {
         if (!m.retired_at) must(await admin.from('machine').update({ retired_at: new Date().toISOString() }).eq('id', m.id).select('id'));
       } else must(await admin.from('machine').delete().eq('id', m.id).select('id'));
     }
     const staleP = must(await admin.from('product').select('id, code, retired_at').eq('tenant_id', tenantId).like('code', 'E2E-%'));
     for (const p of staleP ?? []) {
       if (!isThrowawayPlantName(p.code as string)) continue;
-      const used = must(await admin.from('target_version').select('id').eq('product_id', p.id).limit(1));
-      if (used && used.length > 0) {
+      const used = await referenced(admin, [['target_version', 'product_id'], ['target_override_version', 'product_id']], p.id as string);
+      if (used) {
         if (!p.retired_at) must(await admin.from('product').update({ retired_at: new Date().toISOString() }).eq('id', p.id).select('id'));
       } else must(await admin.from('product').delete().eq('id', p.id).select('id'));
     }
@@ -212,6 +280,64 @@ async function resetPlant(admin: Admin, tenantIds: Map<string, string>) {
       if (used && used.length > 0) {
         if (!l.archived_at) must(await admin.from('line').update({ archived_at: new Date().toISOString() }).eq('id', l.id).select('id'));
       } else must(await admin.from('line').delete().eq('id', l.id).select('id'));
+    }
+  }
+}
+
+const plantDate = (offsetDays = 0): string =>
+  new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date(Date.now() + offsetDays * 86_400_000));
+
+/**
+ * Shift fixtures (05, D12). Shifts are matched by their fixed id and restored to their fixture name, times and active state. Plan versions and
+ * covers are append-only, so a reset only appends versions that put the fixture supervisor back in charge (see planCorrections /
+ * coverCorrections). Throwaway shifts (E2E-...) are deleted when nothing references them, otherwise retired.
+ */
+async function resetShifts(admin: Admin, tenantIds: Map<string, string>) {
+  const today = plantDate();
+  const yesterday = plantDate(-1);
+  for (const fx of SHIFTS) {
+    const tenantId = tenantIds.get(fx.tenant)!;
+    const site = must(await admin.from('site').select('id').eq('tenant_id', tenantId).maybeSingle());
+    if (!site) continue;
+    const row = { id: fx.id, tenant_id: tenantId, site_id: site.id, name: fx.name, start_time: fx.start, end_time: fx.end, retired_at: null };
+    // A throwaway shift with the fixture's name would block the unique name: retire it first (names are per site, case-insensitive).
+    const clash = must(await admin.from('shift').select('id').eq('site_id', site.id).ilike('name', fx.name).neq('id', fx.id));
+    for (const c of clash ?? []) must(await admin.from('shift').update({ name: `E2E-${String(c.id).slice(0, 8)}`, retired_at: new Date().toISOString() }).eq('id', c.id).select('id'));
+    const found = must(await admin.from('shift').select('id').eq('id', fx.id).maybeSingle());
+    if (found) must(await admin.from('shift').update(row).eq('id', fx.id).select('id'));
+    else must(await admin.from('shift').insert(row).select('id'));
+
+    for (const a of fx.assignments) {
+      const supervisor = USERS.find((u) => u.key === a.supervisor)!;
+      const sup = must(await admin.from('membership').select('user_id').eq('tenant_id', tenantId).eq('phone_e164', supervisor.phone).maybeSingle());
+      const machine = must(await admin.from('machine').select('id').eq('tenant_id', tenantId).eq('code', a.machine).maybeSingle());
+      const ua = must(await admin.from('membership').select('user_id').eq('tenant_id', tenantId).eq('role', 'unit_admin').limit(1));
+      if (!sup || !machine || !ua?.length) continue;
+      const recordedBy = ua[0].user_id as string;
+      const plan = must(await admin.from('assignment_version').select('id, effective_from, supervisor_id, recorded_at').eq('shift_id', fx.id).eq('machine_id', machine.id));
+      for (const d of planCorrections((plan ?? []) as PlanRow[], sup.user_id as string, today)) {
+        must(await admin.from('assignment_version').insert({
+          tenant_id: tenantId, shift_id: fx.id, machine_id: machine.id, supervisor_id: sup.user_id, effective_from: d, recorded_by: recordedBy,
+        }).select('id'));
+      }
+      const covers = must(await admin.from('assignment_cover').select('id, shift_date, supervisor_id, recorded_at').eq('shift_id', fx.id).eq('machine_id', machine.id).gte('shift_date', yesterday));
+      for (const d of coverCorrections((covers ?? []) as CoverRow[], sup.user_id as string, yesterday)) {
+        must(await admin.from('assignment_cover').insert({
+          tenant_id: tenantId, shift_id: fx.id, shift_date: d, machine_id: machine.id, supervisor_id: sup.user_id, reason: FIXTURE_COVER_REASON, recorded_by: recordedBy,
+        }).select('id'));
+      }
+    }
+  }
+
+  // Throwaway shifts left by e2e runs.
+  for (const tenantId of tenantIds.values()) {
+    const stale = must(await admin.from('shift').select('id, name, retired_at').eq('tenant_id', tenantId).like('name', 'E2E-%'));
+    for (const sh of stale ?? []) {
+      if (!isThrowawayPlantName(sh.name as string)) continue;
+      const used = (await Promise.all(['assignment_version', 'assignment_cover', 'target_override_version'].map(async (t) =>
+        must(await admin.from(t).select('id').eq('shift_id', sh.id).limit(1))))).some((r) => (r ?? []).length > 0);
+      if (used) { if (!sh.retired_at) must(await admin.from('shift').update({ retired_at: new Date().toISOString() }).eq('id', sh.id).select('id')); }
+      else must(await admin.from('shift').delete().eq('id', sh.id).select('id'));
     }
   }
 }
@@ -303,6 +429,7 @@ async function main() {
     }
   }
   await resetPlant(admin, tenantIds);
+  await resetShifts(admin, tenantIds);
   // Super Admins: reuse the Auth user, reset password + unban, and put the platform_admin row in its canonical state.
   for (const f of SUPER_ADMINS) {
     let id = existing.get(f.email);

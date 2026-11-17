@@ -301,7 +301,7 @@ export function scheduledAfter(versions: TargetVersion[], date: string): { from:
 // ---- Writes (RPC) ---------------------------------------------------------------------------------------------------------------
 /** A server refusal. `field` names the form field for validation/duplicate errors; `machines` lists blocking machine codes. */
 export class PlantError extends ApiError {
-  constructor(status: number, field: string | undefined, message: string, code?: string, public machines?: string[]) {
+  constructor(status: number, field: string | undefined, message: string, code?: string, public machines?: string[], public dates?: string[]) {
     super(status, field, message, code);
     this.name = 'PlantError';
   }
@@ -312,13 +312,13 @@ type RpcError = { code?: string; message?: string; details?: string | null } | n
 /** Turns a PostgREST error into something the form can show. Network failures are re-thrown untouched (toUserMessage handles them). */
 function mapRpcError(error: NonNullable<RpcError> & Record<string, unknown>, status: number | undefined): never {
   if (error.code === 'P0001') {
-    let detail: { code?: string; field?: string; machines?: string[] } = {};
+    let detail: { code?: string; field?: string; machines?: string[]; dates?: string[] } = {};
     try {
       detail = JSON.parse(String(error.details ?? '{}'));
     } catch {
       detail = {};
     }
-    throw new PlantError(400, detail.field, String(error.message ?? MESSAGES.generic), detail.code, detail.machines);
+    throw new PlantError(400, detail.field, String(error.message ?? MESSAGES.generic), detail.code, detail.machines, detail.dates);
   }
   if (status === 401) throw new PlantError(401, undefined, 'Sign in again', 'unauthenticated'); // expired session (R4 item 10)
   if (typeof status === 'number' && status >= 500) throw new ApiError(status, undefined, MESSAGES.generic);
@@ -361,6 +361,257 @@ export const plantApi = {
     call(c, 'pm_set_target', { p_request_id: rid, p_machine_id: i.machineId, p_product_id: i.productId, p_pieces: i.pieces, p_effective_from: i.effectiveFrom }),
   endTarget: (c: RpcClient, i: { machineId: string; productId: string; effectiveFrom: string }, rid: string) =>
     call(c, 'pm_end_target', { p_request_id: rid, p_machine_id: i.machineId, p_product_id: i.productId, p_effective_from: i.effectiveFrom }),
+};
+
+
+// ================================================================================================================================
+// 05-shifts-and-assignments: shifts, recurring assignments, cover and per-shift targets. The server decides everything (shift_board /
+// my_shift resolve ownership, the sh_* RPCs enforce the rules); this section only reads, formats, validates early and calls.
+// ================================================================================================================================
+export type Shift = { id: string; name: string; start_time: string; end_time: string; retired_at: string | null };
+export type Supervisor = { user_id: string; full_name: string; employee_id: string };
+export type OwnerSource = 'plan' | 'cover' | 'none';
+export type BoardMachine = {
+  machine_id: string;
+  code: string;
+  name: string;
+  line: string | null;
+  status: MachineStatus;
+  owner_id: string | null;
+  owner_name: string | null;
+  owner_inactive: boolean;
+  source: OwnerSource;
+  reason: string | null;
+  /** The owner by the plan alone (covers ignored) where an assignment made now would start, and the plan changes scheduled after it. */
+  plan_owner_id: string | null;
+  plan_owner_name: string | null;
+  later_dates: string[];
+};
+export type ShiftBoard = {
+  ok: true;
+  shift: { id: string; name: string; start_time: string; end_time: string; retired: boolean };
+  shift_date: string;
+  /** The first occurrence that has not started and is not before the board date: where an assignment made now starts. */
+  plan_date: string;
+  starts_at: string;
+  ends_at: string;
+  machines: BoardMachine[];
+  unassigned_count: number;
+};
+export type MyShiftMachine = { machine_id: string; code: string; name: string; line: string | null };
+export type MyShiftOccurrence = {
+  shift: { id: string; name: string; start_time: string; end_time: string };
+  shift_date: string;
+  starts_at: string;
+  ends_at: string;
+  running: boolean;
+  machines: MyShiftMachine[];
+};
+/** Every running occurrence the caller owns machines in; with none running, the next one within 36 hours. */
+export type MyShift = { ok: true; state: 'running' | 'next' | 'none' | 'no_shifts'; occurrences: MyShiftOccurrence[] };
+export type OverrideVersion = TargetVersion & { shift_id: string };
+
+// ---- Times (HH:MM, site time zone; the server owns the occurrence maths) --------------------------------------------------------
+/** "06:00:00" (a database time) -> "06:00". */
+export const hhmm = (t: string): string => t.slice(0, 5);
+const toMinutes = (t: string): number => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+export const isOvernight = (start: string, end: string): boolean => toMinutes(end) < toMinutes(start);
+export const timeWindow = (start: string, end: string): string => `${hhmm(start)} – ${hhmm(end)}`;
+/** Length of one occurrence in minutes; an end before the start means it finishes the next day. */
+export function shiftMinutes(start: string, end: string): number {
+  const d = toMinutes(end) - toMinutes(start);
+  return d > 0 ? d : d + 1440;
+}
+export function formatDuration(minutes: number): string {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (h === 0) return `${m} min`;
+  return m === 0 ? `${h} h` : `${h} h ${m} min`;
+}
+
+export const SHIFT_MSG = {
+  name: 'Enter a name of 1 to 40 characters',
+  time: 'Enter a time as HH:MM (24-hour)',
+  step: 'Use 15-minute steps: :00, :15, :30 or :45',
+  same: 'The end time must differ from the start time',
+  supervisor: 'Choose a supervisor',
+  machines: 'Choose at least one machine',
+  assignPast: "Assignments can't start in the past",
+  untilBefore: "The end date can't be before the start date",
+  reason: 'Enter a reason of 1 to 200 characters',
+} as const;
+
+function timeError(t: string): string | null {
+  const v = t.trim();
+  if (!/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(v)) return SHIFT_MSG.time;
+  return Number(v.slice(3)) % 15 === 0 ? null : SHIFT_MSG.step;
+}
+
+export function validateShiftForm(f: { name: string; start: string; end: string }): FieldErrors {
+  const e: FieldErrors = {};
+  const n = f.name.trim();
+  if (n.length < 1 || n.length > 40) e.name = SHIFT_MSG.name;
+  const se = timeError(f.start);
+  const ee = timeError(f.end);
+  if (se) e.start_time = se;
+  if (ee) e.end_time = ee;
+  else if (!se && f.start.trim() === f.end.trim()) e.end_time = SHIFT_MSG.same;
+  return e;
+}
+
+export function validateAssignForm(f: { supervisorId: string; machineIds: string[]; from: string; until: string }, today: string | null): FieldErrors {
+  const e: FieldErrors = {};
+  if (!f.supervisorId) e.supervisor = SHIFT_MSG.supervisor;
+  if (f.machineIds.length === 0) e.machine_ids = SHIFT_MSG.machines;
+  const from = f.from.trim();
+  if (!isValidDate(from)) e.from = MSG.dateFormat;
+  else if (today && from < today) e.from = SHIFT_MSG.assignPast;
+  const until = f.until.trim();
+  if (until) {
+    if (!isValidDate(until)) e.until = MSG.dateFormat;
+    else if (isValidDate(from) && until < from) e.until = SHIFT_MSG.untilBefore;
+  }
+  return e;
+}
+
+export function validateCoverForm(f: { machineIds: string[]; reason: string }): FieldErrors {
+  const e: FieldErrors = {};
+  if (f.machineIds.length === 0) e.machine_ids = SHIFT_MSG.machines;
+  const r = f.reason.trim();
+  if (r.length < 1 || r.length > 200) e.reason = SHIFT_MSG.reason;
+  return e;
+}
+
+// ---- Board helpers (display only: ownership is resolved by the server) -----------------------------------------------------------
+export type BoardGroup = { ownerId: string; name: string; inactive: boolean; machines: BoardMachine[] };
+const byCode = (a: BoardMachine, b: BoardMachine) => (a.code < b.code ? -1 : a.code > b.code ? 1 : 0);
+
+/** "Unassigned this shift" first (a cover to nobody included), then one group per supervisor by name. */
+export function groupBoard(machines: BoardMachine[]): { unassigned: BoardMachine[]; groups: BoardGroup[] } {
+  const unassigned = machines.filter((m) => m.owner_id === null).sort(byCode);
+  const groups = new Map<string, BoardGroup>();
+  for (const m of machines) {
+    if (m.owner_id === null) continue;
+    const g = groups.get(m.owner_id) ?? { ownerId: m.owner_id, name: m.owner_name ?? 'Unknown', inactive: m.owner_inactive, machines: [] };
+    g.machines.push(m);
+    groups.set(m.owner_id, g);
+  }
+  const list = [...groups.values()].sort((a, b) => a.name.localeCompare(b.name));
+  for (const g of list) g.machines.sort(byCode);
+  return { unassigned, groups: list };
+}
+
+/**
+ * Who loses machines when the selected ones move to `newOwnerId` (null = unassigned). basis 'plan' (Assign: a plan change) looks at the plan owner
+ * where the assignment would start, so a cover on the board date doesn't hide or invent a loser; basis 'effective' (Cover: one occurrence) looks at
+ * who owns the occurrence now.
+ */
+export function whoLoses(machines: BoardMachine[], selectedIds: string[], newOwnerId: string | null, basis: 'plan' | 'effective' = 'plan'): { name: string; codes: string[] }[] {
+  const chosen = new Set(selectedIds);
+  const out = new Map<string, { name: string; codes: string[] }>();
+  for (const m of machines) {
+    const id = basis === 'plan' ? m.plan_owner_id : m.owner_id;
+    const name = basis === 'plan' ? m.plan_owner_name : m.owner_name;
+    if (!chosen.has(m.machine_id) || id === null || id === newOwnerId) continue;
+    const g = out.get(id) ?? { name: name ?? 'Unknown', codes: [] };
+    g.codes.push(m.code);
+    out.set(id, g);
+  }
+  const list = [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
+  for (const g of list) g.codes.sort();
+  return list;
+}
+
+/** Plan changes already scheduled after the start date for the selected machines: a new assignment replaces them (R4), so the dialog lists them. */
+export function supersededChanges(machines: BoardMachine[], selectedIds: string[], until: string | null = null): { code: string; dates: string[] }[] {
+  const chosen = new Set(selectedIds);
+  return machines
+    .filter((m) => chosen.has(m.machine_id))
+    .map((m) => ({ code: m.code, dates: m.later_dates.filter((d) => !until || d <= until) }))
+    .filter((m) => m.dates.length > 0)
+    .sort((a, b) => (a.code < b.code ? -1 : 1));
+}
+
+// ---- Per-shift target overrides (display) -------------------------------------------------------------------------------------------
+export type OverrideSummary = PairSummary & { shiftId: string };
+
+/** Current, next and history per (product, shift) pair, with the same rules as the base targets. */
+export function summariseOverrides(versions: OverrideVersion[], today: string): OverrideSummary[] {
+  const KEY = '\u0000';
+  const byId = new Map(versions.map((v) => [v.id, v]));
+  const pseudo = versions.map((v) => ({ ...v, product_id: `${v.product_id}${KEY}${v.shift_id}` }));
+  return summariseTargets(pseudo, today).map((s) => {
+    const [productId, shiftId] = s.productId.split(KEY);
+    return { ...s, productId, shiftId, history: s.history.map((h) => byId.get(h.id)!) };
+  });
+}
+
+// ---- Reads ---------------------------------------------------------------------------------------------------------------------------
+const SHIFT_COLUMNS = 'id, name, start_time, end_time, retired_at';
+
+export async function fetchShifts(client: Db, opts: { includeRetired?: boolean } = {}): Promise<Shift[]> {
+  let q = client.from('shift').select(SHIFT_COLUMNS);
+  if (!opts.includeRetired) q = q.is('retired_at', null);
+  const { data, error } = await q.order('start_time', { ascending: true }).order('name', { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as unknown as Shift[];
+}
+
+/** Supervisors a Unit Admin can assign: active, with their password already changed (the server refuses the others). */
+export async function fetchActiveSupervisors(client: Db): Promise<Supervisor[]> {
+  const { data, error } = await client
+    .from('membership')
+    .select('user_id, full_name, employee_id')
+    .eq('role', 'supervisor')
+    .eq('status', 'active')
+    .eq('must_change_password', false)
+    .order('full_name', { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as unknown as Supervisor[];
+}
+
+export async function fetchOverrideVersions(client: Db, machineId: string): Promise<OverrideVersion[]> {
+  const { data, error } = await client
+    .from('target_override_version')
+    .select('id, machine_id, product_id, shift_id, effective_from, pieces_per_shift, recorded_by, recorded_at')
+    .eq('machine_id', machineId)
+    .order('effective_from', { ascending: false })
+    .order('recorded_at', { ascending: false });
+  if (error) throw error;
+  return (data ?? []) as unknown as OverrideVersion[];
+}
+
+/** Read RPCs return {ok:true,...} or the generic denial; planning data is never read from the tables by a supervisor. */
+async function readRpc<T>(client: RpcClient, fn: string, args?: Record<string, unknown>): Promise<T> {
+  const res = args === undefined ? await client.rpc(fn) : await client.rpc(fn, args);
+  if (res.error) mapRpcError(res.error as never, res.status);
+  const data = res.data as { ok?: boolean; code?: string } | null;
+  if (!data || data.ok !== true) throw new PlantError(403, undefined, 'Not allowed', data?.code ?? 'not_allowed');
+  return data as T;
+}
+
+export const fetchShiftBoard = (client: RpcClient, shiftId: string, date: string | null): Promise<ShiftBoard> =>
+  readRpc<ShiftBoard>(client, 'shift_board', { p_shift_id: shiftId, p_date: date });
+export const fetchMyShift = (client: RpcClient): Promise<MyShift> => readRpc<MyShift>(client, 'my_shift');
+
+// ---- Writes (RPC) --------------------------------------------------------------------------------------------------------------------
+export const shiftApi = {
+  saveShift: (c: RpcClient, id: string | null, i: { name: string; start: string; end: string }, rid: string) =>
+    call(c, 'sh_save_shift', { p_request_id: rid, p_id: id, p_name: i.name, p_start: i.start, p_end: i.end }),
+  setShiftRetired: (c: RpcClient, id: string, retired: boolean, rid: string) =>
+    call(c, 'sh_set_shift_retired', { p_request_id: rid, p_id: id, p_retired: retired }),
+  assign: (c: RpcClient, i: { shiftId: string; supervisorId: string; machineIds: string[]; from: string; until: string | null }, rid: string) =>
+    call(c, 'sh_assign', { p_request_id: rid, p_shift_id: i.shiftId, p_supervisor_id: i.supervisorId, p_machine_ids: i.machineIds, p_from: i.from, p_until: i.until }),
+  unassign: (c: RpcClient, i: { shiftId: string; machineIds: string[]; from: string }, rid: string) =>
+    call(c, 'sh_unassign', { p_request_id: rid, p_shift_id: i.shiftId, p_machine_ids: i.machineIds, p_from: i.from }),
+  cover: (c: RpcClient, i: { shiftId: string; shiftDate: string; machineIds: string[]; supervisorId: string | null; reason: string }, rid: string) =>
+    call(c, 'sh_cover', { p_request_id: rid, p_shift_id: i.shiftId, p_shift_date: i.shiftDate, p_machine_ids: i.machineIds, p_supervisor_id: i.supervisorId, p_reason: i.reason }),
+  setOverride: (c: RpcClient, i: { machineId: string; productId: string; shiftId: string; pieces: number; effectiveFrom: string }, rid: string) =>
+    call(c, 'sh_set_target_override', {
+      p_request_id: rid, p_machine_id: i.machineId, p_product_id: i.productId, p_shift_id: i.shiftId, p_pieces: i.pieces, p_effective_from: i.effectiveFrom,
+    }),
+  endOverride: (c: RpcClient, i: { machineId: string; productId: string; shiftId: string; effectiveFrom: string }, rid: string) =>
+    call(c, 'sh_end_target_override', { p_request_id: rid, p_machine_id: i.machineId, p_product_id: i.productId, p_shift_id: i.shiftId, p_effective_from: i.effectiveFrom }),
 };
 
 /**

@@ -1,0 +1,16 @@
+# 05 AC-9 (Android): a supervisor sees the shift running now with the machines assigned to them (fixture org A: supA owns FX-MA1 on
+# both fixture shifts, which together cover the whole day, so a shift is always running).
+appId: com.pulsebayai.mouldtrack
+name: my-shift
+---
+- launchApp: { clearState: true }
+- tapOn: { id: "phone" }
+- inputText: "9000000002"
+- tapOn: { id: "password" }
+- inputText: ${PASSWORD}
+- hideKeyboard
+- tapOn: { id: "sign-in-submit" }
+- extendedWaitUntil: { visible: { id: "home-tenant", text: "e2e org A" }, timeout: 15000 }
+- extendedWaitUntil: { visible: { id: "my-shift" }, timeout: 15000 }
+- extendedWaitUntil: { visible: { id: "my-shift-state-0", text: "Running now" }, timeout: 15000 }
+- assertVisible: "FX-MA1.*"

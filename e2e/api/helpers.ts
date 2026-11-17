@@ -89,6 +89,21 @@ export function orgDef(n: number, name: string): Org {
   };
 }
 
+/**
+ * An org with explicit ids and phones, for specs that need an org outside orgDef(1..9). `phones` = [ua1, ua2, sup, fresh]; keep them in the
+ * throwaway block (+91 90000 10000-99999), never in the canonical 00001-00099 block (D2).
+ */
+export function customOrg(tenantId: string, name: string, phones: [string, string, string, string]): Org {
+  const mk = (key: OrgUser['key'], i: number, role: OrgUser['role'], mustChange: boolean): OrgUser => ({
+    key, id: '', phone: phones[i - 1], role, mustChange,
+  });
+  return {
+    id: tenantId,
+    name,
+    users: { ua1: mk('ua1', 1, 'unit_admin', false), ua2: mk('ua2', 2, 'unit_admin', false), sup: mk('sup', 3, 'supervisor', false), fresh: mk('fresh', 4, 'supervisor', true) },
+  };
+}
+
 async function findAuthUserId(sb: SupabaseClient, email: string): Promise<string | null> {
   for (let page = 1; page < 50; page++) {
     const { data, error } = await sb.auth.admin.listUsers({ page, perPage: 1000 });
