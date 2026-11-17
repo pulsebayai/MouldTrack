@@ -23,6 +23,9 @@ const prefix = (page: Page, p: string) => page.locator(`[data-testid^="${p}"]:vi
 const timeline = (page: Page) => page.locator('[data-testid^="timeline-"]:not([data-testid$="-label"]):visible');
 
 let w: IssueWorld;
+const runTag = Math.random().toString(36).slice(2, 8); // the dev org persists between runs: every issue text this spec searches for is unique per run
+const lowDescription = `E2E guard door sticks ${runTag}`;
+const escalatedDescription = `E2E escalated via api ${runTag}`;
 const description = `E2E hydraulic leak ${Math.random().toString(36).slice(2, 8)}`;
 
 test.describe.configure({ mode: 'serial' });
@@ -160,7 +163,7 @@ test('a Low issue closes as soon as its owner resolves it (AC-7)', async ({ page
   await prefix(page, 'report-issue-').filter({ hasText: w.machine.code }).first().click();
   await prefix(page, 'report-category-').filter({ hasText: 'Other' }).click();
   await tid(page, 'report-priority-low').click();
-  await tid(page, 'report-description').fill('E2E guard door sticks');
+  await tid(page, 'report-description').fill(lowDescription);
   await tid(page, 'report-submit').click();
   await expect(tid(page, 'issue-status')).toHaveText('Open');
   await tid(page, 'action-start').click();
@@ -176,17 +179,17 @@ test('the Unit Admin sees the whole list and its filters, and manages categories
   const catName = `E2E Cat ${Math.random().toString(36).slice(2, 7)}`;
   // An issue that is escalated right now (acknowledging, reassigning or resolving clears the escalation, so the first issue no longer is).
   const rpc = w.running.session.client.rpc.bind(w.running.session.client);
-  const made = await rpc('iss_report', { p_request_id: crypto.randomUUID(), p_machine_id: w.machine.id, p_category_id: w.categoryId, p_priority: 'medium', p_description: 'E2E escalated via api', p_machine_stopped: false });
+  const made = await rpc('iss_report', { p_request_id: crypto.randomUUID(), p_machine_id: w.machine.id, p_category_id: w.categoryId, p_priority: 'medium', p_description: escalatedDescription, p_machine_stopped: false });
   expect(made.data).toMatchObject({ ok: true });
   expect((await rpc('iss_escalate', { p_request_id: crypto.randomUUID(), p_issue_id: made.data.id, p_reason: 'E2E escalation' })).data).toMatchObject({ ok: true });
   await signIn(page, w.org.users.ua1.phone, FIXTURE_PASSWORD);
   await tid(page, 'issue-alerts-all').click();
   await expect(prefix(page, 'issue-row-').first()).toBeVisible();
   await tid(page, 'issues-tab-closed').click();
-  await expect(prefix(page, 'issue-row-').filter({ hasText: 'E2E guard door sticks' })).toHaveCount(1);
+  await expect(prefix(page, 'issue-row-').filter({ hasText: lowDescription })).toHaveCount(1);
   await expect(prefix(page, 'issue-row-').filter({ hasText: description })).toHaveCount(0);
   await tid(page, 'issues-tab-escalated').click();
-  await expect(prefix(page, 'issue-row-').filter({ hasText: 'E2E escalated via api' })).toHaveCount(1);
+  await expect(prefix(page, 'issue-row-').filter({ hasText: escalatedDescription })).toHaveCount(1);
   await expect(prefix(page, 'issue-row-').filter({ hasText: description })).toHaveCount(0); // its escalation ended when the owner changed
   await expectNoSeriousViolations(page);
 

@@ -90,6 +90,8 @@ AC-1–16 → tests (spec table, with D8's Android scope); full suite green; dev
 
 - Step 8 (D14, 07-owned test): `e2e/api/issues.spec.ts` deactivation test now uses two photos: the new owner downloads the first (control), is deactivated, and must be refused the second (never fetched), plus `issue_detail` and `issue_list` denied; the re-fetch refusal of an already-downloaded object is no longer asserted.
 
+- Step 8 (found by the hosted proof, run 44106764941; 07-owned test): `e2e/web/issues.spec.ts` searched fixed issue texts ('E2E guard door sticks', 'E2E escalated via api') with `toHaveCount(1)`; the dev org persists between runs, so each run left another closed/escalated copy and the count grew to 3. Both texts now carry a per-run random tag. Not a product defect.
+
 ## Session log
 ### 2026-11-17
 - Done: intent + spec approved (owner: categories extendable; High/Critical verified by later-shift owner, UA fallback when unassigned; reporting on non-owned machines; photos visible to all who see the issue; stopped → Critical + UA alerts).
