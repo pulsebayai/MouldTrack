@@ -71,7 +71,7 @@ Console (web): left nav Tenants · Super Admins · Platform audit · Change pass
 | 14 | — | denials audited | UA/SUP → platform 403 | — |
 | 15 | screen tests | — | — | axe on console screens |
 | 16 | full suite | full suite | full suite | full suite |
-Mutating tests use dedicated fixture tenants created by the tests (prefix `e2e t3 …`) and a fixture SA (`+91 90000 00090`). Setup-endpoint tests run on the **local stack only** (a hosted dev already has an SA); hosted checks assert the setup endpoint refuses.
+Mutating tests use dedicated fixture tenants created by the tests (prefix `e2e t3 …`) and a fixture SA (`+91 90000 00098`). Setup-endpoint tests run on the **local stack only** (a hosted dev already has an SA); hosted checks assert the setup endpoint refuses.
 
 ## Proposed architecture changes (architecture lock: 03)
 1. **Platform identity:** `platform_admin` separate from membership; phone unique across both via `phone_claim`; same sign-in, routed by identity type.
