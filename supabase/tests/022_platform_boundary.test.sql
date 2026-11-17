@@ -49,6 +49,19 @@ insert into public.attachment (tenant_id, entity_type, entity_id, storage_path, 
   ('1f000000-0000-4000-ba00-00000000000a', 'issue_action', '5e000000-0000-4000-ba00-000000000007',
    'tenant/1f000000-0000-4000-ba00-00000000000a/issue/5e000000-0000-4000-ba00-000000000006/5e000000-0000-4000-ba00-000000000008.png', 'image/png', 10, repeat('c', 64),
    '00000000-0000-4000-ba00-0000000000b2');
+-- 06's reading tables: one row each (an opening, a closing and the summary that uses them; cavities for the machine x product).
+insert into public.production_reading (id, tenant_id, machine_id, shift_id, shift_date, kind, product_id, counter_value, late, recorded_by) values
+  ('5e000000-0000-4000-ba00-000000000016', '1f000000-0000-4000-ba00-00000000000a', '5e000000-0000-4000-ba00-000000000003', '5e000000-0000-4000-ba00-000000000005', current_date - 1, 'opening',
+   '5e000000-0000-4000-ba00-000000000004', 1000, false, '00000000-0000-4000-ba00-0000000000b2');
+insert into public.production_reading (id, tenant_id, machine_id, shift_id, shift_date, kind, counter_value, good, reject, late, recorded_by) values
+  ('5e000000-0000-4000-ba00-000000000017', '1f000000-0000-4000-ba00-00000000000a', '5e000000-0000-4000-ba00-000000000003', '5e000000-0000-4000-ba00-000000000005', current_date - 1, 'closing',
+   1100, 90, 5, false, '00000000-0000-4000-ba00-0000000000b2');
+insert into public.production_summary (tenant_id, machine_id, shift_id, shift_date, calc_version, product_id, counter_unit, cavities, opening_reading_id, closing_reading_id, opening_counter, closing_counter,
+  good, reject, target, movement_units, movement_pieces, unaccounted, attainment_pct, rollover, needs_review, over_reported, late_opening, late_closing, entered_by_ua) values
+  ('1f000000-0000-4000-ba00-00000000000a', '5e000000-0000-4000-ba00-000000000003', '5e000000-0000-4000-ba00-000000000005', current_date - 1, 1, '5e000000-0000-4000-ba00-000000000004', 'pieces', 1,
+   '5e000000-0000-4000-ba00-000000000016', '5e000000-0000-4000-ba00-000000000017', 1000, 1100, 90, 5, 90, 100, 100, 5, 100.00, false, false, false, false, false, false);
+insert into public.cavity_version (tenant_id, machine_id, product_id, effective_from, cavities, recorded_by) values
+  ('1f000000-0000-4000-ba00-00000000000a', '5e000000-0000-4000-ba00-000000000003', '5e000000-0000-4000-ba00-000000000004', current_date - 2, 4, '00000000-0000-4000-ba00-0000000000b1');
 -- tenant events, an SA event, and a denial exist, so "0 rows" is meaningful
 select app.ua_set_status('00000000-0000-4000-ba00-0000000000b1', gen_random_uuid(), '00000000-0000-4000-ba00-0000000000b2', 'inactive');
 select app.ua_set_status('00000000-0000-4000-ba00-0000000000b1', gen_random_uuid(), '00000000-0000-4000-ba00-0000000000b2', 'active');
