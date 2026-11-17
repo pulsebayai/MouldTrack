@@ -171,8 +171,8 @@ test.describe('Unit Admin plans their own tenant only (AC-5..10)', () => {
     expect(row(m1.code)).toMatchObject({ owner_id: sup.userId, source: 'plan', plan_owner_id: sup.userId });
     expect(row(m2.code)).toMatchObject({ owner_id: sup.userId, source: 'plan' });
 
-    // R2: no date = the current occurrence of a running shift (today's, for 00:00-12:00 and 12:00-00:00).
-    const dflt = await rpc(ua, 'shift_board', { p_shift_id: shiftAm, p_date: null });
+    // R2: no date = the current occurrence, else the next. 12:00-00:00 always has one today (running from noon, upcoming before it).
+    const dflt = await rpc(ua, 'shift_board', { p_shift_id: shiftPm, p_date: null });
     expect(dflt.data).toMatchObject({ ok: true, shift_date: today });
 
     // Cover tomorrow only: m1 goes to nobody; the plan is untouched (R5: the board still names the plan owner).

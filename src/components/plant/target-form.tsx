@@ -2,8 +2,9 @@ import { useRef, useState } from 'react';
 import { Text, View } from 'react-native';
 import { Button, ErrorText, Field, colors } from '@/components/ui';
 import { toUserMessage } from '@/lib/errors';
-import { PlantError, RequestIds, formatPieces, formatPlantDate, isValidDate, parsePieces, plantApi, scheduledAfter, shiftApi, validateTargetForm, type FieldErrors, type TargetVersion } from '@/lib/plant';
+import { PlantError, RequestIds, fetchShiftBoard, formatPieces, formatPlantDate, isValidDate, parsePieces, plantApi, scheduledAfter, shiftApi, validateTargetForm, type FieldErrors, type TargetVersion } from '@/lib/plant';
 import { useSession } from '@/lib/session-provider';
+import { useLoad } from '@/lib/use-load';
 
 export type TargetFormProps = {
   mode: 'set' | 'end';
@@ -24,7 +25,11 @@ export type TargetFormProps = {
 export function TargetForm({ mode, machineId, productId, productLabel, today, versions = [], unit = 'pcs/shift', shift, onDone, onCancel }: TargetFormProps) {
   const { client } = useSession();
   const [pieces, setPieces] = useState('');
-  const [date, setDate] = useState(today ?? '');
+  const [typed, setDate] = useState<string | null>(null);
+  // R1: a shift target can't start on an occurrence that has already started, so its date defaults to the first one that hasn't (the board says which).
+  const first = useLoad(() => fetchShiftBoard(client, shift!.id, null), [shift?.id], !!shift);
+  const waiting = !!shift && first.state === 'loading';
+  const date = typed ?? (shift ? first.data?.plan_date : undefined) ?? today ?? '';
   const [errors, setErrors] = useState<FieldErrors>({});
   const [busy, setBusy] = useState(false);
   const ids = useRef(new RequestIds());
@@ -88,7 +93,7 @@ export function TargetForm({ mode, machineId, productId, productLabel, today, ve
       ) : null}
       {errors.form ? <ErrorText testID="target-form-error">{errors.form}</ErrorText> : null}
       <View style={{ flexDirection: 'row', gap: 12, flexWrap: 'wrap' }}>
-        <Button title={setting ? 'Save target' : 'End target'} testID="target-submit" onPress={submit} disabled={busy} busy={busy} />
+        <Button title={setting ? 'Save target' : 'End target'} testID="target-submit" onPress={submit} disabled={busy || (waiting && typed === null)} busy={busy} />
         <Button title="Cancel" variant="secondary" testID="target-cancel" onPress={onCancel} disabled={busy} />
       </View>
     </View>

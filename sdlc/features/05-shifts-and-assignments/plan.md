@@ -23,7 +23,7 @@ Branches from main (01–04). **03 merges first**; 05 rebases on it in step 8 (0
 - `src/lib/plant.ts` (+ tests), `src/app/(app)/plant/_layout.tsx` (tabs), `plant/shifts.tsx`, `plant/assignments.tsx`, `src/components/plant/targets-panel.tsx`, `src/components/plant/*` (shift form, assign/cover dialogs), `src/components/my-shift-card.tsx`, `src/app/(app)/home.tsx` — new/modified; screen tests new
 - `e2e/web/shifts.spec.ts`, `e2e/api/shifts.spec.ts`, `e2e/maestro/my-shift.yaml` — new; `e2e/web/fixtures.ts` — additions
 - Step 8 only: `supabase/tests/022_platform_boundary.test.sql` — fixture-block additions only (architecture extension point)
-- Step 8a (review nit 16, extra files): `e2e/maestro/my-shift.yaml` (15 s waits, indexed ids), `src/test/shift-fixtures.ts`, `src/components/plant/assignment-forms.tsx`, `src/__tests__/screens/{assignments,my-shift}.test.tsx`, `src/lib/__tests__/shifts.test.ts`, `supabase/tests/030–033` (edited), `supabase/tests/022` (fixture rows only, step 8)
+- Step 8a (review nit 16, extra files): `e2e/maestro/my-shift.yaml` (15 s waits, indexed ids), `src/test/shift-fixtures.ts`, `src/components/plant/assignment-forms.tsx`, `src/components/plant/target-form.tsx`, `src/__tests__/screens/{assignments,my-shift}.test.tsx`, `src/lib/__tests__/shifts.test.ts`, `supabase/tests/030–033` (edited), `supabase/tests/022` (fixture rows only, step 8)
 - Step 9 only: temporary dev-only triggers (removed before ready)
 
 ## Steps
@@ -103,6 +103,7 @@ AC-1–13 → tests (spec table); full suite green after rebase on 03; dev regre
   - R4: the superseded dates are listed in the confirm dialog (Assign); End assignment has no dialog and supersedes silently per the server rule.
   - R8-13 uses RN `AppState` + `setInterval`, not an expo-router focus hook (the Home tests render without a navigator).
   - R8-10: `sh_cover` uses `now()` (comment in the migration); a cover can only be written while the occurrence has not ended.
+  - R1 also reaches the shift-target form (found by CI run 44054235958, e2e-web): `TargetForm` with a `shift` defaults its date to the board's `plan_date` (`shift_board(shift, null)`; Save waits for it) because the server now refuses an override on a started occurrence. Fixed in code; the web spec now asserts the override row shows 555 (Current or Next depending on the time of day) instead of exactly "Current: 555", and the api spec's R2 check uses the 12:00-00:00 shift (an AM shift's default date depends on the time of day). Both are 05's own unmerged specs.
   - e2e: the api spec seeds the standing plan on the always-started 00:00-12:00 / 12:00-00:00 shifts directly as service role (like fixtures-reset), then exercises assign from tomorrow; the web spec uses the form's own default From date.
 - Known gap for 06: base targets (04's date-only rule, `target_for`) on a started shift can still change under a running shift; R1 only closes plan/override rewrites.
 - Architecture flags (architecture.md not edited; for the architecture lock holder):

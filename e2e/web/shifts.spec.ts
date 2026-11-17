@@ -126,7 +126,8 @@ test.describe('Unit Admin plans shifts and assignments (AC-1, AC-5..9)', () => {
     await tid(page, 'target-pieces').fill('555');
     await tid(page, 'target-submit').click();
     const override = prefix(page, 'override-row-').filter({ hasText: shiftName });
-    await expect(override).toContainText('Current: 555');
+    // R1: the target starts at the first occurrence that hasn't started, so it is "Current" before 02:15 plant time and "Next" after it.
+    await expect(override).toContainText('555');
     await expect(override).toContainText('pcs/shift');
     await expectNoSeriousViolations(page);
   });
