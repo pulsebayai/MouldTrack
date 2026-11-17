@@ -67,15 +67,30 @@ export class PhotoError extends Error {
 }
 
 /** Resize so the longer edge is at most MAX_EDGE, re-encode as JPEG at quality 0.7 (this also drops EXIF), read the bytes and hash them. */
+export function base64ToBytes(b64: string): Uint8Array {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  const clean = b64.replace(/[^A-Za-z0-9+/]/g, '');
+  const out = new Uint8Array(Math.floor((clean.length * 3) / 4));
+  let o = 0;
+  for (let i = 0; i < clean.length; i += 4) {
+    const n = [0, 1, 2, 3].map((k) => (i + k < clean.length ? chars.indexOf(clean[i + k]) : 0));
+    const v = (n[0] << 18) | (n[1] << 12) | (n[2] << 6) | n[3];
+    if (o < out.length) out[o++] = (v >> 16) & 255;
+    if (o < out.length) out[o++] = (v >> 8) & 255;
+    if (o < out.length) out[o++] = v & 255;
+  }
+  return out;
+}
+
+/**
+ * Resize so the longer edge is at most MAX_EDGE, re-encode as JPEG at quality 0.7 (this also drops EXIF), take the bytes and hash them.
+ * The bytes come from the manipulator's base64 output rather than fetch(uri): the web CSP does not allow fetching data: URLs (connect-src).
+ */
 export async function preparePhoto(uri: string, width: number, height: number): Promise<Photo> {
   const resize = width >= height ? { width: Math.min(width, MAX_EDGE) } : { height: Math.min(height, MAX_EDGE) };
-  const out = await ImageManipulator.manipulateAsync(uri, [{ resize }], { compress: JPEG_QUALITY, format: ImageManipulator.SaveFormat.JPEG });
-  let bytes: Uint8Array;
-  try {
-    bytes = new Uint8Array(await (await fetch(out.uri)).arrayBuffer());
-  } catch {
-    throw new PhotoError('That photo could not be read. Try another.', 'unreadable');
-  }
+  const out = await ImageManipulator.manipulateAsync(uri, [{ resize }], { compress: JPEG_QUALITY, format: ImageManipulator.SaveFormat.JPEG, base64: true });
+  if (!out.base64) throw new PhotoError('That photo could not be read. Try another.', 'unreadable');
+  const bytes = base64ToBytes(out.base64);
   if (bytes.length > MAX_BYTES) throw new PhotoError('That photo is too large. Try a smaller one.', 'too_large');
   return { uri: out.uri, bytes, mime: 'image/jpeg', sha256: await sha256Hex(bytes) };
 }

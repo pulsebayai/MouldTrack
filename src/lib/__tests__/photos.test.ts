@@ -1,7 +1,7 @@
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
 import { createHash } from 'node:crypto';
-import { MAX_BYTES, PhotoError, pickPhoto, preparePhoto, sha256Fallback, sha256Hex, signedPhotoUrl, uploadIssuePhoto, type Photo } from '@/lib/photos';
+import { MAX_BYTES, PhotoError, base64ToBytes, pickPhoto, preparePhoto, sha256Fallback, sha256Hex, signedPhotoUrl, uploadIssuePhoto, type Photo } from '@/lib/photos';
 
 jest.mock('expo-image-manipulator', () => ({ manipulateAsync: jest.fn(), SaveFormat: { JPEG: 'jpeg' } }));
 jest.mock('expo-image-picker', () => ({
@@ -22,17 +22,25 @@ describe('sha256', () => {
   });
 });
 
+describe('base64ToBytes', () => {
+  it.each([0, 1, 2, 3, 4, 5, 100, 1001])('decodes %i bytes like node', (n) => {
+    const b = new Uint8Array(n).map((_, i) => (i * 17 + 3) & 255);
+    expect(Array.from(base64ToBytes(Buffer.from(b).toString('base64')))).toEqual(Array.from(b));
+  });
+});
+
 describe('preparePhoto', () => {
-  const bytes = new Uint8Array([1, 2, 3, 4]);
+  const bytes = new Uint8Array([1, 2, 3, 4, 5]);
+  const b64 = Buffer.from(bytes).toString('base64');
   beforeEach(() => {
     manip.mockReset();
-    manip.mockResolvedValue({ uri: 'file://out.jpg' });
-    global.fetch = jest.fn().mockResolvedValue({ arrayBuffer: async () => bytes.buffer }) as never;
+    manip.mockResolvedValue({ uri: 'file://out.jpg', base64: b64 });
   });
   it('resizes a landscape photo by width to 1600 and compresses at 0.7 as JPEG', async () => {
     const p = await preparePhoto('file://in.jpg', 4000, 3000);
-    expect(manip).toHaveBeenCalledWith('file://in.jpg', [{ resize: { width: 1600 } }], { compress: 0.7, format: 'jpeg' });
+    expect(manip).toHaveBeenCalledWith('file://in.jpg', [{ resize: { width: 1600 } }], { compress: 0.7, format: 'jpeg', base64: true });
     expect(p).toMatchObject({ uri: 'file://out.jpg', mime: 'image/jpeg', sha256: ref(bytes) });
+    expect(Array.from(p.bytes)).toEqual(Array.from(bytes));
   });
   it('resizes a portrait photo by height and never upsizes', async () => {
     await preparePhoto('x', 3000, 4000);
@@ -41,11 +49,11 @@ describe('preparePhoto', () => {
     expect(manip).toHaveBeenLastCalledWith('x', [{ resize: { width: 800 } }], expect.anything());
   });
   it('refuses an oversize result', async () => {
-    global.fetch = jest.fn().mockResolvedValue({ arrayBuffer: async () => new ArrayBuffer(MAX_BYTES + 1) }) as never;
+    manip.mockResolvedValue({ uri: 'u', base64: Buffer.alloc(MAX_BYTES + 1).toString('base64') });
     await expect(preparePhoto('x', 10, 10)).rejects.toMatchObject({ code: 'too_large' });
   });
-  it('reports an unreadable file', async () => {
-    global.fetch = jest.fn().mockRejectedValue(new Error('x')) as never;
+  it('reports an unreadable result', async () => {
+    manip.mockResolvedValue({ uri: 'u' });
     await expect(preparePhoto('x', 10, 10)).rejects.toBeInstanceOf(PhotoError);
   });
 });
@@ -53,8 +61,7 @@ describe('preparePhoto', () => {
 describe('pickPhoto', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    manip.mockResolvedValue({ uri: 'file://out.jpg' });
-    global.fetch = jest.fn().mockResolvedValue({ arrayBuffer: async () => new Uint8Array([9]).buffer }) as never;
+    manip.mockResolvedValue({ uri: 'file://out.jpg', base64: Buffer.from([9]).toString('base64') });
   });
   it('asks for camera permission and stops when refused', async () => {
     (ImagePicker.requestCameraPermissionsAsync as jest.Mock).mockResolvedValue({ granted: false });
