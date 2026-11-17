@@ -1,5 +1,5 @@
 # Plan: Shifts and assignments
-Spec: ./spec.md · Status: draft · Date: 2026-11-17
+Spec: ./spec.md · Status: approved · Date: 2026-11-17
 Locks: schema — 05's tables only (shift, assignment_version, assignment_cover, target_override_version; split with 03 while 03 is open, logged). Architecture flags (spec "Proposed architecture changes") go into the session log and are applied on main at merge (03 holds the architecture lock until it merges).
 Branches from main (01–04). **03 merges first**; 05 rebases on it in step 8 (022 fixture additions, `_pm_authorise` with the SA branch).
 
