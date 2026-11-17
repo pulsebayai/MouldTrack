@@ -3,7 +3,7 @@
 -- Self-contained; rolled back. my_shift takes explicit moments (IST) built from today's plant date.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(88);
+select plan(107);
 
 create temp table ids (k text primary key, v uuid);
 create function pg_temp.id(k text) returns uuid language sql as $$ select v from ids where k = $1 $$;
@@ -83,8 +83,9 @@ begin
   return public.my_shift(pg_temp.at(off, t));
 end $$;
 create function pg_temp.sum(j jsonb) returns text language sql as $$
-  select (j->>'state') || ':' || coalesce(j->'shift'->>'name', '-') || ':' || coalesce(((j->>'shift_date')::date - (select d from today))::text, '-') || ':'
-         || coalesce((select string_agg(e->>'code', ',' order by e->>'code') from jsonb_array_elements(j->'machines') e), '-') $$;
+  select (j->>'state') || ':' || coalesce((select string_agg((o->'shift'->>'name') || ':' || ((o->>'shift_date')::date - (select d from today))::text || ':'
+         || coalesce((select string_agg(e->>'code', ',' order by e->>'code') from jsonb_array_elements(o->'machines') e), '-'), '|' order by (o->>'starts_at')::timestamptz, o->'shift'->>'name')
+         from jsonb_array_elements(j->'occurrences') o), '-:-:-') $$;
 create function pg_temp.board(sh text, off int default 0) returns jsonb language sql as $$ select public.shift_board(pg_temp.id($1), (select d + $2 from today)) $$;
 create function pg_temp.brow(b jsonb, code text) returns jsonb language sql as $$ select e from jsonb_array_elements(b->'machines') e where e->>'code' = $2 $$;
 
@@ -110,7 +111,17 @@ select is((select jsonb_array_length(b->'machines') from b0), 4, 'it lists every
 select is((select string_agg(e->>'code', ',' order by e->>'code') from b0, jsonb_array_elements(b->'machines') e), 'M-1,M-2,M-3,M-5', 'M-1, M-2, M-3 and M-5');
 select is((select b->'shift'->>'name' || ' ' || (b->'shift'->>'start_time') || '-' || (b->'shift'->>'end_time') from b0), 'Day 06:00-14:00', 'the shift is described with HH:MM times');
 select is((select (b->>'shift_date')::date from b0), (select d from today), 'the date defaults to today''s plant date');
-select is((select (public.shift_board(pg_temp.id('day')))->>'shift_date' from b0), (select d::text from today), 'a null date means today''s plant date');
+-- R2: without a date the board shows the current occurrence of the shift, else its next one (computed here independently of the function)
+create function pg_temp.cur_or_next(sh text) returns date language sql as $$
+  select min(x.d) from (select ((select d from today) + g) as d from generate_series(-1, 1) g) x
+   where upper(app.shift_window(pg_temp.id($1), x.d)) > now() $$;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+create temp table dflt as select pg_temp.cur_or_next('day') as dday, pg_temp.cur_or_next('night') as dnight;
+select pg_temp.as_user('uax');
+select is((select (public.shift_board(pg_temp.id('day')))->>'shift_date' from b0), (select dday::text from dflt), 'R2: a null date means the current or next occurrence of the shift (Day)');
+select is((select (public.shift_board(pg_temp.id('night'), null))->>'shift_date'), (select dnight::text from dflt), 'R2: for the overnight shift too (it may be the one that started yesterday)');
+select ok((select upper(app.shift_window(pg_temp.id('day'), dday)) > now() and upper(app.shift_window(pg_temp.id('day'), dday - 1)) <= now() from dflt), 'R2: it is the first occurrence that has not ended');
+select is((select (public.shift_board(pg_temp.id('day'), (select d - 3 from today)))->>'shift_date'), (select (d - 3)::text from today), 'R2: an explicit date is honoured, even a past one');
 select results_eq($$ select (b->>'starts_at')::timestamptz, (b->>'ends_at')::timestamptz from b0 $$,
   $$ select lower(app.shift_window(pg_temp.id('day'), (select d from today))), upper(app.shift_window(pg_temp.id('day'), (select d from today))) $$, 'it carries the occurrence window');
 select is((select pg_temp.brow(b, 'M-1')->>'owner_name' from b0), 'Sup One', 'M-1 is owned by Sup One');
@@ -168,9 +179,9 @@ select results_eq($$ select (select count(*) from public.assignment_version), (s
 -- My shift (AC-10, AC-11) ------------------------------------------------------------------------------
 -- state:shift:day offset:machines
 select is(pg_temp.sum(pg_temp.my('s1', 0, '07:00')), 'running:Day:0:M-1,M-2', 'a supervisor sees the running shift and only their machines (the retired M-4 and the inactive owner''s M-3 are not theirs)');
-select results_eq($$ select e->>'code', e->>'name', e->>'line' from jsonb_array_elements((pg_temp.my('s1', 0, '07:00'))->'machines') e order by 1 $$,
+select results_eq($$ select e->>'code', e->>'name', e->>'line' from jsonb_array_elements((pg_temp.my('s1', 0, '07:00'))->'occurrences'->0->'machines') e order by 1 $$,
   $$ values ('M-1'::text, 'Press 1'::text, 'Line 1'::text), ('M-2', 'Press 2', 'Line 1') $$, 'each machine carries code, name and line');
-select results_eq($$ select (j->'shift'->>'start_time'), (j->'shift'->>'end_time'), (j->>'starts_at')::timestamptz, (j->>'ends_at')::timestamptz from (select pg_temp.my('s1', 0, '07:00') j) x $$,
+select results_eq($$ select (j->'shift'->>'start_time'), (j->'shift'->>'end_time'), (j->>'starts_at')::timestamptz, (j->>'ends_at')::timestamptz from (select pg_temp.my('s1', 0, '07:00')->'occurrences'->0 j) x $$,
   $$ values ('06:00'::text, '14:00'::text, pg_temp.at(0, '06:00'), pg_temp.at(0, '14:00')) $$, 'the window is given as HH:MM and as instants');
 select is(pg_temp.sum(pg_temp.my('s1', 0, '06:00')), 'running:Day:0:M-1,M-2', 'the start minute is inside');
 select is(pg_temp.sum(pg_temp.my('s1', 0, '13:59:59')), 'running:Day:0:M-1,M-2', 'one second before the end is inside');
@@ -202,7 +213,7 @@ select is(pg_temp.sum(pg_temp.my('s1', 1, '07:00')), 'next:Day:2:M-1,M-2', 'and 
 select is(pg_temp.sum(pg_temp.my('s2', 1, '07:00')), 'running:Day:1:M-2', 'Sup Two covers M-2 tomorrow: it appears for them (M-1 went to unassigned)');
 select is(pg_temp.sum(pg_temp.my('s2', 0, '07:00')), 'next:Night:0:M-1,M-5', 'and the cover does not leak into today');
 -- retired machine and retired shift never appear
-select is((select count(*)::int from jsonb_array_elements((pg_temp.my('s1', 0, '07:00'))->'machines') e where e->>'code' = 'M-4'), 0, 'a retired machine never appears');
+select is((select count(*)::int from jsonb_array_elements((pg_temp.my('s1', 0, '07:00'))->'occurrences'->0->'machines') e where e->>'code' = 'M-4'), 0, 'a retired machine never appears');
 -- denials
 create temp table calls (n text, q text);
 select pg_temp.as_user('freshx');
@@ -233,6 +244,48 @@ select is((pg_temp.board('day', 0))->>'ok', 'true', 'and the board under the cli
 select set_config('request.jwt.claims', json_build_object('sub', pg_temp.id('uay'), 'role', 'authenticated')::text, true);
 select is((select count(*)::int from public.assignment_version) + (select count(*)::int from public.assignment_cover), 0, 'tenant Y''s Unit Admin reads none of X''s planning rows');
 reset role;
+
+-- R5: the board also carries the plan owner (ignoring covers) where an assignment made now would start, and the plan changes scheduled after it ----------
+select pg_temp.as_user('uax');
+create temp table b1b as select pg_temp.board('day', 1) as b;
+select is((select (b->>'plan_date')::date from b1b), (select d + 1 from today), 'R5: plan_date is the board date when that occurrence has not started');
+select is((select pg_temp.brow(b, 'M-1')->>'plan_owner_name' || ':' || (pg_temp.brow(b, 'M-1')->'owner_id')::text from b1b), 'Sup One:null', 'R5: M-1 is covered to nobody tomorrow, but the plan owner is still Sup One (who loses it)');
+select is((select pg_temp.brow(b, 'M-5')->'plan_owner_id' from b1b), 'null'::jsonb, 'R5: a machine without a plan has no plan owner');
+select is((select pg_temp.brow(b, 'M-5')->'later_dates' from b1b), to_jsonb(array[(select (d + 4)::text from today)]), 'R5: later_dates lists the plan changes already scheduled after plan_date');
+select is((select pg_temp.brow(b, 'M-1')->'later_dates' from b1b), '[]'::jsonb, 'R5: and is empty when there are none');
+select is((select (pg_temp.board('day', 0)->>'plan_date')::date), (select case when lower(app.shift_window(pg_temp.id('day'), d)) > now() then d else d + 1 end from today), 'R5: for today''s board it is today when Day has not started, else tomorrow');
+select is((select (pg_temp.board('day', -31)->>'plan_date')::date), (select case when lower(app.shift_window(pg_temp.id('day'), d)) > now() then d else d + 1 end from today), 'R5: for a past date it is the first occurrence that has not started');
+
+-- R3 + R8-9: every running occurrence the caller owns machines in; one set-based query over 300 machines ------------------------------------------------
+insert into public.shift (id, tenant_id, site_id, name, start_time, end_time) values
+  ('54000000-0000-4000-c630-0000000000e1', pg_temp.id('tz'), '51000000-0000-4000-c630-00000000000e', 'Zone A', '06:00', '14:00'),
+  ('54000000-0000-4000-c630-0000000000e2', pg_temp.id('tz'), '51000000-0000-4000-c630-00000000000e', 'Zone B', '10:00', '18:00');
+insert into ids values ('za', '54000000-0000-4000-c630-0000000000e1'), ('zb', '54000000-0000-4000-c630-0000000000e2');
+insert into public.machine (tenant_id, site_id, code, name)
+select pg_temp.id('tz'), '51000000-0000-4000-c630-00000000000e', 'Z-' || lpad(n::text, 3, '0'), 'Zone press ' || n from generate_series(1, 300) n;
+insert into public.assignment_version (tenant_id, shift_id, machine_id, supervisor_id, effective_from, recorded_by)
+select pg_temp.id('tz'), pg_temp.id('za'), m.id, pg_temp.id('sz'), (select d - 30 from today), pg_temp.id('uaz') from public.machine m where m.tenant_id = pg_temp.id('tz');
+insert into public.assignment_version (tenant_id, shift_id, machine_id, supervisor_id, effective_from, recorded_by)
+select pg_temp.id('tz'), pg_temp.id('zb'), m.id, pg_temp.id('sz'), (select d - 30 from today), pg_temp.id('uaz') from public.machine m where m.tenant_id = pg_temp.id('tz') and m.code in ('Z-001', 'Z-002');
+-- on Zone B today: Z-001 is covered away, Z-003 is covered in
+insert into public.assignment_cover (tenant_id, shift_id, shift_date, machine_id, supervisor_id, reason, recorded_by)
+select pg_temp.id('tz'), pg_temp.id('zb'), (select d from today), m.id, case m.code when 'Z-003' then pg_temp.id('sz') end, 'test', pg_temp.id('uaz')
+  from public.machine m where m.tenant_id = pg_temp.id('tz') and m.code in ('Z-001', 'Z-003');
+create function pg_temp.zsum(t text, off int default 0) returns text language sql as $$
+  select (j->>'state') || ':' || coalesce((select string_agg((o->'shift'->>'name') || ':' || ((o->>'shift_date')::date - (select d from today))::text || ':' || jsonb_array_length(o->'machines'), '|'
+         order by (o->>'starts_at')::timestamptz) from jsonb_array_elements(j->'occurrences') o), '-')
+  from (select pg_temp.my('sz', off, t) as j) x $$;
+select is(pg_temp.zsum('12:00'), 'running:Zone A:0:300|Zone B:0:2', 'R3: two overlapping running occurrences are both returned (300 machines, and Zone B with the cover in and the cover out applied)');
+select is((select string_agg(e->>'code', ',' order by e->>'code') from jsonb_array_elements((pg_temp.my('sz', 0, '12:00'))->'occurrences'->1->'machines') e), 'Z-002,Z-003', 'R3: Zone B holds Z-002 (plan) and Z-003 (cover in), not Z-001 (cover out)');
+select is(pg_temp.zsum('15:00'), 'running:Zone B:0:2', 'R3: once Zone A has ended only the running one is returned');
+select is(pg_temp.zsum('19:00'), 'next:Zone A:1:300', 'R3: with nothing running, only the next occurrence: Zone A tomorrow, not also Zone B');
+select is(pg_temp.zsum('09:00'), 'running:Zone A:0:300', 'R3: Zone B has not started, so it is not listed next to the running one');
+select is(pg_temp.zsum('05:00'), 'next:Zone A:0:300', 'R3: before both, the earliest next');
+select is((select count(*)::int from public.machine where tenant_id = pg_temp.id('tz')), 300, 'R8-9: the tenant has 300 machines and my_shift answered above in one query (no timing assertion)');
+-- the inline owner resolution of my_shift and app.machine_owner agree
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+select is((select count(*)::int from public.machine m where m.tenant_id = pg_temp.id('tz') and app.machine_owner(m.id, pg_temp.id('za'), (select d from today)) = pg_temp.id('sz')), 300, 'R8-9: app.machine_owner agrees on Zone A');
+select is((select string_agg(m.code, ',' order by m.code) from public.machine m where m.tenant_id = pg_temp.id('tz') and app.machine_owner(m.id, pg_temp.id('zb'), (select d from today)) = pg_temp.id('sz')), 'Z-002,Z-003', 'R8-9: and on Zone B (cover in and out)');
 
 select * from finish();
 rollback;

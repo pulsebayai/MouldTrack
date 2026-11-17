@@ -3,7 +3,7 @@
 -- Self-contained; rolled back. Plan dates are offsets from today's plant date so the test is date-independent.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(125);
+select plan(142);
 
 create temp table ids (k text primary key, v uuid);
 create function pg_temp.id(k text) returns uuid language sql as $$ select v from ids where k = $1 $$;
@@ -59,6 +59,7 @@ insert into public.machine (id, tenant_id, site_id, code, name, retired_at) valu
   ('53000000-0000-4000-c610-0000000000a3', pg_temp.id('tx'), '51000000-0000-4000-c610-00000000000a', 'M-3', 'Press 3', null),
   ('53000000-0000-4000-c610-0000000000a4', pg_temp.id('tx'), '51000000-0000-4000-c610-00000000000a', 'M-4', 'Press 4', null),
   ('53000000-0000-4000-c610-0000000000a5', pg_temp.id('tx'), '51000000-0000-4000-c610-00000000000a', 'M-5', 'Retired press', now()),
+  ('53000000-0000-4000-c610-0000000000a6', pg_temp.id('tx'), '51000000-0000-4000-c610-00000000000a', 'M-6', 'Press 6', null),
   ('53000000-0000-4000-c610-0000000000b1', pg_temp.id('ty'), '51000000-0000-4000-c610-00000000000b', 'Y-1', 'Y press', null);
 insert into public.shift (id, tenant_id, site_id, name, start_time, end_time, retired_at) values
   ('54000000-0000-4000-c610-0000000000a1', pg_temp.id('tx'), '51000000-0000-4000-c610-00000000000a', 'Day', '06:00', '14:00', null),
@@ -68,7 +69,7 @@ insert into public.shift (id, tenant_id, site_id, name, start_time, end_time, re
   ('54000000-0000-4000-c610-0000000000a5', pg_temp.id('tx'), '51000000-0000-4000-c610-00000000000a', 'CovB', '23:45', '00:00', null),
   ('54000000-0000-4000-c610-0000000000b1', pg_temp.id('ty'), '51000000-0000-4000-c610-00000000000b', 'Y shift', '06:00', '14:00', null);
 insert into ids values ('m1', '53000000-0000-4000-c610-0000000000a1'), ('m2', '53000000-0000-4000-c610-0000000000a2'), ('m3', '53000000-0000-4000-c610-0000000000a3'),
-  ('m4', '53000000-0000-4000-c610-0000000000a4'), ('m5', '53000000-0000-4000-c610-0000000000a5'), ('my', '53000000-0000-4000-c610-0000000000b1'),
+  ('m4', '53000000-0000-4000-c610-0000000000a4'), ('m5', '53000000-0000-4000-c610-0000000000a5'), ('m6', '53000000-0000-4000-c610-0000000000a6'), ('my', '53000000-0000-4000-c610-0000000000b1'),
   ('day', '54000000-0000-4000-c610-0000000000a1'), ('night', '54000000-0000-4000-c610-0000000000a2'), ('gone', '54000000-0000-4000-c610-0000000000a3'),
   ('cova', '54000000-0000-4000-c610-0000000000a4'), ('covb', '54000000-0000-4000-c610-0000000000a5'), ('shifty', '54000000-0000-4000-c610-0000000000b1');
 grant select on ids to authenticated, anon;
@@ -128,11 +129,24 @@ select is((pg_temp.assign('s1', array['m3'], 1, 5))->>'ok', 'true', 'assign with
 select is(pg_temp.own('m3', 'day', 5), 's1', 'AC-5 until: the last day is covered');
 select is(pg_temp.own('m3', 'day', 6), 'none', 'AC-5 until: unassigned the day after');
 select is((select count(*)::int from public.assignment_version where machine_id = pg_temp.id('m3')), 2, 'the end is a null version at until + 1');
--- later_change guard
-select is((pg_temp.err(format($$ select public.sh_assign(gen_random_uuid(), %L, %L, array[%L::uuid], %L) $$, pg_temp.id('day'), pg_temp.id('s2'), pg_temp.id('m1'), (select d + 2 from today))))
-  - 'message', jsonb_build_object('code', 'guard', 'field', 'later_change', 'sqlstate', 'P0001', 'machines', '["M-1"]'::jsonb, 'dates', to_jsonb(array[(select (d + 3)::text from today)])),
-  'a change already scheduled after the start date blocks the assignment (lists machines and dates)');
-select is(pg_temp.own('m1', 'day', 2), 's1', 'and nothing was written');
+-- R4: re-planning supersedes the changes already scheduled later (no later_change guard any more)
+select is((pg_temp.assign('s2', array['m1'], 2))->>'ok', 'true', 'R4: re-planning before a later scheduled change is accepted');
+select is(pg_temp.own('m1', 'day', 2), 's2', 'R4: the new owner from the new start date');
+select is(pg_temp.own('m1', 'day', 3), 's2', 'R4: the later scheduled version (same supervisor) still resolves to the new plan');
+select results_eq($$ select after->'superseded' from public.audit_event where action = 'assignment.set' and tenant_id = pg_temp.id('tx') and (after->>'from')::date = (select d + 2 from today) $$,
+  $$ select jsonb_build_array(jsonb_build_object('machine_code', 'M-1', 'dates', jsonb_build_array((select (d + 3)::text from today)))) $$, 'R4: the audit row lists the superseded dates per machine');
+-- the reviewer's sequence on M-6: a week of Sup One, then a re-plan that starts before it
+select is((pg_temp.assign('s1', array['m6'], 5, 9))->>'ok', 'true', 'R4 sequence: Sup One from day 5 to day 9');
+select is(pg_temp.own('m6', 'day', 10), 'none', 'R4 sequence: unassigned from day 10');
+select is((pg_temp.assign('s2', array['m6'], 3))->>'ok', 'true', 'R4 sequence: Sup Two from day 3, no end date, before the scheduled week');
+select results_eq($$ select pg_temp.own('m6', 'day', 2), pg_temp.own('m6', 'day', 3), pg_temp.own('m6', 'day', 5), pg_temp.own('m6', 'day', 9), pg_temp.own('m6', 'day', 10), pg_temp.own('m6', 'day', 11) $$,
+  $$ values ('none'::text, 's2'::text, 's2'::text, 's2'::text, 's2'::text, 's2'::text) $$, 'R4 sequence: Sup Two owns it from day 3 on, the old week and its end no longer win');
+select results_eq($$ select after->'superseded' from public.audit_event where action = 'assignment.set' and tenant_id = pg_temp.id('tx') and (after->>'from')::date = (select d + 3 from today)
+                       and after->'machines' = '["M-6"]'::jsonb $$,
+  $$ select jsonb_build_array(jsonb_build_object('machine_code', 'M-6', 'dates', jsonb_build_array((select (d + 5)::text from today), (select (d + 10)::text from today)))) $$, 'R4 sequence: the audit lists both superseded dates');
+select is((pg_temp.assign('s1', array['m6'], 3, 7))->>'ok', 'true', 'R4 until: Sup One from day 3 to day 7');
+select results_eq($$ select pg_temp.own('m6', 'day', 3), pg_temp.own('m6', 'day', 5), pg_temp.own('m6', 'day', 7), pg_temp.own('m6', 'day', 8), pg_temp.own('m6', 'day', 9), pg_temp.own('m6', 'day', 10) $$,
+  $$ values ('s1'::text, 's1'::text, 's1'::text, 'none'::text, 'none'::text, 's2'::text) $$, 'R4 until: the end date unassigns after it; a change scheduled beyond the end date stays');
 -- same-day correction
 select is((pg_temp.assign('s2', array['m2'], 1))->>'ok', 'true', 'a same-day correction is accepted');
 select is(pg_temp.own('m2', 'day', 1), 's2', 'the latest version for the date wins');
@@ -159,10 +173,16 @@ select is((pg_temp.err(format($$ select public.sh_assign(gen_random_uuid(), %L, 
   - 'message', '{"code":"validation","field":"supervisor","sqlstate":"P0001"}'::jsonb, 'AC-6: a Unit Admin cannot be assigned');
 select is((pg_temp.err(format($$ select public.sh_assign(gen_random_uuid(), %L, %L, array[%L::uuid], %L) $$, pg_temp.id('day'), pg_temp.id('sinact'), pg_temp.id('m1'), (select d + 40 from today))))->>'field', 'supervisor', 'AC-6: an inactive supervisor cannot be assigned');
 select is((pg_temp.err(format($$ select public.sh_assign(gen_random_uuid(), %L, %L, array[%L::uuid], %L) $$, pg_temp.id('day'), pg_temp.id('sfresh'), pg_temp.id('m1'), (select d + 40 from today))))->>'field', 'supervisor', 'AC-6: a supervisor with a temporary password cannot be assigned');
-select is(pg_temp.n_audit('assignment.set', 'tx'), 6, 'refused calls wrote no audit rows (six successful assignments so far)');
+select is(pg_temp.n_audit('assignment.set', 'tx'), 10, 'refused calls wrote no audit rows (ten successful assignments so far)');
 
 -- Unassign ----------------------------------------------------------------------------------
-select is((pg_temp.err(format($$ select public.sh_unassign(gen_random_uuid(), %L, array[%L::uuid], %L) $$, pg_temp.id('day'), pg_temp.id('m1'), (select d + 1 from today))))->>'field', 'later_change', 'unassign: refused while a later change is scheduled');
+-- R4: unassigning supersedes every later scheduled version of those machines
+select is((public.sh_unassign(gen_random_uuid(), pg_temp.id('day'), array[pg_temp.id('m6')], (select d + 4 from today)))->>'machines', '1', 'R4 unassign: M-6 is unassigned from day 4');
+select results_eq($$ select pg_temp.own('m6', 'day', 3), pg_temp.own('m6', 'day', 4), pg_temp.own('m6', 'day', 5), pg_temp.own('m6', 'day', 10), pg_temp.own('m6', 'day', 30) $$,
+  $$ values ('s1'::text, 'none'::text, 'none'::text, 'none'::text, 'none'::text) $$, 'R4 unassign: none from day 4 on, whatever was scheduled later');
+select results_eq($$ select after->'superseded' from public.audit_event where action = 'assignment.ended' and tenant_id = pg_temp.id('tx') and after->'machines' = '["M-6"]'::jsonb $$,
+  $$ select jsonb_build_array(jsonb_build_object('machine_code', 'M-6', 'dates', jsonb_build_array((select (d + 5)::text from today), (select (d + 8)::text from today), (select (d + 10)::text from today)))) $$,
+  'R4 unassign: the audit lists the superseded dates');
 select is((pg_temp.err(format($$ select public.sh_unassign(gen_random_uuid(), %L, array[%L::uuid], %L) $$, pg_temp.id('day'), pg_temp.id('m1'), (select d - 1 from today))))->>'field', 'from', 'unassign: backdating is refused');
 select is((pg_temp.err(format($$ select public.sh_unassign(gen_random_uuid(), %L, array[]::uuid[], %L) $$, pg_temp.id('day'), (select d + 10 from today))))->>'field', 'machine_ids', 'unassign: an empty list is refused');
 select is((pg_temp.err(format($$ select public.sh_unassign(gen_random_uuid(), %L, array[%L::uuid], %L) $$, pg_temp.id('night'), pg_temp.id('m1'), (select d + 10 from today))))->>'field', 'not_assigned', 'unassign: refused when no machine is assigned from that date');
@@ -170,16 +190,18 @@ insert into ids values ('rq_u1', gen_random_uuid());
 select is((public.sh_unassign(pg_temp.id('rq_u1'), pg_temp.id('day'), array[pg_temp.id('m1'), pg_temp.id('m3')], (select d + 10 from today)))->>'machines', '1', 'unassign: only machines that have a supervisor that day are ended (M-3 already ended on day 5)');
 select is(pg_temp.own('m1', 'day', 9), 's2', 'unassign: still covered the day before');
 select is(pg_temp.own('m1', 'day', 10), 'none', 'unassign: unassigned from that date');
-select is(pg_temp.n_audit('assignment.ended', 'tx'), 1, 'unassign: one audit row');
-select results_eq($$ select after->'machines', before->'previous'->0->>'supervisor_id' from public.audit_event where action = 'assignment.ended' and tenant_id = pg_temp.id('tx') $$,
+select is(pg_temp.n_audit('assignment.ended', 'tx'), 2, 'unassign: one audit row for this call (plus the R4 one)');
+select results_eq($$ select after->'machines', before->'previous'->0->>'supervisor_id' from public.audit_event where action = 'assignment.ended' and tenant_id = pg_temp.id('tx') and after->'machines' = '["M-1"]'::jsonb $$,
   $$ select '["M-1"]'::jsonb, pg_temp.id('s2')::text $$, 'unassign: audit lists the ended machines and their previous owner');
 select is((public.sh_unassign(pg_temp.id('rq_u1'), pg_temp.id('day'), array[pg_temp.id('m1'), pg_temp.id('m3')], (select d + 10 from today)))->>'already', 'true', 'unassign: a repeat reports already done');
-select is(pg_temp.n_audit('assignment.ended', 'tx'), 1, 'unassign: the repeat writes no second audit row');
+select is(pg_temp.n_audit('assignment.ended', 'tx'), 2, 'unassign: the repeat writes no second audit row');
 
 -- Cover (AC-4, AC-5) ---------------------------------------------------------------------------
 -- a plan for the always-running shifts, then cover the occurrence that is running right now
-select is((public.sh_assign(gen_random_uuid(), pg_temp.id('cova'), pg_temp.id('s1'), array[pg_temp.id('m1')], (select d from today)))->>'ok', 'true', 'plan: Sup One owns M-1 on CovA from today');
-select is((public.sh_assign(gen_random_uuid(), pg_temp.id('covb'), pg_temp.id('s1'), array[pg_temp.id('m1')], (select d from today)))->>'ok', 'true', 'plan: and on CovB');
+-- (R1: the RPC refuses a plan that starts on a started occurrence, so these two plan rows are fixtures inserted directly, as the table owner)
+insert into public.assignment_version (tenant_id, shift_id, machine_id, supervisor_id, effective_from, recorded_by)
+select pg_temp.id('tx'), pg_temp.id(sh), pg_temp.id('m1'), pg_temp.id('s1'), (select d - 5 from today), pg_temp.id('uax') from (values ('cova'), ('covb')) t(sh);
+select is((select count(*)::int from public.assignment_version where shift_id in (pg_temp.id('cova'), pg_temp.id('covb'))), 2, 'plan: Sup One owns M-1 on CovA and CovB (fixture rows)');
 create temp table cur as select o.shift_id, o.shift_date, s.name from app.current_occurrences() o join public.shift s on s.id = o.shift_id where s.name in ('CovA', 'CovB');
 insert into ids select 'curshift', shift_id from cur;
 select is((select count(*)::int from cur), 1, 'exactly one of CovA / CovB is running now');
@@ -205,6 +227,32 @@ select is(pg_temp.cur_owner('m1'), 'none', 'AC-5 cover to unassigned: nobody own
 select is((select o.source from app.machine_owner_src(pg_temp.id('m1'), pg_temp.id('curshift'), pg_temp.cur_date()) o), 'cover', 'and the source is still the cover');
 select is(app.machine_owner(pg_temp.id('m1'), pg_temp.id('curshift'), pg_temp.cur_date() + 1), pg_temp.id('s1'), 'the plan resumes the next day');
 select is((select count(*)::int from public.assignment_cover), 3, 'cover history keeps every row');
+-- R1: a plan change never rewrites an occurrence that has started (running or ended); it starts at the first one that hasn't
+select is((pg_temp.err(format($$ select public.sh_assign(gen_random_uuid(), %L, %L, array[%L::uuid], %L) $$, pg_temp.id('curshift'), pg_temp.id('s2'), pg_temp.id('m3'), pg_temp.cur_date())) - 'message'),
+  '{"code":"guard","field":"occurrence_started","sqlstate":"P0001"}'::jsonb, 'R1: assigning from the date of a running occurrence is refused');
+select is((pg_temp.err(format($$ select public.sh_assign(gen_random_uuid(), %L, %L, array[%L::uuid], %L) $$, pg_temp.id('curshift'), pg_temp.id('s2'), pg_temp.id('m3'), pg_temp.cur_date())))->>'message',
+  'This shift has already started — use Cover for this shift', 'R1: the message points to Cover');
+select is((pg_temp.err(format($$ select public.sh_unassign(gen_random_uuid(), %L, array[%L::uuid], %L) $$, pg_temp.id('curshift'), pg_temp.id('m1'), pg_temp.cur_date())))->>'field',
+  'occurrence_started', 'R1: ending from the date of a running occurrence is refused too');
+select is(pg_temp.n_audit('assignment.set', 'tx'), 10, 'R1: refused calls wrote no audit row');
+select is((public.sh_assign(gen_random_uuid(), pg_temp.id('curshift'), pg_temp.id('s2'), array[pg_temp.id('m3')], pg_temp.cur_date() + 1))->>'ok', 'true', 'R1: the next occurrence of the same shift can be planned');
+-- an occurrence that ended today: Early starts at 00:00 and ends at 00:15 (skipped in the first 15 minutes of the plant day, when it is still running)
+insert into public.shift (id, tenant_id, site_id, name, start_time, end_time) values
+  ('54000000-0000-4000-c610-0000000000a6', pg_temp.id('tx'), '51000000-0000-4000-c610-00000000000a', 'Early', '00:00', '00:15'),
+  ('54000000-0000-4000-c610-0000000000a7', pg_temp.id('tx'), '51000000-0000-4000-c610-00000000000a', 'Soon', '00:00', '00:15');
+insert into ids values ('early', '54000000-0000-4000-c610-0000000000a6'), ('soon', '54000000-0000-4000-c610-0000000000a7');
+select case when (now() at time zone 'Asia/Kolkata')::time >= time '00:15'
+  then is((pg_temp.err(format($$ select public.sh_assign(gen_random_uuid(), %L, %L, array[%L::uuid], %L) $$, pg_temp.id('early'), pg_temp.id('s2'), pg_temp.id('m3'), (select d from today))))->>'field',
+        'occurrence_started', 'R1: assigning from today on a shift whose occurrence today has ended is refused')
+  else pass('R1 skipped: the Early shift is still running in the first 15 minutes of the plant day') end;
+-- a shift that has not started today: Soon starts at an hour boundary at least two hours ahead
+update public.shift set start_time = date_trunc('hour', (now() at time zone 'Asia/Kolkata') + interval '3 hours')::time,
+                        end_time = date_trunc('hour', (now() at time zone 'Asia/Kolkata') + interval '4 hours')::time
+ where id = pg_temp.id('soon');
+select case when (now() at time zone 'Asia/Kolkata')::time < time '20:00'
+  then is((public.sh_assign(gen_random_uuid(), pg_temp.id('soon'), pg_temp.id('s2'), array[pg_temp.id('m3')], (select d from today)))->>'ok', 'true',
+        'R1: from today is fine when today''s occurrence has not started')
+  else pass('R1 skipped: after 20:00 (plant time) the Soon shift would wrap into tomorrow') end;
 -- a future occurrence can be covered; an ended one cannot
 select is((public.sh_cover(gen_random_uuid(), pg_temp.id('day'), (select d + 4 from today), array[pg_temp.id('m1'), pg_temp.id('m2')], pg_temp.id('s1'), 'Training day'))->>'ok', 'true', 'cover: a future occurrence');
 select is(pg_temp.own('m2', 'day', 4), 's1', 'cover on a future date applies to that date only');

@@ -324,6 +324,7 @@ declare
   v_own text;
   cur public.shift;
   upd public.shift;
+  v_end timestamptz;
 begin
   a := app._pm_authorise(p_request_id, c_src);
   if not (a->>'ok')::boolean then return a; end if;
@@ -334,6 +335,13 @@ begin
   if p_retired is null then perform app._pm_fail('validation', 'Choose retire or reinstate', 'retired'); end if;
   select * into cur from public.shift s where s.id = p_id;
   if (cur.retired_at is not null) = p_retired then return jsonb_build_object('ok', true, 'id', p_id, 'changed', false); end if;
+  if p_retired then
+    select upper(o.span) into v_end from app.current_occurrences(now()) o where o.shift_id = p_id limit 1;
+    if v_end is not null then
+      perform app._pm_fail('guard', 'This shift is running until ' || to_char(v_end at time zone (select z.timezone from public.site z where z.id = cur.site_id), 'HH24:MI')
+        || ' — retire it after it ends', 'occurrence_running');
+    end if;
+  end if;
 
   update public.shift s set retired_at = case when p_retired then now() end, updated_at = now() where s.id = p_id returning * into upd;
   perform app._pm_audit(a, case when p_retired then 'shift.retired' else 'shift.reinstated' end, 'shift', p_id,
@@ -457,9 +465,8 @@ declare
   v_shift public.shift;
   v_codes text[];
   v_retired text[];
-  v_later jsonb;
+  v_super jsonb;
   v_prev jsonb;
-  v_id uuid;
 begin
   a := app._pm_authorise(p_request_id, c_src);
   if not (a->>'ok')::boolean then return a; end if;
@@ -481,25 +488,34 @@ begin
   perform app._sh_check_supervisor(p_supervisor_id);
   select * into v_shift from public.shift s where s.id = p_shift_id;
   if v_shift.retired_at is not null then perform app._pm_fail('guard', 'This shift is retired', 'shift_id'); end if;
+  -- R1: a plan change starts at the first occurrence that has not started; a started or ended occurrence is changed only by Cover.
+  if now() >= lower(app.shift_window(p_shift_id, p_from)) then
+    perform app._pm_fail('guard', 'This shift has already started — use Cover for this shift', 'occurrence_started');
+  end if;
   select array_agg(m.code order by m.code) into v_retired from public.machine m where m.id = any (v_ids) and m.retired_at is not null;
   if v_retired is not null then
     perform app._pm_fail('guard', 'Retired machines can''t be assigned', 'machine_ids', jsonb_build_object('machines', to_jsonb(v_retired)));
-  end if;
-
-  -- A change already scheduled after the start date would silently override this one (D5): the Unit Admin unassigns from that date first.
-  select jsonb_build_object('machines', jsonb_agg(distinct m.code), 'dates', jsonb_agg(distinct v.effective_from)) into v_later
-    from public.assignment_version v join public.machine m on m.id = v.machine_id
-    where v.shift_id = p_shift_id and v.machine_id = any (v_ids) and v.effective_from > p_from;
-  if v_later->'machines' is not null and jsonb_typeof(v_later->'machines') = 'array' then
-    perform app._pm_fail('guard', 'A later change is already scheduled for these machines', 'later_change', v_later);
   end if;
 
   select array_agg(m.code order by m.code), jsonb_agg(jsonb_build_object('machine_code', m.code, 'supervisor_id', app._sh_plan_owner(p_shift_id, m.id, p_from)) order by m.code)
     into v_codes, v_prev
     from public.machine m where m.id = any (v_ids);
 
+  -- R4: re-planning supersedes (04's "end means end"): the new value is also written at every later scheduled version date of these machines
+  -- on this shift, up to the end date (all of them when there is none), so an older scheduled change can't silently win later.
+  select coalesce(jsonb_agg(jsonb_build_object('machine_code', q.code, 'dates', q.dates) order by q.code), '[]'::jsonb) into v_super
+    from (select m.code, jsonb_agg(distinct v.effective_from order by v.effective_from) as dates
+            from public.assignment_version v join public.machine m on m.id = v.machine_id
+           where v.shift_id = p_shift_id and v.machine_id = any (v_ids) and v.effective_from > p_from
+             and (p_until is null or v.effective_from <= p_until)
+           group by m.code) q;
   insert into public.assignment_version (tenant_id, shift_id, machine_id, supervisor_id, effective_from, recorded_by, request_id)
   select v_tenant, p_shift_id, x, p_supervisor_id, p_from, (a->>'actor')::uuid, p_request_id from unnest(v_ids) x;
+  insert into public.assignment_version (tenant_id, shift_id, machine_id, supervisor_id, effective_from, recorded_by, request_id)
+  select v_tenant, p_shift_id, q.machine_id, p_supervisor_id, q.d, (a->>'actor')::uuid, p_request_id
+    from (select distinct v.machine_id, v.effective_from as d from public.assignment_version v
+           where v.shift_id = p_shift_id and v.machine_id = any (v_ids) and v.effective_from > p_from
+             and (p_until is null or v.effective_from <= p_until) and v.request_id is distinct from p_request_id) q;
   if p_until is not null then
     insert into public.assignment_version (tenant_id, shift_id, machine_id, supervisor_id, effective_from, recorded_by, request_id)
     select v_tenant, p_shift_id, x, null, p_until + 1, (a->>'actor')::uuid, p_request_id from unnest(v_ids) x;
@@ -507,7 +523,8 @@ begin
 
   perform app._pm_audit(a, 'assignment.set', 'shift', p_shift_id,
     jsonb_build_object('previous', v_prev),
-    jsonb_build_object('shift', v_shift.name, 'machines', to_jsonb(v_codes), 'supervisor_id', p_supervisor_id, 'from', p_from, 'until', p_until),
+    jsonb_build_object('shift', v_shift.name, 'machines', to_jsonb(v_codes), 'supervisor_id', p_supervisor_id, 'from', p_from, 'until', p_until,
+                       'superseded', v_super),
     p_request_id, c_src);
   return jsonb_build_object('ok', true, 'id', p_shift_id, 'machines', cardinality(v_ids));
 end
@@ -529,7 +546,7 @@ declare
   v_shift public.shift;
   v_ended uuid[];
   v_codes text[];
-  v_later jsonb;
+  v_super jsonb;
   v_prev jsonb;
 begin
   a := app._pm_authorise(p_request_id, c_src);
@@ -546,27 +563,37 @@ begin
   if p_from is null then perform app._pm_fail('validation', 'Choose a date', 'from'); end if;
   if p_from < app.plant_date(v_tenant) then perform app._pm_fail('validation', 'Assignments can''t end in the past', 'from'); end if;
   select * into v_shift from public.shift s where s.id = p_shift_id;
-
-  select jsonb_build_object('machines', jsonb_agg(distinct m.code), 'dates', jsonb_agg(distinct v.effective_from)) into v_later
-    from public.assignment_version v join public.machine m on m.id = v.machine_id
-    where v.shift_id = p_shift_id and v.machine_id = any (v_ids) and v.effective_from > p_from;
-  if v_later->'machines' is not null and jsonb_typeof(v_later->'machines') = 'array' then
-    perform app._pm_fail('guard', 'A later change is already scheduled for these machines', 'later_change', v_later);
+  if now() >= lower(app.shift_window(p_shift_id, p_from)) then
+    perform app._pm_fail('guard', 'This shift has already started — use Cover for this shift', 'occurrence_started');
   end if;
 
-  -- Only machines that have a supervisor on that date are ended; refused when none has.
+  -- Only machines that have a supervisor from that date (in force, or scheduled later) are ended; refused when none has.
   select coalesce(array_agg(m.id order by m.code), '{}'), array_agg(m.code order by m.code),
          jsonb_agg(jsonb_build_object('machine_code', m.code, 'supervisor_id', app._sh_plan_owner(p_shift_id, m.id, p_from)) order by m.code)
     into v_ended, v_codes, v_prev
-    from public.machine m where m.id = any (v_ids) and app._sh_plan_owner(p_shift_id, m.id, p_from) is not null;
+    from public.machine m
+   where m.id = any (v_ids)
+     and (app._sh_plan_owner(p_shift_id, m.id, p_from) is not null
+          or exists (select 1 from public.assignment_version v where v.shift_id = p_shift_id and v.machine_id = m.id
+                      and v.effective_from > p_from and v.supervisor_id is not null));
   if cardinality(v_ended) = 0 then perform app._pm_fail('guard', 'None of these machines is assigned from that date', 'not_assigned'); end if;
 
+  -- R4: ending supersedes every later scheduled version of these machines too (a null at each of those dates).
+  select coalesce(jsonb_agg(jsonb_build_object('machine_code', q.code, 'dates', q.dates) order by q.code), '[]'::jsonb) into v_super
+    from (select m.code, jsonb_agg(distinct v.effective_from order by v.effective_from) as dates
+            from public.assignment_version v join public.machine m on m.id = v.machine_id
+           where v.shift_id = p_shift_id and v.machine_id = any (v_ended) and v.effective_from > p_from
+           group by m.code) q;
   insert into public.assignment_version (tenant_id, shift_id, machine_id, supervisor_id, effective_from, recorded_by, request_id)
   select v_tenant, p_shift_id, x, null, p_from, (a->>'actor')::uuid, p_request_id from unnest(v_ended) x;
+  insert into public.assignment_version (tenant_id, shift_id, machine_id, supervisor_id, effective_from, recorded_by, request_id)
+  select v_tenant, p_shift_id, q.machine_id, null, q.d, (a->>'actor')::uuid, p_request_id
+    from (select distinct v.machine_id, v.effective_from as d from public.assignment_version v
+           where v.shift_id = p_shift_id and v.machine_id = any (v_ended) and v.effective_from > p_from and v.request_id is distinct from p_request_id) q;
 
   perform app._pm_audit(a, 'assignment.ended', 'shift', p_shift_id,
     jsonb_build_object('previous', v_prev),
-    jsonb_build_object('shift', v_shift.name, 'machines', to_jsonb(v_codes), 'from', p_from),
+    jsonb_build_object('shift', v_shift.name, 'machines', to_jsonb(v_codes), 'from', p_from, 'superseded', v_super),
     p_request_id, c_src);
   return jsonb_build_object('ok', true, 'id', p_shift_id, 'machines', cardinality(v_ended));
 end
@@ -616,7 +643,8 @@ begin
   if v_retired is not null then
     perform app._pm_fail('guard', 'Retired machines can''t be covered', 'machine_ids', jsonb_build_object('machines', to_jsonb(v_retired)));
   end if;
-  -- Cover is for an occurrence that has not ended (a running one included) - D6.
+  -- Cover is for an occurrence that has not ended (a running one included) - D6. The clock is now(), the transaction start: a request that
+  -- waits on the tenant lock across the end of the occurrence is judged at its own start, which is the moment the user acted.
   v_window := app.shift_window(p_shift_id, p_shift_date);
   if now() >= upper(v_window) then perform app._pm_fail('guard', 'This shift has already ended', 'occurrence_ended'); end if;
 
@@ -710,6 +738,10 @@ begin
   if m.retired_at is not null then perform app._pm_fail('guard', 'This machine is retired', 'machine_id'); end if;
   if p.retired_at is not null then perform app._pm_fail('guard', 'This product is retired', 'product_id'); end if;
   if s.retired_at is not null then perform app._pm_fail('guard', 'This shift is retired', 'shift_id'); end if;
+  -- R1: an override never rewrites a started occurrence. (Overrides don't freeze the shift's times: they depend on the date only, never on the window.)
+  if now() >= lower(app.shift_window(p_shift_id, p_effective_from)) then
+    perform app._pm_fail('guard', 'This shift has already started — use Cover for this shift', 'occurrence_started');
+  end if;
 
   v_before := app.override_for(p_machine_id, p_product_id, p_shift_id, p_effective_from);
   insert into public.target_override_version (tenant_id, machine_id, product_id, shift_id, effective_from, pieces_per_shift, recorded_by, request_id)
@@ -761,6 +793,10 @@ begin
     perform app._pm_fail('validation', 'Targets can''t end in the past', 'effective_from');
   end if;
   -- Ending works for retired machines, products and shifts too: that is how their overrides get cleaned up.
+  select * into s from public.shift x where x.id = p_shift_id;
+  if s.retired_at is null and now() >= lower(app.shift_window(p_shift_id, p_effective_from)) then
+    perform app._pm_fail('guard', 'This shift has already started — use Cover for this shift', 'occurrence_started');
+  end if;
   v_before := app.override_for(p_machine_id, p_product_id, p_shift_id, p_effective_from);
   select coalesce(array_agg(f.d order by f.d), '{}') into v_cancel
     from (select distinct t.effective_from as d
@@ -825,8 +861,11 @@ begin
 end
 $$;
 
--- AC-9: every non-retired machine of the tenant with its owner on a shift occurrence (default: today's plant date), where the owner comes
--- from (plan | cover | none, cover reason) and whether the owner is no longer an active supervisor. Unit Admin only.
+-- AC-9: every non-retired machine of the tenant with its owner on a shift occurrence, where the owner comes from (plan | cover | none, cover
+-- reason) and whether the owner is no longer an active supervisor. Unit Admin only.
+-- R2: without a date the board shows the current occurrence of the shift, else its next one. R5: plan_owner_* is the owner by the plan alone
+-- on plan_date = the first occurrence that has not started and is not before the board date (where an assignment made now would start),
+-- and later_dates lists the plan changes already scheduled after it (a new assignment supersedes them).
 create function public.shift_board(p_shift_id uuid, p_date date default null)
 returns jsonb
 language plpgsql
@@ -839,6 +878,8 @@ declare
   v_tenant uuid;
   v_own text;
   v_date date;
+  v_plant date;
+  v_plan_date date;
   v_shift public.shift;
   v_window tstzrange;
   v_machines jsonb;
@@ -853,7 +894,20 @@ begin
   v_own := app._sh_owned('shift', p_shift_id, v_tenant);
   if v_own <> 'ok' then return app._pm_deny(a, v_own, 'shift', p_shift_id, c_src); end if;
 
-  v_date := coalesce(p_date, app.plant_date(v_tenant));
+  v_plant := app.plant_date(v_tenant);
+  if p_date is null then
+    select d.d into v_date
+      from unnest(array[v_plant - 1, v_plant, v_plant + 1]) as d(d)
+      where upper(app.shift_window(p_shift_id, d.d)) > now()
+      order by d.d limit 1;
+  else
+    v_date := p_date;
+  end if;
+  select d.d into v_plan_date
+    from unnest(array[v_plant, v_plant + 1]) as d(d)
+    where lower(app.shift_window(p_shift_id, d.d)) > now()
+    order by d.d limit 1;
+  v_plan_date := greatest(v_date, v_plan_date);
   select * into v_shift from public.shift s where s.id = p_shift_id;
   v_window := app.shift_window(p_shift_id, v_date);
 
@@ -861,27 +915,36 @@ begin
            'machine_id', m.id, 'code', m.code, 'name', m.name, 'line', l.name, 'status', m.status,
            'owner_id', o.supervisor_id, 'owner_name', mem.full_name,
            'owner_inactive', (o.supervisor_id is not null and (mem.user_id is null or mem.status <> 'active' or mem.role <> 'supervisor')),
-           'source', o.source, 'reason', o.reason) order by m.code), '[]'::jsonb)
+           'source', o.source, 'reason', o.reason,
+           'plan_owner_id', po.supervisor_id, 'plan_owner_name', pm.full_name,
+           'later_dates', (select coalesce(jsonb_agg(distinct v.effective_from order by v.effective_from), '[]'::jsonb)
+                             from public.assignment_version v
+                            where v.shift_id = p_shift_id and v.machine_id = m.id and v.effective_from > v_plan_date)) order by m.code), '[]'::jsonb)
     into v_machines
     from public.machine m
     left join public.line l on l.id = m.line_id
     cross join lateral app.machine_owner_src(m.id, p_shift_id, v_date) o
-    left join public.membership mem on mem.user_id = o.supervisor_id
+    left join public.membership mem on mem.user_id = o.supervisor_id and mem.tenant_id = v_tenant
+    cross join lateral (select app._sh_plan_owner(p_shift_id, m.id, v_plan_date) as supervisor_id) po
+    left join public.membership pm on pm.user_id = po.supervisor_id and pm.tenant_id = v_tenant
     where m.tenant_id = v_tenant and m.retired_at is null;
 
   return jsonb_build_object(
     'ok', true,
     'shift', jsonb_build_object('id', v_shift.id, 'name', v_shift.name, 'start_time', to_char(v_shift.start_time, 'HH24:MI'),
                                 'end_time', to_char(v_shift.end_time, 'HH24:MI'), 'retired', v_shift.retired_at is not null),
-    'shift_date', v_date, 'starts_at', lower(v_window), 'ends_at', upper(v_window),
+    'shift_date', v_date, 'plan_date', v_plan_date, 'starts_at', lower(v_window), 'ends_at', upper(v_window),
     'machines', v_machines,
     'unassigned_count', (select count(*) from jsonb_array_elements(v_machines) e where e->>'owner_id' is null));
 end
 $$;
 
--- AC-10/11: the caller's own machines for their current shift occurrence, or the next one starting within 36 hours. A supervisor sees
--- planning data only through this function. state: running | next | none (shifts exist, nothing assigned) | no_shifts.
+-- AC-10/11: the caller's own machines. R3: every running occurrence in which the caller owns at least one machine; when none is running, the
+-- next occurrence starting within 36 hours in which they do. A supervisor sees planning data only through this function.
+-- state: running | next | none (shifts exist, nothing assigned) | no_shifts; occurrences: [{shift, shift_date, starts_at, ends_at, machines}].
 -- p_at exists so tests can pass an explicit moment; it only moves the clock for the caller's own machines.
+-- One set-based query (R8-9): candidate occurrences x machines with the owner resolved inline by the same rule as app.machine_owner_src
+-- (latest cover of the occurrence, else the plan version in force); the pgTAP file 033 pins the two to the same answers.
 create function public.my_shift(p_at timestamptz default now())
 returns jsonb
 language plpgsql
@@ -894,8 +957,8 @@ declare
   v_tenant uuid;
   v_uid uuid;
   v_plant date;
-  v_pick record;
-  v_machines jsonb;
+  v_occ jsonb;
+  v_running boolean;
 begin
   -- Callers without a membership (a Super Admin, a stranger) are denied and audited by the shared helper, so that rule lives in one place (022).
   if not exists (select 1 from public.membership m where m.user_id = auth.uid()) then
@@ -907,46 +970,72 @@ begin
   v_uid := (a->>'actor')::uuid;
 
   if not exists (select 1 from public.shift s where s.tenant_id = v_tenant and s.retired_at is null) then
-    return jsonb_build_object('ok', true, 'state', 'no_shifts');
+    return jsonb_build_object('ok', true, 'state', 'no_shifts', 'occurrences', '[]'::jsonb);
   end if;
 
   v_plant := app.plant_date_at(v_tenant, p_at);
-  select c.shift_id, c.name, c.start_time, c.end_time, c.shift_date, c.w, (c.w @> p_at) as running
-    into v_pick
-    from (
-      select s.id as shift_id, s.name, s.start_time, s.end_time, d.d as shift_date, app.shift_window(s.id, d.d) as w
+  with cand as (
+    select s.id as shift_id, s.name, s.start_time, s.end_time, d.d as shift_date, app.shift_window(s.id, d.d) as w
       from public.shift s
       cross join lateral unnest(array[v_plant - 1, v_plant, v_plant + 1, v_plant + 2]) as d(d)
-      where s.tenant_id = v_tenant and s.retired_at is null
-    ) c
-    where upper(c.w) > p_at and lower(c.w) <= p_at + interval '36 hours'
-      and exists (
-        select 1 from public.machine m
-        cross join lateral app.machine_owner_src(m.id, c.shift_id, c.shift_date) o
-        where m.tenant_id = v_tenant and m.retired_at is null and o.supervisor_id = v_uid)
-    order by (c.w @> p_at) desc, lower(c.w), c.name
-    limit 1;
+     where s.tenant_id = v_tenant and s.retired_at is null
+  ), win as (
+    select c.* from cand c where upper(c.w) > p_at and lower(c.w) <= p_at + interval '36 hours'
+  ), mine as (
+    select w.shift_id, w.name, w.start_time, w.end_time, w.shift_date, w.w, (w.w @> p_at) as running, m.id as machine_id, m.code, m.name as machine_name, l.name as line
+      from win w
+      join public.machine m on m.tenant_id = v_tenant and m.retired_at is null
+      left join public.line l on l.id = m.line_id
+      left join lateral (select true as found, c.supervisor_id from public.assignment_cover c
+                          where c.shift_id = w.shift_id and c.shift_date = w.shift_date and c.machine_id = m.id
+                          order by c.recorded_at desc, c.id desc limit 1) cv on true
+      left join lateral (select v.supervisor_id from public.assignment_version v
+                          where v.shift_id = w.shift_id and v.machine_id = m.id and v.effective_from <= w.shift_date
+                          order by v.effective_from desc, v.recorded_at desc, v.id desc limit 1) pv on true
+     where (case when cv.found then cv.supervisor_id else pv.supervisor_id end) = v_uid
+  ), occ as (
+    select mi.shift_id, mi.name, mi.start_time, mi.end_time, mi.shift_date, mi.w, mi.running,
+           jsonb_agg(jsonb_build_object('machine_id', mi.machine_id, 'code', mi.code, 'name', mi.machine_name, 'line', mi.line) order by mi.code) as machines
+      from mine mi group by mi.shift_id, mi.name, mi.start_time, mi.end_time, mi.shift_date, mi.w, mi.running
+  ), first_next as (
+    select o.shift_id, o.shift_date from occ o where not exists (select 1 from occ r where r.running) order by lower(o.w), o.name limit 1
+  ), pick as (
+    select o.* from occ o where o.running or exists (select 1 from first_next f where f.shift_id = o.shift_id and f.shift_date = o.shift_date)
+  )
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'shift', jsonb_build_object('id', p.shift_id, 'name', p.name, 'start_time', to_char(p.start_time, 'HH24:MI'), 'end_time', to_char(p.end_time, 'HH24:MI')),
+           'shift_date', p.shift_date, 'starts_at', lower(p.w), 'ends_at', upper(p.w), 'running', p.running, 'machines', p.machines)
+           order by lower(p.w), p.name), '[]'::jsonb),
+         coalesce(bool_or(p.running), false)
+    into v_occ, v_running
+    from pick p;
 
-  if v_pick.shift_id is null then
-    return jsonb_build_object('ok', true, 'state', 'none');
-  end if;
-
-  select coalesce(jsonb_agg(jsonb_build_object('machine_id', m.id, 'code', m.code, 'name', m.name, 'line', l.name) order by m.code), '[]'::jsonb)
-    into v_machines
-    from public.machine m
-    left join public.line l on l.id = m.line_id
-    cross join lateral app.machine_owner_src(m.id, v_pick.shift_id, v_pick.shift_date) o
-    where m.tenant_id = v_tenant and m.retired_at is null and o.supervisor_id = v_uid;
-
-  return jsonb_build_object(
-    'ok', true,
-    'state', case when v_pick.running then 'running' else 'next' end,
-    'shift', jsonb_build_object('id', v_pick.shift_id, 'name', v_pick.name, 'start_time', to_char(v_pick.start_time, 'HH24:MI'),
-                                'end_time', to_char(v_pick.end_time, 'HH24:MI')),
-    'shift_date', v_pick.shift_date, 'starts_at', lower(v_pick.w), 'ends_at', upper(v_pick.w),
-    'machines', v_machines);
+  return jsonb_build_object('ok', true,
+    'state', case when jsonb_array_length(v_occ) = 0 then 'none' when v_running then 'running' else 'next' end,
+    'occurrences', v_occ);
 end
 $$;
+
+-- R6: the site timezone is also locked once any shift data exists (shift times, plan dates, covers and overrides are all read in that zone).
+-- pm_save_site (04) keeps its single copy; patch its lock condition in place, the way 03 patches its zone checks. The message stays 04's.
+do $$
+declare
+  def text;
+  old_block constant text := 'exists (select 1 from public.target_version t where t.tenant_id = v_tenant)';
+  new_block constant text := '(exists (select 1 from public.target_version t where t.tenant_id = v_tenant)'
+    || ' or exists (select 1 from public.shift t where t.tenant_id = v_tenant)'
+    || ' or exists (select 1 from public.assignment_version t where t.tenant_id = v_tenant)'
+    || ' or exists (select 1 from public.assignment_cover t where t.tenant_id = v_tenant)'
+    || ' or exists (select 1 from public.target_override_version t where t.tenant_id = v_tenant))';
+begin
+  select pg_get_functiondef(p.oid) into def
+  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+  where n.nspname = 'public' and p.proname = 'pm_save_site';
+  if position(old_block in def) = 0 then
+    raise exception 'expected timezone lock condition not found in public.pm_save_site';
+  end if;
+  execute replace(def, old_block, new_block);
+end $$;
 
 -- 99. Function privileges: no app function is executable by clients (test 004); the public entry points are executable by authenticated only.
 do $$

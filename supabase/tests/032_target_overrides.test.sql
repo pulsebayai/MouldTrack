@@ -3,7 +3,7 @@
 -- Self-contained; rolled back. Dates are offsets from today's plant date.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(91);
+select plan(97);
 
 create temp table ids (k text primary key, v uuid);
 create function pg_temp.id(k text) returns uuid language sql as $$ select v from ids where k = $1 $$;
@@ -127,8 +127,8 @@ select is(pg_temp.eff('m1', 'p1', 'night', 2), 850, 'the correction wins for tha
 select is(pg_temp.nv('m1', 'p1', 'night'), 3, 'history keeps every version');
 select is((select (before->>'pieces_per_shift')::int from public.audit_event where action = 'target_override.set' and tenant_id = pg_temp.id('tx') and (after->>'pieces_per_shift')::int = 850), 800, 'the audit before shows the override in force on that date');
 -- override without a base target
-select is((pg_temp.set_o('m2', 'p1', 'day', 500, 0))->>'ok', 'true', 'an override can exist without a base target');
-select is(pg_temp.eff('m2', 'p1', 'day', 0), 500, 'AC-8: and is the effective target');
+select is((pg_temp.set_o('m2', 'p1', 'day', 500, 1))->>'ok', 'true', 'an override can exist without a base target');
+select is(pg_temp.eff('m2', 'p1', 'day', 1), 500, 'AC-8: and is the effective target');
 -- retired machine / product / shift
 select is((pg_temp.err(format($$ select public.sh_set_target_override(gen_random_uuid(), %L, %L, %L, 5, %L) $$, pg_temp.id('m3'), pg_temp.id('p1'), pg_temp.id('day'), (select d from today))))->>'field', 'machine_id', 'a retired machine is refused');
 select is((pg_temp.err(format($$ select public.sh_set_target_override(gen_random_uuid(), %L, %L, %L, 5, %L) $$, pg_temp.id('m1'), pg_temp.id('p3'), pg_temp.id('day'), (select d from today))))->>'field', 'product_id', 'a retired product is refused');
@@ -136,7 +136,7 @@ select is((pg_temp.err(format($$ select public.sh_set_target_override(gen_random
 
 -- End (AC-7) ------------------------------------------------------------------------------
 select is((pg_temp.err(format($$ select public.sh_end_target_override(gen_random_uuid(), %L, %L, %L, %L) $$, pg_temp.id('m1'), pg_temp.id('p1'), pg_temp.id('night'), (select d - 1 from today))))->>'field', 'effective_from', 'end: a past date is refused');
-select is((pg_temp.err(format($$ select public.sh_end_target_override(gen_random_uuid(), %L, %L, %L, %L) $$, pg_temp.id('m1'), pg_temp.id('p2'), pg_temp.id('night'), (select d from today))))->>'field', 'no_override', 'end: nothing to end is refused (guard no_override)');
+select is((pg_temp.err(format($$ select public.sh_end_target_override(gen_random_uuid(), %L, %L, %L, %L) $$, pg_temp.id('m1'), pg_temp.id('p2'), pg_temp.id('night'), (select d + 1 from today))))->>'field', 'no_override', 'end: nothing to end is refused (guard no_override)');
 -- Night overrides now: d+2 -> 850 (corrected), d+12 -> 700. Ending at d+5 ends the override and cancels the scheduled one.
 insert into ids values ('rq_e1', gen_random_uuid());
 create temp table e5 as select public.sh_end_target_override(pg_temp.id('rq_e1'), pg_temp.id('m1'), pg_temp.id('p1'), pg_temp.id('night'), (select d + 5 from today)) as r;
@@ -244,6 +244,27 @@ select is((select count(*)::int from public.target_override_version where pieces
 select set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-c620-0000000000a2","role":"authenticated"}', true);
 select is((select count(*)::int from public.target_override_version), 0, 'a supervisor reads no overrides');
 reset role;
+
+-- R1: an override never rewrites a started occurrence (set or end); it starts at the first one that hasn't
+select pg_temp.as_user('uax');
+insert into public.shift (id, tenant_id, site_id, name, start_time, end_time) values
+  ('54000000-0000-4000-c620-0000000000a9', pg_temp.id('tx'), '51000000-0000-4000-c620-00000000000a', 'Running now',
+   date_trunc('hour', (now() at time zone 'Asia/Kolkata') - interval '1 hour')::time, date_trunc('hour', (now() at time zone 'Asia/Kolkata') + interval '2 hours')::time);
+insert into public.shift (id, tenant_id, site_id, name, start_time, end_time) values
+  ('54000000-0000-4000-c620-0000000000aa', pg_temp.id('tx'), '51000000-0000-4000-c620-00000000000a', 'Early', '00:00', '00:15');
+insert into ids values ('runnow', '54000000-0000-4000-c620-0000000000a9'), ('early', '54000000-0000-4000-c620-0000000000aa');
+select is((pg_temp.err(format($$ select public.sh_set_target_override(gen_random_uuid(), %L, %L, %L, 5, %L) $$, pg_temp.id('m1'), pg_temp.id('p1'), pg_temp.id('runnow'), (select d from today))) - 'message'),
+  '{"code":"guard","field":"occurrence_started","sqlstate":"P0001"}'::jsonb, 'R1: an override from the date of a running occurrence is refused');
+select is((pg_temp.err(format($$ select public.sh_set_target_override(gen_random_uuid(), %L, %L, %L, 5, %L) $$, pg_temp.id('m1'), pg_temp.id('p1'), pg_temp.id('runnow'), (select d from today))))->>'message',
+  'This shift has already started — use Cover for this shift', 'R1: the message points to Cover');
+select is((public.sh_set_target_override(gen_random_uuid(), pg_temp.id('m1'), pg_temp.id('p1'), pg_temp.id('runnow'), 5, (select d + 1 from today)))->>'ok', 'true', 'R1: from the next occurrence it is fine');
+select is((pg_temp.err(format($$ select public.sh_end_target_override(gen_random_uuid(), %L, %L, %L, %L) $$, pg_temp.id('m1'), pg_temp.id('p1'), pg_temp.id('runnow'), (select d from today))))->>'field',
+  'occurrence_started', 'R1: ending from the date of a running occurrence is refused too');
+select is((public.sh_end_target_override(gen_random_uuid(), pg_temp.id('m1'), pg_temp.id('p1'), pg_temp.id('runnow'), (select d + 3 from today)))->>'ok', 'true', 'R1: ending from a later date is fine');
+select case when (now() at time zone 'Asia/Kolkata')::time >= time '00:15' then
+  is((pg_temp.err(format($$ select public.sh_set_target_override(gen_random_uuid(), %L, %L, %L, 5, %L) $$, pg_temp.id('m1'), pg_temp.id('p1'), pg_temp.id('early'), (select d from today))))->>'field',
+     'occurrence_started', 'R1: and for an occurrence that ended today')
+  else pass('R1 skipped: the Early shift is still running in the first 15 minutes of the plant day') end;
 
 select * from finish();
 rollback;

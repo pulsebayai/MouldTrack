@@ -3,7 +3,7 @@
 -- Self-contained; rolled back. Everything runs as postgres with the caller's JWT claims set (the RPCs are security definer and key on auth.uid()).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(114);
+select plan(124);
 
 create temp table ids (k text primary key, v uuid);
 create function pg_temp.id(k text) returns uuid language sql as $$ select v from ids where k = $1 $$;
@@ -191,16 +191,38 @@ values (pg_temp.id('tx'), pg_temp.id('shift_n'), date '2026-03-02', pg_temp.id('
 select is((pg_temp.err(format($$ select public.sh_save_shift(gen_random_uuid(), %L, 'Shift N', '21:45', '06:00') $$, pg_temp.id('shift_n'))))->>'field', 'shift_times_locked', 'a cover also locks the times');
 
 -- retire / reinstate ---------------------------------------------------------------------
-select is((public.sh_set_shift_retired(gen_random_uuid(), pg_temp.id('shift_a'), true))->>'changed', 'true', 'a shift is retired');
+-- Shift R starts on an hour boundary at least two hours from now and lasts one hour, so it is never running whenever this test runs (R7).
+select is((pg_temp.keep('shift_r', public.sh_save_shift(gen_random_uuid(), null, 'Shift R',
+  to_char(date_trunc('hour', (now() at time zone 'Asia/Kolkata') + interval '3 hours'), 'HH24:MI'),
+  to_char(date_trunc('hour', (now() at time zone 'Asia/Kolkata') + interval '4 hours'), 'HH24:MI'))))->>'ok', 'true', 'a shift that is not running now is created');
+select is((public.sh_set_shift_retired(gen_random_uuid(), pg_temp.id('shift_r'), true))->>'changed', 'true', 'a shift is retired');
 select is(pg_temp.n_audit('shift.retired', 'tx'), 1, 'retire is audited');
-select is((public.sh_set_shift_retired(gen_random_uuid(), pg_temp.id('shift_a'), true))->>'changed', 'false', 'retiring twice is a no-op');
+select is((public.sh_set_shift_retired(gen_random_uuid(), pg_temp.id('shift_r'), true))->>'changed', 'false', 'retiring twice is a no-op');
 select is(pg_temp.n_audit('shift.retired', 'tx'), 1, 'the no-op writes no audit row');
-select is((pg_temp.err(format($$ select public.sh_save_shift(gen_random_uuid(), %L, 'Edit', '07:45', '16:15') $$, pg_temp.id('shift_a'))))->>'field', 'retired', 'a retired shift cannot be edited');
-select results_eq($$ select retired_at is not null from public.shift where id = pg_temp.id('shift_a') $$, $$ values (true) $$, 'retired_at is set');
-select is((public.sh_set_shift_retired(gen_random_uuid(), pg_temp.id('shift_a'), false))->>'changed', 'true', 'a shift is reinstated');
+select is((pg_temp.err(format($$ select public.sh_save_shift(gen_random_uuid(), %L, 'Edit', '07:45', '16:15') $$, pg_temp.id('shift_r'))))->>'field', 'retired', 'a retired shift cannot be edited');
+select results_eq($$ select retired_at is not null from public.shift where id = pg_temp.id('shift_r') $$, $$ values (true) $$, 'retired_at is set');
+select is((public.sh_set_shift_retired(gen_random_uuid(), pg_temp.id('shift_r'), false))->>'changed', 'true', 'a shift is reinstated');
 select is(pg_temp.n_audit('shift.reinstated', 'tx'), 1, 'reinstate is audited');
-select is((pg_temp.err(format($$ select public.sh_set_shift_retired(gen_random_uuid(), %L, null) $$, pg_temp.id('shift_a'))))->>'field', 'retired', 'the retire flag is required');
+select is((pg_temp.err(format($$ select public.sh_set_shift_retired(gen_random_uuid(), %L, null) $$, pg_temp.id('shift_r'))))->>'field', 'retired', 'the retire flag is required');
 select is(pg_temp.n_audit('shift.updated', 'tx'), 2, 'two updates were audited (the rename, the rename with unchanged times)');
+
+-- R7: a running shift can't be retired. Shift Run started on the hour before now and ends two hours after that.
+select is((pg_temp.keep('shift_run', public.sh_save_shift(gen_random_uuid(), null, 'Shift Run',
+  to_char(date_trunc('hour', (now() at time zone 'Asia/Kolkata') - interval '1 hour'), 'HH24:MI'),
+  to_char(date_trunc('hour', (now() at time zone 'Asia/Kolkata') + interval '2 hours'), 'HH24:MI'))))->>'ok', 'true', 'a shift that is running now is created');
+select is((pg_temp.err(format($$ select public.sh_set_shift_retired(gen_random_uuid(), %L, true) $$, pg_temp.id('shift_run'))) - 'message'),
+  '{"code":"guard","field":"occurrence_running","sqlstate":"P0001"}'::jsonb, 'R7: a running shift can''t be retired');
+select is((pg_temp.err(format($$ select public.sh_set_shift_retired(gen_random_uuid(), %L, true) $$, pg_temp.id('shift_run'))))->>'message',
+  'This shift is running until ' || to_char(date_trunc('hour', (now() at time zone 'Asia/Kolkata') + interval '2 hours'), 'HH24:MI') || ' — retire it after it ends',
+  'R7: the message names the end time (site time)');
+select is((select retired_at is null from public.shift where id = pg_temp.id('shift_run')), true, 'R7: the refused retire changed nothing');
+select is(pg_temp.n_audit('shift.retired', 'tx'), 1, 'R7: and wrote no audit row');
+
+-- R6: the site timezone is locked once any shift data exists (04's lock only knew targets).
+select is((pg_temp.err($$ select public.pm_save_site(gen_random_uuid(), 'Plant X', 'America/New_York') $$) - 'message'),
+  '{"code":"guard","field":"timezone_locked","sqlstate":"P0001"}'::jsonb, 'R6: the timezone can''t change once the tenant has shifts');
+select is((public.pm_save_site(gen_random_uuid(), 'Plant X renamed', 'Asia/Kolkata'))->>'ok', 'true', 'R6: saving the same timezone (a rename) is still fine');
+select is((select timezone from public.site where id = '51000000-0000-4000-c600-00000000000a'), 'Asia/Kolkata', 'R6: the timezone is unchanged');
 
 -- No site yet ------------------------------------------------------------------------------
 select pg_temp.as_user('uaw');
@@ -209,11 +231,12 @@ select is((pg_temp.err($$ select public.sh_save_shift(gen_random_uuid(), null, '
 -- Tenant Y has its own shifts ------------------------------------------------------------------
 select pg_temp.as_user('uay');
 select is((pg_temp.keep('shift_y', public.sh_save_shift(gen_random_uuid(), null, 'Shift A', '06:00', '14:00')))->>'ok', 'true', 'the same shift name may exist in another tenant');
+select is((pg_temp.err($$ select public.pm_save_site(gen_random_uuid(), 'Plant Y', 'Asia/Dubai') $$)->>'field'), 'timezone_locked', 'R6: a tenant whose only shift data is a shift (no targets) is locked too');
 
 -- RLS (clients read, never write) ---------------------------------------------------------------
 set local role authenticated;
 select set_config('request.jwt.claims', json_build_object('sub', pg_temp.id('supx'), 'role', 'authenticated')::text, true);
-select is((select count(*)::int from public.shift), 6, 'a supervisor reads the shifts of their own tenant (Morning, Night, Old, Direct, Shift A3, Shift N)');
+select is((select count(*)::int from public.shift), 8, 'a supervisor reads the shifts of their own tenant (Morning, Night, Old, Direct, Shift A3, Shift N, Shift R, Shift Run)');
 select is((select count(*)::int from public.shift where tenant_id = pg_temp.id('ty')), 0, 'and none of another tenant''s');
 select throws_ok($$ insert into public.shift (tenant_id, site_id, name, start_time, end_time) values ('50000000-0000-4000-c600-00000000000a', '51000000-0000-4000-c600-00000000000a', 'Hack', '06:00', '14:00') $$, '42501', null, 'a client cannot insert a shift');
 select throws_ok($$ update public.shift set name = 'Hack' $$, '42501', null, 'a client cannot update a shift');
@@ -275,7 +298,7 @@ select is((select count(*)::int from public.audit_event where action = 'access.d
 -- Request id reuse across RPCs is a validation error, never a 500 or a replay
 insert into ids values ('rq_x', gen_random_uuid());
 select is((public.sh_save_shift(pg_temp.id('rq_x'), null, 'Reuse', '10:00', '12:00'))->>'ok', 'true', 'a shift saved with a fresh request id');
-select is((pg_temp.err(format($$ select public.sh_set_shift_retired(%L, %L, true) $$, pg_temp.id('rq_x'), pg_temp.id('shift_a'))))->>'field', 'request_id', 'the same request id on another RPC is a validation error');
+select is((pg_temp.err(format($$ select public.sh_set_shift_retired(%L, %L, true) $$, pg_temp.id('rq_x'), pg_temp.id('shift_r'))))->>'field', 'request_id', 'the same request id on another RPC is a validation error');
 
 -- Called by the real client role (authenticated -> definer function -> forced-RLS tables)
 set local role authenticated;
