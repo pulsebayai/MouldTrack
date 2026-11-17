@@ -1,5 +1,5 @@
 # Plan: Shift readings
-Spec: ./spec.md · Status: draft · Date: 2026-11-17
+Spec: ./spec.md · Status: approved · Date: 2026-11-17
 Batch B with 07 (**07 merges first**). Locks: schema — 06's share (production_reading, cavity_version, production_summary, machine counter columns; split with 07, logged). Architecture flags go to the session log; applied by whoever holds the lock at 06's merge (07 releases it on merge → 06 takes it for its docs step via a roadmap PR).
 
 ## Decisions (Opus)
