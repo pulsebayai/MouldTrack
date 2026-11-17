@@ -1,5 +1,5 @@
 # Intent: Shifts and assignments
-Author: Sidambara Raja (drafted by Claude) · Status: draft · Date: 2026-11-17
+Author: Sidambara Raja (drafted by Claude) · Status: approved · Date: 2026-11-17
 Roadmap item: 05-shifts-and-assignments · Release: R1 · Moves product metric: **Reading capture rate** (the denominator — "assigned machine-shifts" — is defined here) and **Handover compliance** (08 needs to know who owns each machine-shift).
 
 ## Problem

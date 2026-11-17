@@ -77,5 +77,5 @@ Additive. Without shifts, Home shows "No shifts set up yet" for SUPs; UAs see th
 ## Out of scope
 Holiday calendars, weekday patterns, shift swaps, attendance, planned product per machine-shift (product is chosen at reading time in 06), copy-assignments tool, notifications.
 
-## Open question for the owner (gate)
-1. **Which product a machine runs on a shift** decides its target. Recommendation: the supervisor picks the product when recording the opening reading (06), defaulting to the last product run on that machine; so 05's "My shift" lists machines without a target, and 06 shows the effective target once the product is picked. Alternative: the UA plans the product per machine in the assignment (more setup work every time production changes).
+## Owner decisions (2026-11-17)
+1. The **supervisor picks the product** when recording the opening reading (06), defaulting to the last product run on that machine. 05's "My shift" lists machines without targets; 06 shows the effective target once the product is picked.
