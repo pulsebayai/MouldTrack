@@ -62,3 +62,15 @@ AC-1–13 → tests (spec table); full suite green after rebase on 03; dev regre
 ### 2026-11-17
 - Done: intent approved (owner decisions 1–3), spec approved (supervisor picks the product in 06); plan drafted.
 - Next step: owner approves plan → Sonnet executes steps 1–7 while 03 finishes; step 8 after 03 merges.
+
+### 2026-11-17 (Sonnet, steps 1–7)
+- Done: steps 1–7 ticked. Commits: 1 `2d06971`, 2 `a4cfcff`, 3 `5ca85ca`, 4 `91eeb3c`, 5 `df1e8f0`, 6 `f66f6f9`, 7 `90b5273` + fix `b71e77e`. PR CI at `b71e77e` (run 44028094496): changes, static, db, e2e-web, ci-ok, summary all green (e2e-web 4 min, 91 Playwright tests; whole run ~5 min). Earlier runs of steps 5 and 6 were cancelled by newer pushes (concurrency); step 5 and 6 are covered by this later green run. Local: jest 537 tests / 36 suites, scripts tests 72, pgTAP 15 files / 912 tests (also with the seed).
+- Deviations: listed under "Deviations from plan" (sh_* prefix, tables in step 1, step 6 and 7 notes).
+- Not done (per brief): steps 8–10. Maestro `my-shift.yaml` is written but not run (Android runs nightly/at the gate; proof is step 9).
+- Architecture flags (for the architecture lock holder; architecture.md not edited):
+  - Shift occurrence model: shift date = plant date of the start; window = [start, end) in the site time zone; overnight when end < start; `app.shift_window` / `app.current_occurrences` are the only window maths.
+  - `app.machine_owner(machine, shift, date)` resolves cover > plan > unassigned; `app.effective_target(machine, product, shift, date)` resolves override > `app.target_for` > null. 06 and 08 must call these, not re-derive.
+  - Supervisors read planning data only through `my_shift`; they have no select on `assignment_version`, `assignment_cover`, `target_override_version`. Unit Admin reads those tables directly (RLS) and `shift_board`.
+  - New append-only history tables (service_role has select/insert only); `supervisor_id` has no FK (trigger checks tenant).
+- Shared files changed (watch in the step 8 rebase on 03): `supabase/seed.sql` (appended), `scripts/fixtures-reset.ts` + `scripts/__tests__/fixtures-reset.test.ts` (additions), `src/app/(app)/home.tsx` (MyShiftCard for supervisors), `src/components/plant/plant-tabs.tsx` (two tabs), `src/lib/plant.ts` (05 section, `PlantError.dates`), `src/components/plant/targets-panel.tsx` + `target-form.tsx` (override rows, optional `shift` prop), `e2e/web/fixtures.ts` (`SHIFT_FIXTURE`), `e2e/api/helpers.ts` (`customOrg`). New client files import `use-load` from `src/components/plant/use-load` (04's path): switch to `src/lib/use-load.ts` in step 8 (assignments.tsx, my-shift-card.tsx, shifts.tsx, targets-panel.tsx).
+- Next step: step 8 after 03 merges.
