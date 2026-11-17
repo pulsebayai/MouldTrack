@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { ISSUES, PLANT, USERS } from '../fixtures-reset';
+import { ISSUES, PLANT, USERS, needsFreshCopy } from '../fixtures-reset';
 
 // 07 (D12): fixture issues. The seed file (local/CI) and ISSUES (hosted dev) must agree.
 const seed = readFileSync(join(__dirname, '../../supabase/seed.sql'), 'utf8');
@@ -45,5 +45,20 @@ describe('fixtures-reset 07 issue fixtures (D12)', () => {
       if (i.resolvedAt) { expect(seed).toContain(`timestamptz '${i.resolvedAt}'`); expect(seed).toContain(`'${i.resolution}'`); }
       expect(seed).toContain(`'${i.priority}', '${i.status}', ${i.stopped}`);
     }
+  });
+});
+
+describe('N-14: the awaiting-verification fixture is recreated when it was consumed', () => {
+  const awaiting = ISSUES.find((i) => i.status === 'resolved')!;
+  const open = ISSUES.find((i) => i.status === 'open')!;
+  it('a fresh copy only when the seeded one is no longer resolved and no resolved copy exists', () => {
+    expect(needsFreshCopy(awaiting, { status: 'closed' }, 0)).toBe(true);
+    expect(needsFreshCopy(awaiting, { status: 'in_progress' }, 0)).toBe(true);
+    expect(needsFreshCopy(awaiting, { status: 'closed' }, 1)).toBe(false);
+    expect(needsFreshCopy(awaiting, { status: 'resolved' }, 0)).toBe(false);
+    expect(needsFreshCopy(awaiting, null, 0)).toBe(false); // missing: the normal insert path
+  });
+  it('the other fixtures are never copied', () => {
+    expect(needsFreshCopy(open, { status: 'closed' }, 0)).toBe(false);
   });
 });

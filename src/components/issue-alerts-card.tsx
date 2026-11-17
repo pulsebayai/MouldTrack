@@ -5,17 +5,20 @@ import { IssueRowView } from '@/components/issues/issue-row';
 import { Button, colors } from '@/components/ui';
 import { toUserMessage } from '@/lib/errors';
 import { fetchIssueAlerts, type IssueAlerts } from '@/lib/issues';
-import { formatPlantDate } from '@/lib/plant';
+import { fetchPlantTimezone, formatPlantDay } from '@/lib/plant-time';
+import { useRefreshOnFocus } from '@/lib/use-refresh';
 import { useSession } from '@/lib/session-provider';
 import { useLoad } from '@/lib/use-load';
 
 const REFRESH_MS = 60_000;
 
 /** Unit Admin Home: open High/Critical issues (the server orders them, stopped machines first) and what closed in the last 7 days (D11). */
-export function IssueAlertsCard() {
+export function IssueAlertsCard({ showAll = true }: { showAll?: boolean }) {
   const { client } = useSession();
   const alerts = useLoad<IssueAlerts>(() => fetchIssueAlerts(client), []);
   const { reload } = alerts;
+  useRefreshOnFocus(reload);
+  const tz = useLoad(() => fetchPlantTimezone(client), []).data ?? 'Asia/Kolkata';
   useEffect(() => {
     const timer = setInterval(reload, REFRESH_MS);
     const sub = AppState.addEventListener('change', (s) => {
@@ -44,13 +47,13 @@ export function IssueAlertsCard() {
             <View key={i.id} testID={`closed-${i.id}`} style={{ gap: 2 }}>
               <Text style={text}>{i.machine_code} · {i.category}</Text>
               <Text style={{ fontSize: 14, color: colors.muted }}>
-                Closed {i.closed_at ? formatPlantDate(i.closed_at.slice(0, 10)) : ''}{i.closed_by_name ? ` by ${i.closed_by_name}` : ''}
+                Closed {i.closed_at ? formatPlantDay(i.closed_at, tz) : ''}{i.closed_by_name ? ` by ${i.closed_by_name}` : ''}
               </Text>
             </View>
           ))}
         </View>
       ) : null}
-      <Button title="All issues" variant="secondary" testID="issue-alerts-all" onPress={() => router.push('/issues')} />
+      {showAll ? <Button title="All issues" variant="secondary" testID="issue-alerts-all" onPress={() => router.push('/issues')} /> : null}
       <Button title="Refresh" variant="secondary" testID="issue-alerts-refresh" onPress={reload} />
     </View>
   );

@@ -3,7 +3,7 @@
 // retired in afterAll; issues and photos are append-only history and stay (known debt, like 04/05).
 import { expect, test } from '@playwright/test';
 import {
-  FIXTURE_PASSWORD, SA_FIXTURES, anon, TINY_JPEG, auditRows, customOrg, provisionSuperAdmin, requireApi, seedResolvedIssue, setupIssueWorld, sha256Hex, signIn, teardownIssueWorld, uuid,
+  FIXTURE_PASSWORD, SA_FIXTURES, anon, TINY_JPEG, auditRows, customOrg, provisionSuperAdmin, service, requireApi, seedResolvedIssue, setupIssueWorld, sha256Hex, signIn, teardownIssueWorld, uuid,
   type IssueWorld, type Session,
 } from './helpers';
 
@@ -37,7 +37,7 @@ test.beforeAll(async () => {
 });
 test.afterAll(() => teardownIssueWorld(w));
 
-test.describe('Photos: begin, upload, commit, signed URL (AC-12, AC-13)', () => {
+test.describe('Photos: begin, upload, commit, authenticated download (AC-12, AC-13)', () => {
   test('the reporter attaches a photo and the owner reads it through a signed URL', async () => {
     const r = await report(w.running.session);
     expect(r.data).toMatchObject({ ok: true });
@@ -53,13 +53,12 @@ test.describe('Photos: begin, upload, commit, signed URL (AC-12, AC-13)', () => 
     expect(photos).toEqual([expect.objectContaining({ id: begin.id, path: begin.path, mime: 'image/jpeg' })]);
     expect(begin.path).toBe(`tenant/${w.org.id}/issue/${issueId}/${begin.id}.jpg`);
 
-    const signed = await w.running.session.client.storage.from('attachments').createSignedUrl(begin.path, 300);
-    expect(signed.error).toBeNull();
-    const res = await fetch(signed.data!.signedUrl);
-    expect(res.status).toBe(200);
-    expect(Buffer.from(await res.arrayBuffer()).equals(TINY_JPEG)).toBe(true);
+    // R3: the app reads a photo with an authenticated download (Storage RLS runs on every view), never a long-lived signed URL.
+    const dl = await w.running.session.client.storage.from('attachments').download(begin.path);
+    expect(dl.error).toBeNull();
+    expect(Buffer.from(await dl.data!.arrayBuffer()).equals(TINY_JPEG)).toBe(true);
     // The Unit Admin of the same tenant sees it too (photos are visible to everyone who can see the issue).
-    expect((await w.ua.client.storage.from('attachments').createSignedUrl(begin.path, 300)).error).toBeNull();
+    expect((await w.ua.client.storage.from('attachments').download(begin.path)).error).toBeNull();
   });
 
   test('a replayed begin returns the same attachment; a replayed commit is idempotent', async () => {
@@ -113,14 +112,14 @@ test.describe('Who can read a photo (AC-11, AC-13)', () => {
   });
 
   test('the Unit Admin of another tenant cannot sign or download it', async () => {
-    expect((await uaOther.client.storage.from('attachments').createSignedUrl(path, 300)).error).not.toBeNull();
+    expect((await uaOther.client.storage.from('attachments').download(path)).error).not.toBeNull();
     expect((await uaOther.client.storage.from('attachments').download(path)).error).not.toBeNull();
     expect((await uaOther.client.storage.from('attachments').list(`tenant/${w.org.id}/issue/${issueId}`)).data ?? []).toEqual([]);
     expect((await uaOther.client.rpc('issue_detail', { p_id: issueId })).data).toEqual(DENIED);
   });
 
   test('the Platform Super Admin reads 0 objects and no issue (SA boundary)', async () => {
-    expect((await sa.client.storage.from('attachments').createSignedUrl(path, 300)).error).not.toBeNull();
+    expect((await sa.client.storage.from('attachments').download(path)).error).not.toBeNull();
     expect((await sa.client.storage.from('attachments').download(path)).error).not.toBeNull();
     expect((await sa.client.storage.from('attachments').list(`tenant/${w.org.id}/issue/${issueId}`)).data ?? []).toEqual([]);
     expect((await sa.client.storage.from('attachments').list(`tenant/${w.org.id}`)).data ?? []).toEqual([]);
@@ -133,20 +132,87 @@ test.describe('Who can read a photo (AC-11, AC-13)', () => {
   test('a supervisor with no part in the issue cannot see it or its photo; once they own it they can', async () => {
     const idle = w.idle.session;
     expect((await idle.client.rpc('issue_detail', { p_id: issueId })).data).toEqual(DENIED);
-    expect((await idle.client.storage.from('attachments').createSignedUrl(path, 300)).error).not.toBeNull();
+    expect((await idle.client.storage.from('attachments').download(path)).error).not.toBeNull();
     expect((await idle.client.storage.from('attachments').download(path)).error).not.toBeNull();
     const list = await idle.client.rpc('issue_list', { p_filters: { status: 'not_closed' }, p_page: 1 });
     expect(list.data.items.map((i: { id: string }) => i.id)).not.toContain(issueId);
     const re = await w.ua.client.rpc('iss_reassign', { p_request_id: uuid(), p_issue_id: issueId, p_new_owner: idle.userId, p_reason: 'E2E handover' });
     expect(re.data).toMatchObject({ ok: true });
     expect((await idle.client.rpc('issue_detail', { p_id: issueId })).data).toMatchObject({ ok: true });
-    expect((await idle.client.storage.from('attachments').createSignedUrl(path, 300)).error).toBeNull();
+    expect((await idle.client.storage.from('attachments').download(path)).error).toBeNull();
   });
 
   test('an anonymous caller gets nothing', async () => {
     const a = anon();
-    expect((await a.storage.from('attachments').createSignedUrl(path, 300)).error).not.toBeNull();
+    expect((await a.storage.from('attachments').download(path)).error).not.toBeNull();
     expect((await a.rpc('issue_detail', { p_id: issueId })).error).not.toBeNull();
+  });
+});
+
+test.describe('A user who loses access stops reading photos at once (R3)', () => {
+  test('a deactivated supervisor, with a token still valid, cannot download', async () => {
+    const issueId = (await report(w.running.session)).data.id as string;
+    const { begin } = await addPhoto(w.running.session, issueId);
+    await w.running.session.client.rpc('iss_attachment_commit', { p_request_id: uuid(), p_attachment_id: begin.id });
+    // The idle supervisor becomes the owner, reads the photo, is then deactivated (service role, like the user-admin function's membership change).
+    expect((await w.ua.client.rpc('iss_reassign', { p_request_id: uuid(), p_issue_id: issueId, p_new_owner: w.idle.session.userId, p_reason: 'E2E R3' })).data).toMatchObject({ ok: true });
+    expect((await w.idle.session.client.storage.from('attachments').download(begin.path)).error).toBeNull();
+    try {
+      const off = await service().from('membership').update({ status: 'inactive' }).eq('user_id', w.idle.session.userId).select('user_id');
+      expect(off.error).toBeNull();
+      expect((await w.idle.session.client.storage.from('attachments').download(begin.path)).error).not.toBeNull();
+      expect((await w.idle.session.client.rpc('issue_detail', { p_id: issueId })).data).toEqual(DENIED);
+    } finally {
+      await service().from('membership').update({ status: 'active' }).eq('user_id', w.idle.session.userId);
+    }
+  });
+});
+
+test.describe('Storage is append-only for clients (N-1)', () => {
+  let path: string;
+  test.beforeAll(async () => {
+    const issueId = (await report(w.running.session)).data.id as string;
+    const { begin } = await addPhoto(w.running.session, issueId);
+    await w.running.session.client.rpc('iss_attachment_commit', { p_request_id: uuid(), p_attachment_id: begin.id });
+    path = begin.path;
+  });
+  const stillThere = async () => Buffer.from(await (await w.running.session.client.storage.from('attachments').download(path)).data!.arrayBuffer()).equals(TINY_JPEG);
+
+  test('remove, move and update are refused and the object is untouched', async () => {
+    const bucket = w.running.session.client.storage.from('attachments');
+    const rm = await bucket.remove([path]);
+    expect(rm.error !== null || (rm.data ?? []).length === 0).toBe(true);
+    expect((await bucket.move(path, `${path}.moved`)).error).not.toBeNull();
+    expect((await bucket.update(path, Buffer.from('replaced'), { contentType: 'image/jpeg' })).error).not.toBeNull();
+    expect(await stillThere()).toBe(true);
+  });
+
+  test('upload with upsert over an existing object is refused and the object is untouched', async () => {
+    const up = await w.running.session.client.storage.from('attachments').upload(path, Buffer.from('replaced'), { contentType: 'image/jpeg', upsert: true });
+    expect(up.error).not.toBeNull();
+    expect(await stillThere()).toBe(true);
+  });
+
+  test('a text/html upload and one over 5 MB are refused by the bucket', async () => {
+    const issueId = (await report(w.running.session)).data.id as string;
+    const html = Buffer.from('<script>alert(1)</script>');
+    const b1 = await w.running.session.client.rpc('iss_attachment_begin', { p_request_id: uuid(), p_issue_id: issueId, p_mime: 'image/jpeg', p_size: html.length, p_sha256: sha256Hex(html) });
+    const up1 = await w.running.session.client.storage.from('attachments').upload(b1.data.path, html, { contentType: 'text/html' });
+    expect(up1.error).not.toBeNull();
+    const big = Buffer.alloc(5 * 1024 * 1024 + 1, 1);
+    const b2 = await w.running.session.client.rpc('iss_attachment_begin', { p_request_id: uuid(), p_issue_id: issueId, p_mime: 'image/jpeg', p_size: 1000, p_sha256: sha256Hex(big) });
+    const up2 = await w.running.session.client.storage.from('attachments').upload(b2.data.path, big, { contentType: 'image/jpeg' });
+    expect(up2.error).not.toBeNull();
+  });
+});
+
+test.describe('Request ids belong to one RPC (N-3)', () => {
+  test('begin refuses a request id already used by another RPC', async () => {
+    const issueId = (await report(w.running.session)).data.id as string;
+    const rid = uuid();
+    expect((await w.running.session.client.rpc('iss_note', { p_request_id: rid, p_issue_id: issueId, p_notes: 'first use' })).data).toMatchObject({ ok: true });
+    const b = await w.running.session.client.rpc('iss_attachment_begin', { p_request_id: rid, p_issue_id: issueId, p_mime: 'image/jpeg', p_size: TINY_JPEG.length, p_sha256: sha256Hex(TINY_JPEG) });
+    expect(b.error?.code).toBe('P0001');
   });
 });
 

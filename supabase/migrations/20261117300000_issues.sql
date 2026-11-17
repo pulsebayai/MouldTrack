@@ -366,7 +366,7 @@ language sql
 stable
 security definer
 set search_path = ''
-as $$ select r.supervisor_id from app.machine_owner_now_src(p_machine, p_at) r limit 1 $$;
+as $$ select r.supervisor_id from app.machine_owner_now_src(p_machine, p_at) r where r.supervisor_id is not null limit 1 $$;
 
 -- The occurrence to record on an issue for a user: a running one in which they own the machine, else the earliest-started running one (null, null if none).
 create function app._iss_occurrence(p_machine uuid, p_user uuid, p_at timestamptz)
@@ -403,7 +403,8 @@ begin
   select m.role, m.status, m.must_change_password into mem from public.membership m where m.user_id = p_user and m.tenant_id = i.tenant_id;
   if not found or mem.status <> 'active' or mem.must_change_password then return false; end if;
   v_from := app.plant_date_at(i.tenant_id, i.resolved_at) - 1;
-  v_to := greatest(app.plant_date_at(i.tenant_id, p_at), v_from);
+  -- R1: the day series is capped at 60 days after the resolve (a fix nobody verified for two months is a Unit Admin matter, not a series scan)
+  v_to := least(greatest(app.plant_date_at(i.tenant_id, p_at), v_from), v_from + 61);
   if mem.role = 'supervisor' then
     if p_user = i.resolved_by then return false; end if;
     return exists (
@@ -416,6 +417,20 @@ begin
         and app._iss_active_sup(app.machine_owner(i.machine_id, s.id, v_from + g.n)) = p_user);
   end if;
   if mem.role <> 'unit_admin' then return false; end if;
+  -- R2: a Unit Admin may verify when no supervisor other than the resolver can: nobody else is eligible now and no other supervisor owns the
+  -- first later occurrence of any shift. A first later occurrence owned by the resolver counts as unassigned (a fix is never stuck because the
+  -- resolver owns every shift). A Unit Admin who resolved may verify their own fix only in this same fallback case.
+  if exists (
+    select 1
+    from public.shift s
+    cross join lateral generate_series(0, v_to - v_from) as g(n)
+    cross join lateral (select app.shift_window(s.id, v_from + g.n) as w) x
+    where s.tenant_id = i.tenant_id and s.retired_at is null
+      and lower(x.w) > i.resolved_at and lower(x.w) <= p_at
+      and app._iss_active_sup(app.machine_owner(i.machine_id, s.id, v_from + g.n)) is distinct from i.resolved_by
+      and app._iss_active_sup(app.machine_owner(i.machine_id, s.id, v_from + g.n)) is not null) then
+    return false;
+  end if;
   return not exists (
     select 1
     from public.shift s
@@ -425,7 +440,8 @@ begin
       where lower(app.shift_window(s.id, v_from + g.n)) > i.resolved_at
     ) f
     where s.tenant_id = i.tenant_id and s.retired_at is null and f.d is not null
-      and app._iss_active_sup(app.machine_owner(i.machine_id, s.id, f.d)) is not null);
+      and app._iss_active_sup(app.machine_owner(i.machine_id, s.id, f.d)) is not null
+      and app._iss_active_sup(app.machine_owner(i.machine_id, s.id, f.d)) is distinct from i.resolved_by);
 end
 $$;
 
@@ -1036,6 +1052,10 @@ begin
   a := app._iss_act(p_request_id, c_src, p_issue_id, 'any');
   if not (a->>'ok')::boolean or a ? 'replay' then return a - 'replay'; end if;
   v_actor := (a->>'actor')::uuid;
+  -- N-3: begin writes no audit row, so any audit row with this request id belongs to another RPC (reuse across RPCs -> validation, like the others)
+  if exists (select 1 from public.audit_event e where e.actor_user_id = v_actor and e.request_id = p_request_id) then
+    perform app._pm_fail('validation', 'This request id was already used for another action', 'request_id');
+  end if;
 
   v_ext := case lower(btrim(p_mime)) when 'image/jpeg' then 'jpg' when 'image/png' then 'png' when 'image/webp' then 'webp' end;
   if v_ext is null then perform app._pm_fail('validation', 'Photos must be JPEG, PNG or WebP', 'mime'); end if;
@@ -1170,7 +1190,7 @@ as $$
   where i.id = p_issue
 $$;
 
-create function public.issue_list(p_filters jsonb default '{}'::jsonb, p_page integer default 1, p_at timestamptz default now())
+create function app.issue_list_at(p_filters jsonb, p_page integer, p_at timestamptz)
 returns jsonb
 language plpgsql
 security definer
@@ -1244,7 +1264,7 @@ begin
 end
 $$;
 
-create function public.issue_detail(p_id uuid, p_at timestamptz default now())
+create function app.issue_detail_at(p_id uuid, p_at timestamptz)
 returns jsonb
 language plpgsql
 security definer
@@ -1293,7 +1313,7 @@ $$;
 
 -- AC-11: the Unit Admin's alerts (every not-closed High/Critical issue: stopped machines first, then Critical, then High, newest first) and the
 -- High/Critical issues closed in the last 7 days. Unit Admin only.
-create function public.issue_alerts(p_at timestamptz default now())
+create function app.issue_alerts_at(p_at timestamptz)
 returns jsonb
 language plpgsql
 security definer
@@ -1321,6 +1341,48 @@ begin
     left join public.membership rm on rm.user_id = q.resolved_by
     left join public.membership cm on cm.user_id = q.closed_by;
   return jsonb_build_object('ok', true, 'alert_count', jsonb_array_length(v_alerts), 'alerts', v_alerts, 'recently_closed', v_closed);
+end
+$$;
+
+-- R1: clients cannot choose the clock. The bodies above take an explicit moment (pgTAP drives them with fixed moments; nobody but the owner can
+-- execute them); the public RPCs are thin wrappers that always pass now(). Same non-member routing as the bodies (Super Admin denial is audited).
+create function public.issue_list(p_filters jsonb default '{}'::jsonb, p_page integer default 1)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if not exists (select 1 from public.membership m where m.user_id = auth.uid()) then
+    return app._pm_authorise(null, 'rpc:issue_list');
+  end if;
+  return app.issue_list_at(p_filters, p_page, now());
+end
+$$;
+create function public.issue_detail(p_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if not exists (select 1 from public.membership m where m.user_id = auth.uid()) then
+    return app._pm_authorise(null, 'rpc:issue_detail');
+  end if;
+  return app.issue_detail_at(p_id, now());
+end
+$$;
+create function public.issue_alerts()
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if not exists (select 1 from public.membership m where m.user_id = auth.uid()) then
+    return app._pm_authorise(null, 'rpc:issue_alerts');
+  end if;
+  return app.issue_alerts_at(now());
 end
 $$;
 

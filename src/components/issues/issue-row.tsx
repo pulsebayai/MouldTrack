@@ -3,7 +3,7 @@ import { Pressable, Text, View } from 'react-native';
 import { StatusLabel, colors } from '@/components/ui';
 import { PRIORITY_LABEL, STATUS_LABEL, formatAge, type IssueRow } from '@/lib/issues';
 
-/** One issue in a list: every state is a word (priority, status, Stopped, Escalated, No owner), never colour alone. */
+/** One issue in a list: every state is a word (priority, status, Stopped, Escalated, Needs owner), never colour alone. */
 export function IssueRowView({ issue, prefix }: { issue: IssueRow; prefix: string }) {
   return (
     <Pressable
@@ -19,7 +19,7 @@ export function IssueRowView({ issue, prefix }: { issue: IssueRow; prefix: strin
         <StatusLabel testID={`${prefix}-${issue.id}-status`} status={STATUS_LABEL[issue.status]} />
         {issue.machine_stopped ? <StatusLabel status="Machine stopped" /> : null}
         {issue.escalated ? <StatusLabel status="Escalated" /> : null}
-        {issue.needs_owner ? <StatusLabel status="No owner" /> : null}
+        {issue.needs_owner ? <StatusLabel status="Needs owner" /> : null}
       </View>
       <Text style={{ fontSize: 14, color: colors.muted }}>
         {issue.owner_name ? `Owner: ${issue.owner_name} · ` : ''}Reported {formatAge(issue.age_minutes)} ago

@@ -6,24 +6,26 @@ import { Button, Chip, ErrorText, Field, StatusLabel, colors } from '@/component
 import { newRequestId } from '@/lib/api';
 import { toUserMessage } from '@/lib/errors';
 import {
-  ACTION_LABEL, MSG, PRIORITY_LABEL, STATUS_LABEL, fetchIssueDetail, formatAge, issueApi, validateText, type AllowedAction, type IssueAttachment, type IssueDetail,
+  ACTION_LABEL, LIMITS, MSG, PRIORITY_LABEL, STATUS_LABEL, fetchIssueDetail, formatAge, issueApi, validateText, type AllowedAction, type IssueAttachment, type IssueDetail,
 } from '@/lib/issues';
-import { PhotoError, pickPhoto, signedPhotoUrl, uploadIssuePhoto, type Photo } from '@/lib/photos';
-import { PlantError, RequestIds, fetchActiveSupervisors, formatPlantDate, type Supervisor } from '@/lib/plant';
+import { PhotoError, downloadPhoto, pickPhoto, uploadIssuePhoto, type Photo } from '@/lib/photos';
+import { PlantError, RequestIds, fetchActiveSupervisors, type Supervisor } from '@/lib/plant';
+import { fetchPlantTimezone, formatPlantDateTime } from '@/lib/plant-time';
+import { useRefreshOnFocus } from '@/lib/use-refresh';
 import { useSession } from '@/lib/session-provider';
 import { useLoad } from '@/lib/use-load';
 
 type Panel = 'note' | 'set_assignee' | 'escalate' | 'ack_escalation' | 'reassign' | 'resolve' | 'reject' | 'reopen' | 'photo';
 
-const PANEL: Record<Panel, { title: string; label: string; submit: string; max: number; message: string; optional?: boolean }> = {
-  note: { title: 'Add a note', label: 'Note', submit: 'Add note', max: 1000, message: MSG.notes },
-  set_assignee: { title: 'Technical assignee', label: 'Who is fixing it (name or team)', submit: 'Save assignee', max: 120, message: 'Enter a name of 1 to 120 characters' },
-  escalate: { title: 'Escalate to the Unit Admin', label: 'Why are you escalating?', submit: 'Escalate', max: 500, message: MSG.reason },
-  ack_escalation: { title: 'Acknowledge escalation', label: 'Note', submit: 'Acknowledge', max: 500, message: MSG.reason },
-  reassign: { title: 'Change owner', label: 'Reason', submit: 'Change owner', max: 500, message: MSG.reason },
-  resolve: { title: 'Mark resolved', label: 'What was done?', submit: 'Mark resolved', max: 1000, message: MSG.notes },
-  reject: { title: 'Not fixed', label: 'What is still wrong?', submit: 'Send back', max: 500, message: MSG.reason },
-  reopen: { title: 'Reopen', label: 'Why reopen?', submit: 'Reopen', max: 500, message: MSG.reason },
+const PANEL: Record<Panel, { title: string; label: string; submit: string; max: number; message: string }> = {
+  note: { title: 'Add a note', label: 'Note', submit: 'Add note', max: LIMITS.note, message: MSG.note },
+  set_assignee: { title: 'Technical assignee', label: 'Who is fixing it (name or team)', submit: 'Save assignee', max: LIMITS.assignee, message: MSG.assignee },
+  escalate: { title: 'Escalate to the Unit Admin', label: 'Why are you escalating?', submit: 'Escalate', max: LIMITS.reason, message: MSG.reason },
+  ack_escalation: { title: 'Acknowledge escalation', label: 'Note', submit: 'Acknowledge', max: LIMITS.ackNote, message: MSG.ackNote },
+  reassign: { title: 'Change owner', label: 'Reason', submit: 'Change owner', max: LIMITS.reason, message: MSG.reason },
+  resolve: { title: 'Mark resolved', label: 'What was done?', submit: 'Mark resolved', max: LIMITS.resolution, message: MSG.resolution },
+  reject: { title: 'Not fixed', label: 'What is still wrong?', submit: 'Send back', max: LIMITS.reason, message: MSG.reason },
+  reopen: { title: 'Reopen', label: 'Why reopen?', submit: 'Reopen', max: LIMITS.reason, message: MSG.reason },
   photo: { title: 'Add a photo', label: '', submit: 'Upload photo', max: 0, message: '' },
 };
 
@@ -39,20 +41,27 @@ const ACTION_BUTTON: { action: AllowedAction; title: string; panel?: Panel }[] =
   { action: 'reopen', title: 'Reopen', panel: 'reopen' },
 ];
 
-function when(iso: string) {
-  const d = new Date(iso);
-  return `${formatPlantDate(iso.slice(0, 10))} ${d.toISOString().slice(11, 16)} UTC`;
-}
-
 function Photo_({ att }: { att: IssueAttachment }) {
   const { client } = useSession();
   const [url, setUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
     let live = true;
-    signedPhotoUrl(client as never, att.path).then((u) => live && (u ? setUrl(u) : setFailed(true)));
-    return () => { live = false; };
-  }, [client, att.path]);
+    let release: (() => void) | null = null;
+    downloadPhoto(client as never, att.path, att.id).then(
+      (p) => {
+        if (!live) return p?.release();
+        if (!p) return setFailed(true);
+        release = p.release;
+        setUrl(p.uri);
+      },
+      () => live && setFailed(true),
+    );
+    return () => {
+      live = false;
+      release?.();
+    };
+  }, [client, att.path, att.id]);
   if (failed) return <Text testID={`photo-failed-${att.id}`} style={{ fontSize: 14, color: colors.muted }}>Photo unavailable</Text>;
   if (!url) return <Text style={{ fontSize: 14, color: colors.muted }}>Loading photo</Text>;
   return <Image testID={`photo-${att.id}`} accessibilityLabel="Issue photo" source={{ uri: url }} style={{ width: 240, height: 180, borderRadius: 8 }} resizeMode="contain" />;
@@ -63,6 +72,9 @@ export function IssueDetailView({ id }: { id: string }) {
   const { client } = useSession();
   const detail = useLoad<IssueDetail>(() => fetchIssueDetail(client, id), [id]);
   const d = detail.data ?? detail.latest;
+  useRefreshOnFocus(detail.reload);
+  const tz = useLoad(() => fetchPlantTimezone(client), []).data ?? 'Asia/Kolkata';
+  const when = (iso: string) => formatPlantDateTime(iso, tz);
   const [panel, setPanel] = useState<Panel | null>(null);
   const [text, setText] = useState('');
   const [owner, setOwner] = useState<string | null>(null);
@@ -135,7 +147,7 @@ export function IssueDetailView({ id }: { id: string }) {
   async function choosePhoto() {
     try {
       const p = await pickPhoto('library');
-      if (p) { setPhoto(p); setFieldError(null); }
+      if (p) { setPhoto(p); setFieldError(null); photoIds.current = { begin: newRequestId(), commit: newRequestId() }; }
     } catch (e) {
       setFieldError(e instanceof PhotoError ? e.message : toUserMessage(e));
     }
@@ -143,7 +155,7 @@ export function IssueDetailView({ id }: { id: string }) {
   async function takePhoto() {
     try {
       const p = await pickPhoto('camera');
-      if (p) { setPhoto(p); setFieldError(null); }
+      if (p) { setPhoto(p); setFieldError(null); photoIds.current = { begin: newRequestId(), commit: newRequestId() }; }
     } catch (e) {
       setFieldError(e instanceof PhotoError ? e.message : toUserMessage(e));
     }
@@ -165,7 +177,7 @@ export function IssueDetailView({ id }: { id: string }) {
               <StatusLabel testID="issue-status" status={STATUS_LABEL[i.status]} />
               {i.machine_stopped ? <StatusLabel testID="issue-stopped" status="Machine stopped" /> : null}
               {i.escalated ? <StatusLabel testID="issue-escalated" status="Escalated" /> : null}
-              {i.needs_owner ? <StatusLabel testID="issue-no-owner" status="No owner" /> : null}
+              {i.needs_owner ? <StatusLabel testID="issue-no-owner" status="Needs owner" /> : null}
             </View>
             <Text testID="issue-description" style={{ fontSize: 16, color: colors.text }}>{i.description}</Text>
             <Text testID="issue-owner" style={{ fontSize: 15, color: colors.text }}>Owner: {i.owner_name ?? 'None'}</Text>

@@ -5,7 +5,7 @@
 -- current time, so every case is constructible at any time of day. issue_can_verify takes explicit moments and is tested on tenant Z with fixed shifts.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(192);
+select plan(200);
 
 create temp table ids (k text primary key, v uuid);
 create function pg_temp.id(k text) returns uuid language sql as $$ select v from ids where k = $1 $$;
@@ -395,11 +395,28 @@ select ok(not app.issue_can_verify(pg_temp.id('zi6'), pg_temp.id('zinact'), pg_t
 select ok(not app.issue_can_verify(pg_temp.id('zOpen'), pg_temp.id('z1'), pg_temp.at(1, '07:00')), 'an issue that is not Resolved cannot be verified');
 select ok(not app.issue_can_verify(pg_temp.id('zLow'), pg_temp.id('uaz'), pg_temp.at(1, '07:00')), 'a closed issue cannot be verified');
 select ok(not app.issue_can_verify(gen_random_uuid(), pg_temp.id('uaz'), now()), 'an unknown issue cannot be verified');
+-- R2: a Unit Admin may verify when no supervisor OTHER than the resolver can (a first later occurrence owned by the resolver counts as unassigned)
+select ok(app.issue_can_verify(pg_temp.id('zi5'), pg_temp.id('uaz'), pg_temp.at(1, '07:00')), 'R2: the resolver z1 owns every later shift of B -> the Unit Admin may verify');
+select pg_temp.zissue('zi7', 'zB', 'high', 'resolved', 'uaz', pg_temp.at(0, '23:00'));
+select ok(not app.issue_can_verify(pg_temp.id('zi7'), pg_temp.id('uaz'), pg_temp.at(1, '07:00')), 'R2: another supervisor (z1) owns B''s next Day -> the Unit Admin who resolved is refused');
+select ok(app.issue_can_verify(pg_temp.id('zi7'), pg_temp.id('z1'), pg_temp.at(1, '06:00')), 'R2: z1 verifies a Unit Admin''s fix');
+select pg_temp.zissue('zi8', 'zC', 'high', 'resolved', 'uaz', pg_temp.at(0, '10:00'));
+select ok(app.issue_can_verify(pg_temp.id('zi8'), pg_temp.id('uaz'), pg_temp.at(0, '11:00')), 'R2: nobody else is assigned (retired shift only) -> a Unit Admin may verify their own fix');
+-- R1: the day series stops 60 days after the resolve
+select pg_temp.zissue('zi9', 'zA', 'high', 'resolved', 'z3', pg_temp.at(-100, '10:00'));
+select pg_temp.zissue('zi10', 'zA', 'high', 'resolved', 'z3', pg_temp.at(-3, '10:00'));
+select ok(not app.issue_can_verify(pg_temp.id('zi9'), pg_temp.id('z1'), now()), 'R1: resolved 100 days ago -> beyond the 60-day window, no later-shift owner is found');
+select ok(app.issue_can_verify(pg_temp.id('zi10'), pg_temp.id('z1'), now()), 'R1: control: resolved 3 days ago -> z1 is eligible');
 -- a cover that leaves B unassigned for tomorrow's Day opens the Unit Admin fallback and closes z1's eligibility
 insert into public.assignment_cover (tenant_id, shift_id, shift_date, machine_id, supervisor_id, reason, recorded_by)
 values (pg_temp.id('tz'), pg_temp.id('Day'), (select d + 1 from today), pg_temp.id('zB'), null, 'nobody that day', pg_temp.id('uaz'));
 select ok(app.issue_can_verify(pg_temp.id('zi3'), pg_temp.id('uaz'), pg_temp.at(1, '07:00')), 'cover: B unassigned in tomorrow''s Day and no Night -> the Unit Admin may verify');
 select ok(not app.issue_can_verify(pg_temp.id('zi3'), pg_temp.id('z1'), pg_temp.at(1, '07:00')), 'cover: z1 no longer owns B tomorrow');
+
+-- N-6: machine_owner_now is the first ASSIGNED running occurrence, not the first running one (Early 05:00-15:00 is unassigned for A and started before Day)
+insert into public.shift (id, tenant_id, site_id, name, start_time, end_time) values ('54000000-0000-4000-c710-0000000000e4', pg_temp.id('tz'), '51000000-0000-4000-c710-00000000000e', 'Early', '05:00', '15:00');
+select is(app.machine_owner_now(pg_temp.id('zA'), pg_temp.at(0, '07:00')), pg_temp.id('z1'), 'N-6: Early (unassigned) started first but Day''s owner z1 is the owner');
+select is(app.machine_owner_now(pg_temp.id('zA'), pg_temp.at(0, '14:30')), null, 'N-6: only the unassigned Early runs at 14:30 -> nobody');
 
 select * from finish();
 rollback;

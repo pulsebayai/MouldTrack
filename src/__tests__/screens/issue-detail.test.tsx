@@ -5,8 +5,9 @@ import { ok, rpcOk, shiftClient } from '@/test/shift-fixtures';
 import { sup } from '@/test/plant-fixtures';
 import { renderWithSession } from '@/test/render-with-session';
 
+const mockRelease = jest.fn();
 jest.mock('expo-router', () => ({ router: { push: jest.fn(), replace: jest.fn(), back: jest.fn(), canGoBack: () => false } }));
-jest.mock('@/lib/photos', () => ({ ...jest.requireActual('@/lib/photos'), signedPhotoUrl: jest.fn(async () => 'https://signed/x'), pickPhoto: jest.fn(), uploadIssuePhoto: jest.fn() }));
+jest.mock('@/lib/photos', () => ({ ...jest.requireActual('@/lib/photos'), downloadPhoto: jest.fn(async () => ({ uri: 'blob:x', release: mockRelease })), pickPhoto: jest.fn(), uploadIssuePhoto: jest.fn() }));
 jest.setTimeout(20_000);
 
 function setup(d: unknown, rpcs: Record<string, unknown> = {}) {
@@ -52,7 +53,7 @@ describe('Issue detail', () => {
     await ui;
     await fireEvent.press(await screen.findByTestId('action-resolve'));
     await fireEvent.press(screen.getByTestId('action-submit'));
-    expect(screen.getByText('Enter notes of 1 to 1000 characters')).toBeTruthy();
+    expect(screen.getByText('Enter resolution notes of 1 to 1000 characters')).toBeTruthy();
     expect(rpc).not.toHaveBeenCalledWith('iss_resolve', expect.anything());
     await fireEvent.changeText(screen.getByTestId('action-text'), ' Replaced seal ');
     await fireEvent.press(screen.getByTestId('action-submit'));
@@ -84,7 +85,7 @@ describe('Issue detail', () => {
     expect(await screen.findByTestId('verify-panel')).toBeTruthy();
     await fireEvent.press(screen.getByTestId('verify-reject'));
     await fireEvent.press(screen.getByTestId('action-submit'));
-    expect(screen.getByText('Enter a reason of 1 to 500 characters')).toBeTruthy();
+    expect(screen.getByText('Enter a reason of 1 to 200 characters')).toBeTruthy();
     await fireEvent.changeText(screen.getByTestId('action-text'), 'Still leaking');
     await fireEvent.press(screen.getByTestId('action-submit'));
     await waitFor(() => expect(rpc).toHaveBeenCalledWith('iss_verify', expect.objectContaining({ p_confirm: false, p_reason: 'Still leaking' })));
@@ -103,6 +104,28 @@ describe('Issue detail', () => {
   it('shows a photo from its signed URL', async () => {
     await setup(rpcOk(detail([], {}, [action(1, 'photo', { attachments: [{ id: 'at-1', path: 'tenant/t/issue/i/at-1.jpg', mime: 'image/jpeg', size_bytes: 10 }] })]))).ui;
     expect(await screen.findByTestId('photo-at-1')).toBeTruthy();
+  });
+
+  it('R3: a photo is fetched with an authenticated download and released on unmount', async () => {
+    const { unmount } = await setup(rpcOk(detail([], {}, [action(1, 'photo', { attachments: [{ id: 'at-2', path: 'tenant/t/issue/i/at-2.jpg', mime: 'image/jpeg', size_bytes: 10 }] })]))).ui;
+    expect(await screen.findByTestId('photo-at-2')).toBeTruthy();
+    expect(jest.requireMock('@/lib/photos').downloadPhoto).toHaveBeenCalledWith(expect.anything(), 'tenant/t/issue/i/at-2.jpg', 'at-2');
+    await unmount();
+    expect(mockRelease).toHaveBeenCalled();
+  });
+
+  it('R6: timeline times are in the plant timezone (23:59 UTC is 05:29 IST the next day)', async () => {
+    await setup(rpcOk(detail([], {}, [action(1, 'report', { at: '2026-11-17T23:59:00Z' })])), { }).ui;
+    expect(await screen.findByTestId('timeline-0')).toHaveTextContent(/18 Nov 2026 05:29/);
+  });
+
+  it('N-8: the client limits equal the server (reason 200, assignee 80)', async () => {
+    await setup(rpcOk(detail(['escalate', 'set_assignee']))).ui;
+    await fireEvent.press(await screen.findByTestId('action-escalate'));
+    expect(screen.getByTestId('action-text').props.maxLength).toBe(200);
+    await fireEvent.press(screen.getByTestId('action-cancel'));
+    await fireEvent.press(screen.getByTestId('action-set_assignee'));
+    expect(screen.getByTestId('action-text').props.maxLength).toBe(80);
   });
 
   it('a read denial shows the retryable error', async () => {

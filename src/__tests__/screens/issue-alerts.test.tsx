@@ -30,6 +30,11 @@ describe('UA issue alerts card', () => {
     expect(screen.getByTestId('closed-i-3')).toHaveTextContent(/Closed .* by Ravi/);
   });
 
+  it('R6: the closed date is the plant day (23:59 UTC is already the next day in IST)', async () => {
+    await setup(alerts([], [issue(3, { status: 'closed', closed_at: '2026-11-17T23:59:00Z', closed_by_name: 'Ravi' })])).ui;
+    expect(await screen.findByTestId('closed-i-3')).toHaveTextContent(/Closed 18 Nov 2026 by Ravi/);
+  });
+
   it('opens an alert and the full list', async () => {
     await setup(alerts([issue(1)])).ui;
     await fireEvent.press(await screen.findByTestId('alert-i-1'));

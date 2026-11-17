@@ -3,7 +3,7 @@
 -- "a Super Admin reads 0 objects", cross-tenant refusal. Self-contained; rolled back. Objects are tiny rows (metadata only), no bytes.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(72);
+select plan(75);
 
 create temp table ids (k text primary key, v uuid);
 create function pg_temp.id(k text) returns uuid language sql as $$ select v from ids where k = $1 $$;
@@ -92,7 +92,20 @@ select is((select count(*)::int from pg_policies where schemaname = 'storage' an
 select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'app_policy' and (not p.prosecdef or p.proconfig is null or not ('search_path=""' = any (p.proconfig)))), 0,
   'the policy helpers are security definer with an empty search_path');
 select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'app_policy' and has_function_privilege('anon', p.oid, 'execute')), 0, 'anon cannot execute the policy helpers');
-select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'app_policy' and has_function_privilege('authenticated', p.oid, 'execute')), 2, 'authenticated can (policies run as the caller)');
+-- R7: the lasting contract of app_policy (the only home for client-executable policy helpers): every function is stable, security definer, empty
+-- search_path, returns boolean and is used by at least one policy; clients may execute them (policies run as the caller).
+select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'app_policy'
+             and not (p.provolatile = 's' and p.prosecdef and 'search_path=""' = any (coalesce(p.proconfig, '{}')) and p.prorettype = 'boolean'::regtype
+                      and exists (select 1 from pg_policies pol where coalesce(pol.qual, '') || coalesce(pol.with_check, '') like '%app_policy.' || p.proname || '(%')
+                      and has_function_privilege('authenticated', p.oid, 'execute') and not has_function_privilege('anon', p.oid, 'execute'))), 0,
+  'R7: every app_policy function is stable, security definer, empty search_path, boolean, used by a policy and executable by authenticated only');
+select ok((select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'app_policy') >= 1, 'R7: the schema is not empty (the contract above is not vacuous)');
+-- ... and no other schema of ours hands clients a function: public RPCs and app_policy only (app is covered by test 004; extension and platform schemas are not ours)
+select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+           where p.proowner = (select nspowner from pg_namespace where nspname = 'app') and n.nspname not in ('public', 'app', 'app_policy', 'auth', 'storage', 'pg_catalog', 'information_schema') and n.nspname not like 'pg\_temp%'
+             and not exists (select 1 from pg_depend d where d.objid = p.oid and d.deptype = 'e') and has_function_privilege('authenticated', p.oid, 'execute')), 0,
+  'R7: no other schema of ours has a client-executable function');
 
 -- begin: validation and authorisation --------------------------------------------------------------------------------------------------
 select is(pg_temp.rpc('s1', format($q$select public.iss_attachment_begin(gen_random_uuid(), %L, 'image/gif', 100, pg_temp.sha())$q$, pg_temp.id('iX')))->>'field', 'mime', 'validation: only JPEG, PNG, WebP');
@@ -201,6 +214,10 @@ insert into public.attachment (tenant_id, entity_type, entity_id, storage_path, 
 select pg_temp.id('tx'), 'issue_action', gen_random_uuid(), 'tenant/' || pg_temp.id('tx') || '/issue/' || pg_temp.id('iX') || '/fill' || n || '.png', 'image/png', 1, pg_temp.sha(), pg_temp.id('s1'), pg_temp.id('iX'), 'ready', now()
 from generate_series(1, 30) n;
 select is(pg_temp.rpc('uax', format($q$select public.iss_attachment_begin(gen_random_uuid(), %L, 'image/png', 10, pg_temp.sha())$q$, pg_temp.id('iX')))->>'field', 'photo_limit', 'guard: at most 30 photos per issue');
+
+-- N-3: a request id already used by another RPC is refused by begin (validation), like the other RPCs
+select pg_temp.rpc('s1', format($q$select public.iss_note('99999999-0000-4000-c720-000000000001', %L, 'a note')$q$, pg_temp.id('iX')));
+select is(pg_temp.rpc('s1', format($q$select public.iss_attachment_begin('99999999-0000-4000-c720-000000000001', %L, 'image/png', 100, pg_temp.sha())$q$, pg_temp.id('iX')))->>'field', 'request_id', 'N-3: begin refuses a request id used by iss_note');
 
 select * from finish();
 rollback;

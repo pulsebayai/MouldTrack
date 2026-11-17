@@ -1,6 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { File, Paths } from 'expo-file-system';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
+import { Platform } from 'react-native';
 import { call, type RpcClient } from './plant';
 
 export const MAX_EDGE = 1600;
@@ -138,8 +140,21 @@ export async function uploadIssuePhoto(
   return { attachmentId: b.id, actionId: b.action_id };
 }
 
-export async function signedPhotoUrl(client: StorageClient, path: string): Promise<string | null> {
-  const { data, error } = await client.storage.from(BUCKET).createSignedUrl(path, 300);
+export type LoadedPhoto = { uri: string; release: () => void };
+
+/**
+ * Reads a photo through an authenticated download, so Storage RLS is evaluated on every view (a signed URL would keep working after the
+ * person lost access). Web: an object URL (revoked by `release`). Native: a file in the cache directory (no release needed).
+ */
+export async function downloadPhoto(client: StorageClient, path: string, key: string): Promise<LoadedPhoto | null> {
+  const { data, error } = await client.storage.from(BUCKET).download(path);
   if (error || !data) return null;
-  return data.signedUrl;
+  if (Platform.OS === 'web') {
+    const url = URL.createObjectURL(data);
+    return { uri: url, release: () => URL.revokeObjectURL(url) };
+  }
+  const file = new File(Paths.cache, `issue-photo-${key}.jpg`);
+  file.create({ overwrite: true });
+  await file.write(new Uint8Array(await data.arrayBuffer()));
+  return { uri: file.uri, release: () => {} };
 }

@@ -1,8 +1,13 @@
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
 import { createHash } from 'node:crypto';
-import { MAX_BYTES, PhotoError, base64ToBytes, pickPhoto, preparePhoto, sha256Fallback, sha256Hex, signedPhotoUrl, uploadIssuePhoto, type Photo } from '@/lib/photos';
+import { MAX_BYTES, PhotoError, base64ToBytes, pickPhoto, preparePhoto, downloadPhoto, sha256Fallback, sha256Hex, uploadIssuePhoto, type Photo } from '@/lib/photos';
 
+const mockFs = { write: jest.fn(), create: jest.fn() };
+jest.mock('expo-file-system', () => ({
+  Paths: { cache: 'file:///cache/' },
+  File: class { uri: string; constructor(dir: string, name: string) { this.uri = `${dir}${name}`; } create = (o: unknown) => mockFs.create(o); write = (b: unknown) => mockFs.write(b); },
+}));
 jest.mock('expo-image-manipulator', () => ({ manipulateAsync: jest.fn(), SaveFormat: { JPEG: 'jpeg' } }));
 jest.mock('expo-image-picker', () => ({
   requestCameraPermissionsAsync: jest.fn(), launchCameraAsync: jest.fn(), launchImageLibraryAsync: jest.fn(),
@@ -116,12 +121,33 @@ describe('uploadIssuePhoto', () => {
   });
 });
 
-describe('signedPhotoUrl', () => {
-  it('asks for a 300 s URL and returns null on error', async () => {
-    const createSignedUrl = jest.fn().mockResolvedValueOnce({ data: { signedUrl: 'https://s/x' }, error: null }).mockResolvedValueOnce({ data: null, error: { message: 'no' } });
-    const c = { storage: { from: () => ({ createSignedUrl }) } } as never;
-    expect(await signedPhotoUrl(c, 'p')).toBe('https://s/x');
-    expect(createSignedUrl).toHaveBeenCalledWith('p', 300);
-    expect(await signedPhotoUrl(c, 'p')).toBeNull();
+describe('downloadPhoto (R3: an authenticated download on every view)', () => {
+  const blob = { arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer };
+  const client = (res: unknown) => ({ storage: { from: jest.fn(() => ({ download: jest.fn().mockResolvedValue(res) })) } }) as never;
+  it('returns null when the download is refused', async () => {
+    expect(await downloadPhoto(client({ data: null, error: { message: 'no' } }), 'p', 'k')).toBeNull();
+  });
+  it('web: an object URL that is revoked on release', async () => {
+    const { Platform } = jest.requireActual('react-native');
+    const orig = Platform.OS;
+    const create = jest.fn(() => 'blob:abc');
+    const revoke = jest.fn();
+    Object.assign(URL, { createObjectURL: create, revokeObjectURL: revoke });
+    try {
+      Platform.OS = 'web';
+      const p = await downloadPhoto(client({ data: blob, error: null }), 'tenant/t/issue/i/a.jpg', 'a');
+      expect(p?.uri).toBe('blob:abc');
+      p?.release();
+      expect(revoke).toHaveBeenCalledWith('blob:abc');
+    } finally {
+      Platform.OS = orig;
+    }
+  });
+  it('native: writes the bytes to a cache file and returns its uri', async () => {
+    const { write, create } = mockFs;
+    const p = await downloadPhoto(client({ data: blob, error: null }), 'p', 'abc');
+    expect(p?.uri).toBe('file:///cache/issue-photo-abc.jpg');
+    expect(create).toHaveBeenCalledWith({ overwrite: true });
+    expect(write).toHaveBeenCalledWith(new Uint8Array([1, 2, 3]));
   });
 });

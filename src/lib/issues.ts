@@ -39,11 +39,17 @@ export const ACTION_LABEL: Record<string, string> = {
   escalation_ack: 'Escalation acknowledged', reassign: 'Owner changed', resolve: 'Marked resolved', verify_confirm: 'Fix confirmed',
   verify_reject: 'Fix rejected', reopen: 'Reopened',
 };
+/** Limits and messages equal the server's (N-8): the form answers instantly, the server stays the authority. */
+export const LIMITS = { description: 1000, note: 1000, resolution: 1000, assignee: 80, reason: 200, ackNote: 200, category: 40 } as const;
 export const MSG = {
   category: 'Choose a category',
   description: 'Describe the problem in 1 to 1000 characters',
-  reason: 'Enter a reason of 1 to 500 characters',
-  notes: 'Enter notes of 1 to 1000 characters',
+  reason: 'Enter a reason of 1 to 200 characters',
+  note: 'Enter a note of 1 to 1000 characters',
+  ackNote: 'Enter a note of 1 to 200 characters',
+  resolution: 'Enter resolution notes of 1 to 1000 characters',
+  assignee: 'Enter who is fixing it, up to 80 characters',
+  categoryName: 'Enter a name of 1 to 40 characters',
 } as const;
 
 /** A stopped machine is always Critical (the server enforces it; the form only shows it). */

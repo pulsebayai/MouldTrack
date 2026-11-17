@@ -36,7 +36,7 @@ describe('Issue categories tab', () => {
     const { rpc, ui } = setup();
     await ui;
     await fireEvent.press(await screen.findByTestId('category-add'));
-    expect(screen.getByText('Enter a name of 1 to 60 characters')).toBeTruthy();
+    expect(screen.getByText('Enter a name of 1 to 40 characters')).toBeTruthy();
     await fireEvent.changeText(screen.getByTestId('category-new-name'), '  Moulds ');
     await fireEvent.press(screen.getByTestId('category-add'));
     await waitFor(() => expect(rpc).toHaveBeenCalledWith('iss_category_save', expect.objectContaining({ p_id: null, p_name: 'Moulds' })));

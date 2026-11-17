@@ -1,10 +1,11 @@
 -- 07 step 4 (AC-11, AC-13, AC-14 server side): public.issue_list (visibility matrix supervisor / Unit Admin / Super Admin, filters, paging),
 -- public.issue_detail (timeline, ownership history, allowed_actions per role and status), public.issue_alerts (order, recently closed window,
 -- Unit Admin only). The list is cross-checked against app.can_see_issue for every user at several moments. Self-contained; rolled back.
--- Clock (D10): tenant X has shift R running now and shift N starting ~3.5 h ahead, built from the current time; reads take explicit moments.
+-- Clock (D10): tenant X has shift R running now and shift N starting ~3.5 h ahead, built from the current time. The public RPCs always use now()
+-- (R1: clients cannot choose the clock); the tests reach explicit moments through the app.issue_*_at bodies (owner-only; this file runs as the owner with JWT claims).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(99);
+select plan(103);
 
 create temp table ids (k text primary key, v uuid);
 create function pg_temp.id(k text) returns uuid language sql as $$ select v from ids where k = $1 $$;
@@ -27,7 +28,7 @@ create function pg_temp.f15(t timestamp) returns text language sql as $$
 create function pg_temp.keys(r jsonb) returns text language sql as $$
   select coalesce(string_agg(coalesce((select k from ids where v = (e->>'id')::uuid), '?'), ',' order by (select k from ids where v = (e->>'id')::uuid)), '') from jsonb_array_elements(r->'items') e $$;
 create function pg_temp.lst(u text, f jsonb default '{}', pg int default 1, at timestamptz default now()) returns jsonb language plpgsql as $f$
-begin return pg_temp.rpc(u, format($q$select public.issue_list(%L::jsonb, %s, %L::timestamptz)$q$, f, pg, at)); end $f$;
+begin return pg_temp.rpc(u, format($q$select app.issue_list_at(%L::jsonb, %s, %L::timestamptz)$q$, f, pg, at)); end $f$;
 create function pg_temp.mk(k text, t text, mach text, prio text, st text, owner text, reporter text, rep_at timestamptz,
                            stopped boolean default false, esc boolean default false, res_by text default null, res_at timestamptz default null, cl_at timestamptz default null) returns void language plpgsql as $f$
 declare v uuid;
@@ -171,7 +172,7 @@ select is(pg_temp.lst('sw')->>'total', '30', 'the supervisor who owns them sees 
 
 -- Detail ---------------------------------------------------------------------------------------------------------------------------------------------
 create function pg_temp.det(u text, k text, at timestamptz default now()) returns jsonb language plpgsql as $f$
-begin return pg_temp.rpc(u, format($q$select public.issue_detail(%L, %L::timestamptz)$q$, pg_temp.id(k), at)); end $f$;
+begin return pg_temp.rpc(u, format($q$select app.issue_detail_at(%L, %L::timestamptz)$q$, pg_temp.id(k), at)); end $f$;
 create function pg_temp.allowed(u text, k text, at timestamptz default now()) returns text language sql as $$
   select coalesce(string_agg(e, ',' order by e), 'DENIED') from jsonb_array_elements_text(pg_temp.det(u, k, at)->'allowed_actions') e $$;
 select is(pg_temp.det('s1', 'i3')->'issue'->>'machine_code', 'M-E', 'detail: the machine');
@@ -234,7 +235,7 @@ select pg_temp.mk('cH', 'tw', 'w1', 'high', 'closed', 'sw', 'sw', now() - interv
 select pg_temp.mk('cOld', 'tw', 'w1', 'critical', 'closed', 'sw', 'sw', now() - interval '12 days', false, false, 'sw', now() - interval '8 days', now() - interval '8 days');
 select pg_temp.mk('cLow', 'tw', 'w1', 'low', 'closed', 'sw', 'sw', now() - interval '3 days', false, false, 'sw', now() - interval '1 day', now() - interval '1 day');
 create function pg_temp.alerts(u text, at timestamptz default now()) returns jsonb language plpgsql as $f$
-begin return pg_temp.rpc(u, format($q$select public.issue_alerts(%L::timestamptz)$q$, at)); end $f$;
+begin return pg_temp.rpc(u, format($q$select app.issue_alerts_at(%L::timestamptz)$q$, at)); end $f$;
 create function pg_temp.order_of(r jsonb, part text) returns text language sql as $$
   select coalesce(string_agg((select k from ids where v = (e->>'id')::uuid), ',' order by o), '') from jsonb_array_elements(r->part) with ordinality t(e, o) $$;
 select is(pg_temp.order_of(pg_temp.alerts('uaw'), 'alerts'), 'aS,aC,aH,aH2,aR', 'alerts: stopped first, then Critical, then High, newest first within each (resolved-awaiting-verification still alerts)');
@@ -255,6 +256,15 @@ select is(pg_temp.alerts('nomem')->>'code', 'not_allowed', 'a stranger is denied
 select is(pg_temp.order_of(pg_temp.alerts('uax'), 'alerts'), 'i4', 'tenant X: i4 (High, resolved, awaiting verification) still alerts; i5 was verified above');
 select is(pg_temp.order_of(pg_temp.alerts('uay'), 'alerts'), '', 'tenant Y: none of tenant X''s or W''s alerts');
 select is(pg_temp.order_of(pg_temp.alerts('uax'), 'recently_closed'), 'i5', 'tenant X: i5 closed (verified) a moment ago shows under recently closed');
+
+-- R1: clients cannot choose the clock ------------------------------------------------------------------------------------------------------------------
+select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname in ('issue_list', 'issue_detail', 'issue_alerts') and 'p_at' = any (p.proargnames)), 0, 'R1: no public read RPC takes p_at');
+select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'app' and p.proname in ('issue_list_at', 'issue_detail_at', 'issue_alerts_at') and (has_function_privilege('authenticated', p.oid, 'execute') or has_function_privilege('anon', p.oid, 'execute'))), 0,
+  'R1: the explicit-moment bodies are executable by nobody but the owner');
+select is(pg_temp.rpc('uax', 'select public.issue_alerts()')->>'ok', 'true', 'R1: the wrapper works as a Unit Admin (now)');
+select is(pg_temp.rpc('sa', 'select public.issue_detail(gen_random_uuid())')->>'code', 'not_allowed', 'R1: a Super Admin is still denied through the wrapper');
 
 select * from finish();
 rollback;

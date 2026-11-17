@@ -3,7 +3,7 @@ import { Text, View } from 'react-native';
 import { Loading, LoadError, rowStyle } from '@/components/plant/common';
 import { Button, ErrorText, Field, StatusLabel, colors } from '@/components/ui';
 import { toUserMessage } from '@/lib/errors';
-import { fetchCategories, issueApi } from '@/lib/issues';
+import { LIMITS, MSG, fetchCategories, issueApi } from '@/lib/issues';
 import { PlantError, RequestIds } from '@/lib/plant';
 import { useSession } from '@/lib/session-provider';
 import { useLoad } from '@/lib/use-load';
@@ -36,13 +36,13 @@ export default function CategoriesTab() {
   }
   function save(id: string | null, name: string) {
     const n = name.trim();
-    if (n.length < 1 || n.length > 60) { setFieldError('Enter a name of 1 to 60 characters'); return; }
+    if (n.length < 1 || n.length > LIMITS.category) { setFieldError(MSG.categoryName); return; }
     return run(JSON.stringify(['cat', id, n]), (r) => issueApi.saveCategory(client, id, n, r), () => { if (id) setEditing(null); else setNewName(''); });
   }
 
   return (
     <View testID="categories-tab" style={{ gap: 16 }}>
-      <Field label="New category" testID="category-new-name" value={newName} onChangeText={setNewName} maxLength={60} error={editing ? null : fieldError} />
+      <Field label="New category" testID="category-new-name" value={newName} onChangeText={setNewName} maxLength={LIMITS.category} error={editing ? null : fieldError} />
       <Button title="Add category" testID="category-add" onPress={() => save(null, newName)} busy={busy && !editing} disabled={busy} />
       {error ? <ErrorText testID="categories-error">{error}</ErrorText> : null}
       {cats.state === 'loading' && !cats.latest ? <Loading testID="categories-loading" label="Loading categories" /> : null}
@@ -51,7 +51,7 @@ export default function CategoriesTab() {
         <View key={c.id} testID={`category-${c.id}`} style={rowStyle}>
           {editing?.id === c.id ? (
             <>
-              <Field label="Name" testID="category-edit-name" value={editing.name} onChangeText={(v) => setEditing({ id: c.id, name: v })} maxLength={60} error={fieldError} />
+              <Field label="Name" testID="category-edit-name" value={editing.name} onChangeText={(v) => setEditing({ id: c.id, name: v })} maxLength={LIMITS.category} error={fieldError} />
               <Button title="Save" testID="category-save" onPress={() => save(c.id, editing.name)} disabled={busy} />
               <Button title="Cancel" variant="secondary" testID="category-cancel" onPress={() => setEditing(null)} disabled={busy} />
             </>

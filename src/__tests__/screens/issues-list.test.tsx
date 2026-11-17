@@ -1,17 +1,18 @@
-import { fireEvent, screen } from '@testing-library/react-native';
+import { fireEvent, screen, waitFor } from '@testing-library/react-native';
 import { router } from 'expo-router';
 import { IssueList } from '@/components/issues/issue-list';
-import { issue } from '@/test/issue-fixtures';
+import { category, issue } from '@/test/issue-fixtures';
 import { admin, sup } from '@/test/plant-fixtures';
 import { renderWithSession } from '@/test/render-with-session';
-import { rpcOk, shiftClient } from '@/test/shift-fixtures';
+import { ok, rpcOk, shiftClient } from '@/test/shift-fixtures';
 
 jest.mock('expo-router', () => ({ router: { push: jest.fn(), replace: jest.fn() } }));
 jest.setTimeout(20_000);
 
 const page = (items: unknown[], total = items.length) => rpcOk({ ok: true, page: 1, page_size: 25, total, items });
+const noAlerts = rpcOk({ ok: true, alert_count: 0, alerts: [], recently_closed: [] });
 const setup = (role: 'supervisor' | 'unit_admin', list: unknown) => {
-  const t = shiftClient({}, { issue_list: list });
+  const t = shiftClient({ issue_category: ok([category(1), category(2)]), machine: ok([{ id: 'm-1', code: 'M-1', name: 'Press 1' }, { id: 'm-2', code: 'M-2', name: 'Press 2' }]) }, { issue_list: list, issue_alerts: noAlerts });
   return { ...t, ui: renderWithSession(<IssueList role={role} />, { ctx: role === 'unit_admin' ? admin : sup, client: t.client }) };
 };
 
@@ -59,5 +60,42 @@ describe('Issue list', () => {
     await setup('supervisor', rpcOk({ ok: false, code: 'not_allowed' })).ui;
     expect(await screen.findByTestId('issues-error')).toBeTruthy();
     expect(screen.getByTestId('issues-error-retry')).toBeTruthy();
+  });
+
+  it('R4: a Unit Admin sees the alerts above the list; a supervisor does not (and makes no alerts call)', async () => {
+    const ua = setup('unit_admin', page([issue(1)]));
+    await ua.ui;
+    expect(await screen.findByTestId('issue-alerts')).toBeTruthy();
+    expect(screen.queryByTestId('issue-alerts-all')).toBeNull(); // already on the list
+    expect(ua.rpc).toHaveBeenCalledWith('issue_alerts');
+  });
+
+  it('R4: a supervisor has no alerts card and no filter rows', async () => {
+    const t = setup('supervisor', page([issue(1)]));
+    await t.ui;
+    await screen.findByTestId('issue-row-i-1');
+    expect(screen.queryByTestId('issue-alerts')).toBeNull();
+    expect(screen.queryByTestId('issues-filters')).toBeNull();
+    expect(t.rpc).not.toHaveBeenCalledWith('issue_alerts');
+  });
+
+  it('R5: the priority, category and machine filters are sent to the server and reset the page', async () => {
+    const { rpc, ui } = setup('unit_admin', page([issue(1)]));
+    await ui;
+    await fireEvent.press(await screen.findByTestId('filter-priority-high'));
+    await fireEvent.press(await screen.findByTestId('filter-category-c-2'));
+    await fireEvent.press(await screen.findByTestId('filter-machine-m-2'));
+    await waitFor(() => expect(rpc).toHaveBeenLastCalledWith('issue_list', { p_filters: { status: 'not_closed', priority: 'high', category_id: 'c-2', machine_id: 'm-2' }, p_page: 1 }));
+    await fireEvent.press(screen.getByTestId('filter-priority-all'));
+    await waitFor(() => expect(rpc).toHaveBeenLastCalledWith('issue_list', { p_filters: { status: 'not_closed', category_id: 'c-2', machine_id: 'm-2' }, p_page: 1 }));
+    expect(screen.getByTestId('filter-category-c-2')).toHaveTextContent(/✓/);
+  });
+
+  it('R5: the filters combine with the tab', async () => {
+    const { rpc, ui } = setup('unit_admin', page([]));
+    await ui;
+    await fireEvent.press(await screen.findByTestId('filter-priority-critical'));
+    await fireEvent.press(screen.getByTestId('issues-tab-closed'));
+    await waitFor(() => expect(rpc).toHaveBeenLastCalledWith('issue_list', { p_filters: { status: 'closed', priority: 'critical' }, p_page: 1 }));
   });
 });

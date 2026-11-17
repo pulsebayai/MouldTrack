@@ -375,11 +375,24 @@ async function resetShifts(admin: Admin, tenantIds: Map<string, string>) {
  * tables are append-only for service_role, so a reset never changes them. Throwaway categories (E2E-...) are deleted when no issue uses them,
  * otherwise retired. Throwaway issues created by e2e runs stay (history is append-only): known debt, like 04/05.
  */
+/**
+ * N-14: the "awaiting verification" fixture is consumed when someone verifies it (a Unit Admin may), and issues are append-only. When the seeded
+ * one is no longer Resolved and no other Resolved copy exists, a new copy is inserted under a fresh id. Known debt: closed copies accumulate.
+ */
+export function needsFreshCopy(fx: IssueFixture, found: { status: string } | null, resolvedCopies: number): boolean {
+  return fx.status === 'resolved' && found !== null && found.status !== 'resolved' && resolvedCopies === 0;
+}
+
 async function resetIssues(admin: Admin, tenantIds: Map<string, string>) {
-  for (const fx of ISSUES) {
-    const tenantId = tenantIds.get(fx.tenant)!;
-    const found = must(await admin.from('machine_issue').select('id').eq('id', fx.id).maybeSingle());
-    if (found) continue;
+  for (const base of ISSUES) {
+    const tenantId = tenantIds.get(base.tenant)!;
+    const found = must(await admin.from('machine_issue').select('id, status').eq('id', base.id).maybeSingle()) as { id: string; status: string } | null;
+    let fx = base;
+    if (found && base.status === 'resolved' && found.status !== 'resolved') {
+      const copies = must(await admin.from('machine_issue').select('id').eq('tenant_id', tenantId).eq('description', base.description).eq('status', 'resolved')) ?? [];
+      if (!needsFreshCopy(base, found, copies.length)) continue;
+      fx = { ...base, id: crypto.randomUUID() };
+    } else if (found) continue;
     const user = USERS.find((u) => u.key === fx.reporter)!;
     const sup = must(await admin.from('membership').select('user_id').eq('tenant_id', tenantId).eq('phone_e164', user.phone).maybeSingle());
     const machine = must(await admin.from('machine').select('id').eq('tenant_id', tenantId).eq('code', fx.machine).maybeSingle());

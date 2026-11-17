@@ -70,7 +70,7 @@ test('a supervisor reports a High issue with a photo and escalates it (AC-1, AC-
   // The owner escalates with a reason.
   await tid(page, 'action-escalate').click();
   await tid(page, 'action-submit').click();
-  await expect(page.getByText('Enter a reason of 1 to 500 characters')).toBeVisible();
+  await expect(page.getByText('Enter a reason of 1 to 200 characters')).toBeVisible();
   await tid(page, 'action-text').fill('Need maintenance on the pump');
   await tid(page, 'action-submit').click();
   await expect(tid(page, 'issue-escalated')).toHaveText('Escalated');
@@ -95,7 +95,7 @@ test('the Unit Admin sees the alert, acknowledges the escalation and reassigns t
 
   await tid(page, 'action-reassign').click();
   await tid(page, 'action-submit').click();
-  await expect(page.getByText('Enter a reason of 1 to 500 characters')).toBeVisible();
+  await expect(page.getByText('Enter a reason of 1 to 200 characters')).toBeVisible();
   await tid(page, 'action-text').fill('Shift cover');
   await tid(page, 'action-submit').click();
   await expect(page.getByText('Choose the new owner')).toBeVisible();
@@ -138,7 +138,7 @@ test('the supervisor of the shift that started since verifies: not fixed with a 
   await expectNoSeriousViolations(page);
   await tid(page, 'verify-reject').click();
   await tid(page, 'action-submit').click();
-  await expect(page.getByText('Enter a reason of 1 to 500 characters')).toBeVisible();
+  await expect(page.getByText('Enter a reason of 1 to 200 characters')).toBeVisible();
   await tid(page, 'action-text').fill('Still leaking at the seal');
   await tid(page, 'action-submit').click();
   await expect(tid(page, 'issue-status')).toHaveText('In progress');
@@ -193,7 +193,7 @@ test('the Unit Admin sees the whole list and its filters, and manages categories
   await page.goto('/plant/categories');
   await expect(tid(page, 'categories-tab')).toBeVisible();
   await tid(page, 'category-add').click();
-  await expect(page.getByText('Enter a name of 1 to 60 characters')).toBeVisible();
+  await expect(page.getByText('Enter a name of 1 to 40 characters')).toBeVisible();
   await tid(page, 'category-new-name').fill(catName);
   await tid(page, 'category-add').click();
   await expect(page.getByText(catName).first()).toBeVisible();
