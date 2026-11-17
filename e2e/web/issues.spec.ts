@@ -174,6 +174,11 @@ test('a Low issue closes as soon as its owner resolves it (AC-7)', async ({ page
 test('the Unit Admin sees the whole list and its filters, and manages categories (AC-9, AC-14)', async ({ page }) => {
   test.setTimeout(180_000);
   const catName = `E2E Cat ${Math.random().toString(36).slice(2, 7)}`;
+  // An issue that is escalated right now (acknowledging, reassigning or resolving clears the escalation, so the first issue no longer is).
+  const rpc = w.running.session.client.rpc.bind(w.running.session.client);
+  const made = await rpc('iss_report', { p_request_id: crypto.randomUUID(), p_machine_id: w.machine.id, p_category_id: w.categoryId, p_priority: 'medium', p_description: 'E2E escalated via api', p_machine_stopped: false });
+  expect(made.data).toMatchObject({ ok: true });
+  expect((await rpc('iss_escalate', { p_request_id: crypto.randomUUID(), p_issue_id: made.data.id, p_reason: 'E2E escalation' })).data).toMatchObject({ ok: true });
   await signIn(page, w.org.users.ua1.phone, FIXTURE_PASSWORD);
   await tid(page, 'issue-alerts-all').click();
   await expect(prefix(page, 'issue-row-').first()).toBeVisible();
@@ -181,7 +186,8 @@ test('the Unit Admin sees the whole list and its filters, and manages categories
   await expect(prefix(page, 'issue-row-').filter({ hasText: 'E2E guard door sticks' })).toHaveCount(1);
   await expect(prefix(page, 'issue-row-').filter({ hasText: description })).toHaveCount(0);
   await tid(page, 'issues-tab-escalated').click();
-  await expect(prefix(page, 'issue-row-').filter({ hasText: description })).toHaveCount(1);
+  await expect(prefix(page, 'issue-row-').filter({ hasText: 'E2E escalated via api' })).toHaveCount(1);
+  await expect(prefix(page, 'issue-row-').filter({ hasText: description })).toHaveCount(0); // its escalation ended when the owner changed
   await expectNoSeriousViolations(page);
 
   await page.goto('/plant/categories');
