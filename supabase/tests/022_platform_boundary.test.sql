@@ -3,7 +3,7 @@
 -- added by a later feature fails this test until it is covered. Self-contained; rolled back. Phones +91 90000 22xxx.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(25);
+select plan(43);
 
 insert into auth.users (id, email, aud, role) values
   ('00000000-0000-4000-ba00-0000000000a1', 'tap22-sa@example.test', 'authenticated', 'authenticated'),
@@ -19,6 +19,14 @@ insert into public.platform_admin (user_id, full_name, phone_e164, status, must_
   ('00000000-0000-4000-ba00-0000000000a1', 'SA', '+919000022001', 'active', false),
   ('00000000-0000-4000-ba00-0000000000a2', 'SA inactive', '+919000022002', 'inactive', false),
   ('00000000-0000-4000-ba00-0000000000a3', 'SA must', '+919000022003', 'active', true);
+-- 04's plant tables: one row each, so the boundary test is meaningful for them too (the discovery below picks them up automatically).
+insert into public.site (id, tenant_id, name, timezone) values ('5e000000-0000-4000-ba00-000000000001', '1f000000-0000-4000-ba00-00000000000a', 'tap22 site', 'Asia/Kolkata');
+insert into public.line (id, tenant_id, site_id, name) values ('5e000000-0000-4000-ba00-000000000002', '1f000000-0000-4000-ba00-00000000000a', '5e000000-0000-4000-ba00-000000000001', 'tap22 line');
+insert into public.machine (id, tenant_id, site_id, line_id, code, name) values
+  ('5e000000-0000-4000-ba00-000000000003', '1f000000-0000-4000-ba00-00000000000a', '5e000000-0000-4000-ba00-000000000001', '5e000000-0000-4000-ba00-000000000002', 'T22-M1', 'tap22 machine');
+insert into public.product (id, tenant_id, code, description) values ('5e000000-0000-4000-ba00-000000000004', '1f000000-0000-4000-ba00-00000000000a', 'T22-P1', 'tap22 product');
+insert into public.target_version (tenant_id, machine_id, product_id, effective_from, pieces_per_shift, recorded_by) values
+  ('1f000000-0000-4000-ba00-00000000000a', '5e000000-0000-4000-ba00-000000000003', '5e000000-0000-4000-ba00-000000000004', current_date - 2, 100, '00000000-0000-4000-ba00-0000000000b1');
 -- tenant events, an SA event, and a denial exist, so "0 rows" is meaningful
 select app.ua_set_status('00000000-0000-4000-ba00-0000000000b1', gen_random_uuid(), '00000000-0000-4000-ba00-0000000000b2', 'inactive');
 select app.ua_set_status('00000000-0000-4000-ba00-0000000000b1', gen_random_uuid(), '00000000-0000-4000-ba00-0000000000b2', 'active');
@@ -62,6 +70,8 @@ select is((select count(*)::int from public.tap22_tenant_tables() t(name)
   'every tenant-owned table has RLS enabled and forced');
 select is(public.tap22_unseen(), '', 'R1: every tenant-owned table, view and materialised view has at least one row (empty ones are listed here; add fixtures)');
 select ok((select count(*) from public.membership) >= 2 and (select count(*) from public.audit_event) >= 4, 'fixtures: memberships and audit events exist');
+select ok((select array_agg(x order by x) from public.tap22_tenant_tables() x) @> array['current_target', 'line', 'machine', 'plant_today', 'product', 'site', 'target_version'],
+  'step 8: the automatic check covers 04''s site, line, machine, product, target_version and the views plant_today and current_target');
 
 -- The Unit Admin sees them (control) ----------------------------------------------------------------------------------------------------------
 set local role authenticated;
@@ -92,6 +102,47 @@ select is((select status::text from public.membership where user_id = '00000000-
 select results_eq($$ select actor_role, reason, tenant_id is null from public.audit_event where action = 'access.denied' and actor_user_id = '00000000-0000-4000-ba00-0000000000a1' and source = 'edge:user-admin' $$,
   $$ values ('platform_admin'::text, 'platform_admin'::text, true), ('platform_admin'::text, 'platform_admin'::text, true), ('platform_admin'::text, 'platform_admin'::text, true) $$,
   'each is audited with actor role platform_admin (so it shows in the platform audit)');
+
+-- 04's pm_* write paths deny and audit an SA (AC-11, step 8): _pm_authorise has the same SA branch as _ua_authorise -----------------------------
+select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname like 'pm\_%'), 9,
+  'there are exactly 9 pm_* functions (a new one fails here until this section covers it)');
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-ba00-0000000000a1","role":"authenticated"}', true);
+select is(public.pm_save_site(gen_random_uuid(), 'SA site', 'Asia/Kolkata'), '{"ok": false, "code": "not_allowed"}'::jsonb, 'pm_save_site denies an SA');
+select is(public.pm_save_line(gen_random_uuid(), null, 'SA line'), '{"ok": false, "code": "not_allowed"}'::jsonb, 'pm_save_line denies an SA');
+select is(public.pm_archive_line(gen_random_uuid(), '5e000000-0000-4000-ba00-000000000002'), '{"ok": false, "code": "not_allowed"}'::jsonb, 'pm_archive_line denies an SA');
+select is(public.pm_save_machine(gen_random_uuid(), null, 'SA-M', 'SA machine', null, null, null, null, null, 'active'), '{"ok": false, "code": "not_allowed"}'::jsonb, 'pm_save_machine denies an SA');
+select is(public.pm_set_machine_retired(gen_random_uuid(), '5e000000-0000-4000-ba00-000000000003', true), '{"ok": false, "code": "not_allowed"}'::jsonb, 'pm_set_machine_retired denies an SA');
+select is(public.pm_save_product(gen_random_uuid(), null, 'SA-P', 'SA product', 'pcs'), '{"ok": false, "code": "not_allowed"}'::jsonb, 'pm_save_product denies an SA');
+select is(public.pm_set_product_retired(gen_random_uuid(), '5e000000-0000-4000-ba00-000000000004', true), '{"ok": false, "code": "not_allowed"}'::jsonb, 'pm_set_product_retired denies an SA');
+select is(public.pm_set_target(gen_random_uuid(), '5e000000-0000-4000-ba00-000000000003', '5e000000-0000-4000-ba00-000000000004', 5, current_date + 1), '{"ok": false, "code": "not_allowed"}'::jsonb, 'pm_set_target denies an SA');
+select is(public.pm_end_target(gen_random_uuid(), '5e000000-0000-4000-ba00-000000000003', '5e000000-0000-4000-ba00-000000000004', current_date), '{"ok": false, "code": "not_allowed"}'::jsonb, 'pm_end_target denies an SA');
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-ba00-0000000000a2","role":"authenticated"}', true);
+select is(public.pm_save_site(gen_random_uuid(), 'SA site', 'Asia/Kolkata'), '{"ok": false, "code": "not_allowed"}'::jsonb, 'an inactive SA is denied by pm_* as well');
+reset role;
+select results_eq($$ select (select count(*) from public.site where tenant_id = '1f000000-0000-4000-ba00-00000000000a'), (select count(*) from public.line where tenant_id = '1f000000-0000-4000-ba00-00000000000a'),
+                          (select count(*) from public.machine where tenant_id = '1f000000-0000-4000-ba00-00000000000a' and retired_at is null),
+                          (select count(*) from public.product where tenant_id = '1f000000-0000-4000-ba00-00000000000a' and retired_at is null),
+                          (select count(*) from public.target_version where tenant_id = '1f000000-0000-4000-ba00-00000000000a') $$,
+  $$ values (1::bigint, 1::bigint, 1::bigint, 1::bigint, 1::bigint) $$, 'the denied pm_* calls changed nothing');
+select results_eq($$ select source, actor_role, reason, tenant_id is null from public.audit_event
+                     where action = 'access.denied' and actor_user_id = '00000000-0000-4000-ba00-0000000000a1' and source like 'rpc:pm\_%' order by source $$,
+  $$ values ('rpc:pm_archive_line'::text, 'platform_admin'::text, 'platform_admin'::text, true), ('rpc:pm_end_target', 'platform_admin', 'platform_admin', true),
+            ('rpc:pm_save_line', 'platform_admin', 'platform_admin', true), ('rpc:pm_save_machine', 'platform_admin', 'platform_admin', true),
+            ('rpc:pm_save_product', 'platform_admin', 'platform_admin', true), ('rpc:pm_save_site', 'platform_admin', 'platform_admin', true),
+            ('rpc:pm_set_machine_retired', 'platform_admin', 'platform_admin', true), ('rpc:pm_set_product_retired', 'platform_admin', 'platform_admin', true),
+            ('rpc:pm_set_target', 'platform_admin', 'platform_admin', true) $$,
+  'each pm_* denial is audited with actor role platform_admin and an SA-specific reason');
+select is((select count(*)::int from public.audit_event where action = 'access.denied' and actor_user_id = '00000000-0000-4000-ba00-0000000000a2' and source = 'rpc:pm_save_site' and actor_role = 'platform_admin'), 1,
+  'the inactive SA''s pm_* denial is audited as a platform event too');
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-ba00-0000000000a1","role":"authenticated"}', true);
+select is((select count(*)::int from public.pa_audit(0) where action = 'access.denied' and source like 'rpc:pm\_%'), 10, 'the platform audit lists the pm_* denials of both SAs (pa_audit)');
+select is((select count(*)::int from public.pa_audit(0) where action = 'access.denied' and source like 'rpc:pm\_%' and tenant_name is not null), 0, 'and they carry no tenant (an SA has none)');
+reset role;
+select is(
+  (select count(*)::int from public.audit_event where action = 'access.denied' and reason = 'no_membership' and actor_user_id = '00000000-0000-4000-ba00-0000000000a1'), 0,
+  'an SA is never mistaken for a user without membership (no no_membership denial)');
 
 -- Visibility of platform actions (AC-12, AC-13) -----------------------------------------------------------------------------------------------------------
 select ok((select count(*) from public.audit_event where action = 'tenant.updated' and tenant_id = '1f000000-0000-4000-ba00-00000000000a') = 2, 'fixture: two platform actions on the tenant');

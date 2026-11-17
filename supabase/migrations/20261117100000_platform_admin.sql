@@ -1020,3 +1020,59 @@ begin
                          'if v_constraint in (''membership_phone_e164_key'', ''phone_claim_phone_e164_key'') then');
   end loop;
 end $$;
+
+-- 12. 04's pm_* authorisation denies a Super Admin with an SA-specific reason (step 8). Same branch as _ua_authorise (section 10): a caller with no
+-- membership but an own platform_admin row is denied with reason and actor role `platform_admin`, so the denial reaches the platform audit (pa_audit)
+-- instead of looking like a stray no_membership. Everything else is 04's definition unchanged (04's pgTAP 010-014 pass unchanged).
+create or replace function app._pm_authorise(p_request_id uuid, p_source text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_actor uuid := auth.uid();
+  v_tenant uuid;
+  a record;
+  v_reason text;
+  v_role text;
+  v_done uuid;
+begin
+  select m.tenant_id into v_tenant from public.membership m where m.user_id = v_actor;
+  if v_tenant is not null then
+    perform 1 from public.tenant t where t.id = v_tenant for no key update;
+  end if;
+
+  select m.tenant_id, m.role, m.status, m.must_change_password, t.status as tenant_status
+    into a
+    from public.membership m join public.tenant t on t.id = m.tenant_id
+    where m.user_id = v_actor;
+  v_role := a.role::text;
+
+  if not found then
+    if exists (select 1 from public.platform_admin pa where pa.user_id = v_actor) then
+      v_reason := 'platform_admin';
+      v_role := 'platform_admin';
+    else
+      v_reason := 'no_membership';
+    end if;
+  elsif a.status <> 'active' or a.tenant_status <> 'active' then
+    v_reason := 'inactive';
+  elsif a.must_change_password then
+    v_reason := 'must_change_password';
+  elsif a.role <> 'unit_admin' then
+    v_reason := 'role';
+  end if;
+
+  if v_reason is not null then
+    perform app.audit_denied(v_actor, v_tenant, v_role, v_reason, null, null, p_source);
+    return jsonb_build_object('ok', false, 'code', 'not_allowed');
+  end if;
+
+  if p_request_id is null then
+    perform app._pm_fail('validation', 'A request id is required', 'request_id');
+  end if;
+  select e.entity_id into v_done from public.audit_event e where e.actor_user_id = v_actor and e.request_id = p_request_id and e.source = p_source;
+  return jsonb_build_object('ok', true, 'tenant_id', a.tenant_id, 'actor', v_actor, 'role', a.role, 'done', v_done);
+end
+$$;
