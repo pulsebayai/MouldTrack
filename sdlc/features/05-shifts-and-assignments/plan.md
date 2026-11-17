@@ -46,7 +46,7 @@ Branches from main (01–04). **03 merges first**; 05 rebases on it in step 8 (0
   - **R8 Nits.** 7 (tenant filter in the board's membership join); 9 (rewrite `my_shift` candidate search as one set-based query; add a pgTAP sanity case with ~300 machines that it completes — no timing assertion); 10 (log `sh_cover` uses `now()`); 11 (document why overrides don't freeze shift times: overrides don't depend on the window); 13 (My shift card refetches on focus and every 60 s, `accessibilityLiveRegion` on loading, "none" text: "No machines assigned in the next 36 hours"); 14 (Maestro `extendedWaitUntil` 15 s); 16 (list the extra files in "Files that change"); 17 (architecture flags in the session log: `sh_*` prefix; read-RPC authorisation pattern `_sh_read_authorise` + SA branch; timezone lock extended; Core entities ShiftAssignment = assignment_version + assignment_cover; my_shift rule).
   - Proof: CI green on PR #13.
 - [x] 9. **Hosted proof (dev)** after step 8: temporary dev-only triggers; deploy-dev + regression (web incl. api, Android incl. `my-shift.yaml`, hosted-checks, drift); remove triggers; green PR CI. — proof: run URLs
-- [ ] 10. **Review + PR.** sdlc-reviewer, fixes, AC table, session log with architecture flags. — proof: PR CI green
+- [x] 10. **Review + PR.** sdlc-reviewer, fixes, AC table, session log with architecture flags. — proof: PR CI green
 
 ## Risks
 - Time/timezone/overnight maths — explicit `p_at` everywhere, boundary pgTAP.
@@ -127,3 +127,7 @@ AC-1–13 → tests (spec table); full suite green after rebase on 03; dev regre
 - PR CI at the last code commit `e7a2ed5`: run 44061692347, all jobs success (changes, static, db, e2e-web, summary, ci-ok), about 6.5 min. Docs-only commits after it skip the suites.
 - Deviations: none. No staging/prod/main touched; no retries were needed.
 - Next step: step 10 (not started).
+
+### 2026-11-17 (Opus, step 10)
+- Done: sdlc-reviewer (6 Important + 12 nits → 8a), hosted proof (deploy-dev 44056572735, regression 44056572790: web 118 incl. api, hosted-checks 8/8, drift, Android incl. first `my-shift.yaml`), last code commit e7a2ed5 PR CI 44061692347 green. AC table in PR #13; PR ready.
+- Next: owner merges → roadmap 05 shipped, schema lock released (07 holds its share); 06 can start.
