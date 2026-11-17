@@ -3,7 +3,7 @@ import { Text, View } from 'react-native';
 import { Loading, LoadError, rowStyle } from '@/components/plant/common';
 import { usePlant } from '@/components/plant/plant-context';
 import { SiteForm } from '@/components/plant/site-form';
-import { useLoad } from '@/components/plant/use-load';
+import { useLoad } from '@/lib/use-load';
 import { Button, ConfirmDialog, ErrorText, Field, colors } from '@/components/ui';
 import { toUserMessage } from '@/lib/errors';
 import { MSG, PlantError, RequestIds, fetchHasTargets, fetchLines, plantApi, type Line } from '@/lib/plant';

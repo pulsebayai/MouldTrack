@@ -108,6 +108,8 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: '${{ env.NODE_VERSION }}', cache: npm }
       - run: npm ci
+      - name: Local setup token for the edge runtime (D11; a non-secret literal, never in config.toml and never pushed to a hosted project)
+        run: echo 'PLATFORM_SETUP_TOKEN=local-setup-token-not-a-secret-0123456789' > supabase/functions/.env
       - name: Start ephemeral Supabase (migrations + seed only)
         run: npx supabase start -x "$SUPABASE_EXCLUDE"
       - run: bash scripts/ci-supabase-env.sh

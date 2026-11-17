@@ -40,7 +40,7 @@ export async function signInFails(phone: string, password: string): Promise<bool
 
 export type FnResult = { status: number; body: Record<string, any> };
 
-export async function callFn(request: APIRequestContext, fn: 'user-admin' | 'account', token: string | null, data: Record<string, unknown>): Promise<FnResult> {
+export async function callFn(request: APIRequestContext, fn: 'user-admin' | 'account' | 'platform' | 'platform-setup', token: string | null, data: Record<string, unknown>): Promise<FnResult> {
   const headers: Record<string, string> = { apikey: ANON_KEY, 'Content-Type': 'application/json' };
   if (token) headers.Authorization = `Bearer ${token}`;
   const res = await request.post(`${API_URL}/functions/v1/${fn}`, { headers, data });
@@ -54,6 +54,20 @@ export async function callFn(request: APIRequestContext, fn: 'user-admin' | 'acc
 }
 
 export const uuid = () => crypto.randomUUID();
+
+/** Headers for platform-setup (no JWT; the apikey only reaches the function gateway). */
+export async function callSetup(request: APIRequestContext, token: string | null, data: Record<string, unknown>): Promise<FnResult> {
+  const headers: Record<string, string> = { apikey: ANON_KEY, 'Content-Type': 'application/json' };
+  if (token !== null) headers['x-setup-token'] = token;
+  const res = await request.post(`${API_URL}/functions/v1/platform-setup`, { headers, data });
+  let body: Record<string, any> = {};
+  try {
+    body = await res.json();
+  } catch {
+    body = {};
+  }
+  return { status: res.status(), body };
+}
 
 // ---- Fixture orgs ------------------------------------------------------------------------------------------------
 // Each spec file owns its own org so files can run in parallel. Canonical block +91 90000 00001-00099 (D2).
@@ -124,6 +138,35 @@ export function throwawayPhone(): string {
 export const throwawayEmpId = () => `T${Math.random().toString(36).slice(2, 9).toUpperCase()}`;
 
 export const created: string[] = [];
+
+// ---- Platform Super Admin fixtures (03, D8): canonical block +91 90000 00098-00099 -------------------------------------------------------
+export const SA_FIXTURES = {
+  sa1: { phone: '+919000000098', name: 'Fixture Super Admin 1' },
+  sa2: { phone: '+919000000099', name: 'Fixture Super Admin 2' },
+} as const;
+
+/** Idempotently (re)creates a fixture Super Admin in its canonical state (active, normal password) and returns its user id. */
+export async function provisionSuperAdmin(def: { phone: string; name: string }): Promise<string> {
+  const sb = service();
+  const email = phoneToAuthEmail(def.phone);
+  let id = await findAuthUserId(sb, email);
+  if (id) {
+    const { error } = await sb.auth.admin.updateUserById(id, { password: FIXTURE_PASSWORD, ban_duration: 'none' });
+    if (error) throw error;
+  } else {
+    const { data, error } = await sb.auth.admin.createUser({ email, password: FIXTURE_PASSWORD, email_confirm: true });
+    if (error || !data.user) throw error ?? new Error('createUser failed');
+    id = data.user.id;
+  }
+  const { error: pErr } = await sb.from('platform_admin').upsert(
+    { user_id: id, full_name: def.name, phone_e164: def.phone, status: 'active', must_change_password: false, temp_password_expires_at: null },
+    { onConflict: 'user_id' },
+  );
+  if (pErr) throw pErr;
+  return id;
+}
+
+export const tenantNameOf = () => `e2e t3 ${Math.random().toString(36).slice(2, 10)}`;
 
 export async function cleanupCreated() {
   if (created.length === 0) return;

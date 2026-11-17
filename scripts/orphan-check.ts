@@ -1,5 +1,5 @@
 /**
- * Fails when hosted DEV has Auth users without a membership (a leaked half-created user, D4 compensation).
+ * Fails when hosted DEV has Auth users without a membership or platform_admin row (a leaked half-created user, D4 compensation).
  * The only allowed exception is the `nomember` fixture. Read-only; refuses anything but local/dev.
  */
 import { createClient } from '@supabase/supabase-js';
@@ -25,7 +25,10 @@ async function main() {
   }
   const { data: members, error } = await admin.from('membership').select('user_id');
   if (error) throw error;
-  const orphans = findOrphans(users, new Set((members ?? []).map((m) => m.user_id as string)));
+  // 03: Platform Super Admins have no membership by design; their platform_admin row is what ties them to an Auth user.
+  const { data: admins, error: aErr } = await admin.from('platform_admin').select('user_id');
+  if (aErr) throw aErr;
+  const orphans = findOrphans(users, new Set([...(members ?? []), ...(admins ?? [])].map((m) => m.user_id as string)));
   if (orphans.length) {
     console.error(`orphan Auth users without a membership (${orphans.length}):\n${orphans.map((o) => `  ${o}`).join('\n')}`);
     process.exit(1);

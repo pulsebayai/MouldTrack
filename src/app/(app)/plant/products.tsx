@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { Text, View } from 'react-native';
 import { Loading, LoadError, Pager, rowStyle } from '@/components/plant/common';
 import { ProductForm } from '@/components/plant/product-form';
-import { useLoad } from '@/components/plant/use-load';
+import { useLoad } from '@/lib/use-load';
 import { Button, Chip, ConfirmDialog, ErrorText, Field, StatusLabel, colors } from '@/components/ui';
 import { toUserMessage } from '@/lib/errors';
 import { PlantError, RequestIds, fetchProducts, plantApi, productStatusLabel, type Product } from '@/lib/plant';

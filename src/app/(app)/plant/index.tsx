@@ -2,7 +2,7 @@ import { router } from 'expo-router';
 import { useState } from 'react';
 import { Text, View } from 'react-native';
 import { Label, Loading, LoadError, Pager, rowStyle } from '@/components/plant/common';
-import { useLoad } from '@/components/plant/use-load';
+import { useLoad } from '@/lib/use-load';
 import { Button, Chip, Field, StatusLabel, colors } from '@/components/ui';
 import { fetchLines, fetchMachines, machineStatusLabel, type MachineStatusFilter } from '@/lib/plant';
 import { useSession } from '@/lib/session-provider';

@@ -36,7 +36,7 @@ export function keepRequestIdAfter(err: unknown): boolean {
 
 export async function callFunction<T = Record<string, unknown>>(
   client: AuthClient,
-  fn: 'user-admin' | 'account',
+  fn: 'user-admin' | 'account' | 'platform',
   body: Record<string, unknown>,
   deps: Deps = {},
 ): Promise<T> {

@@ -92,6 +92,18 @@ export const USERS: Fixture[] = [
   fx('u4', '+919000000009', 'Fixture Fresh U4', 'FX-U4', 'e2e org U', 'supervisor', true),
 ];
 
+/** 03: plan label per fixture tenant (default trial). */
+export const TENANT_PLANS: Record<string, 'trial' | 'active'> = { 'e2e org A': 'active', 'e2e org U': 'active' };
+
+/** 03: Platform Super Admins (not tenant members). Canonical block, same safety rules as USERS. */
+export const SUPER_ADMINS: Fixture[] = [
+  fx('sa1', '+919000000098', 'Fixture Super Admin 1', '', null),
+  fx('sa2', '+919000000099', 'Fixture Super Admin 2', '', null),
+];
+
+/** Tenants created by 03's tests are named with this prefix; reset suspends them (tenants are never deleted). */
+export const TEST_TENANT_PREFIX = 'e2e t3 ';
+
 /** Fixtures created by 01 (email sign-in); removed on reset. */
 export const LEGACY_EMAILS = [
   'e2e-admin-a@example.test',
@@ -205,7 +217,7 @@ async function resetPlant(admin: Admin, tenantIds: Map<string, string>) {
 }
 
 async function main() {
-  assertSafeTarget(process.env);
+  assertSafeTarget(process.env, [...USERS, ...SUPER_ADMINS]);
   const password = process.env.E2E_FIXTURE_PASSWORD;
   if (!password || password.length < 16) throw new Error('E2E_FIXTURE_PASSWORD missing or shorter than 16 chars');
   const admin = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, {
@@ -227,6 +239,16 @@ async function main() {
       tenantIds.set(t.name, created.id);
     }
   }
+
+  for (const [name, plan] of Object.entries(TENANT_PLANS)) {
+    const { error } = await admin.from('tenant').update({ plan_label: plan }).eq('id', tenantIds.get(name)!);
+    if (error) throw error;
+  }
+  // Tenants registered by earlier test runs stay (never deleted) but are suspended so they cost nothing.
+  const { error: susErr } = await admin.from('tenant')
+    .update({ status: 'suspended', suspended_reason: 'fixture cleanup' })
+    .like('name', `${TEST_TENANT_PREFIX}%`).eq('status', 'active');
+  if (susErr) throw susErr;
 
   const existing = new Map<string, string>();
   for (let page = 1; ; page++) {
@@ -281,7 +303,26 @@ async function main() {
     }
   }
   await resetPlant(admin, tenantIds);
-  console.log(`fixtures reset: ${TENANTS.length} tenants, ${USERS.length} users, ${doomed.size} stale users removed`);
+  // Super Admins: reuse the Auth user, reset password + unban, and put the platform_admin row in its canonical state.
+  for (const f of SUPER_ADMINS) {
+    let id = existing.get(f.email);
+    if (id && !doomed.has(id)) {
+      const { error } = await admin.auth.admin.updateUserById(id, { password, email_confirm: true, ban_duration: 'none' });
+      if (error) throw error;
+    } else {
+      const { data, error } = await admin.auth.admin.createUser({ email: f.email, password, email_confirm: true });
+      if (error) throw error;
+      id = data.user.id;
+    }
+    const { error: delErr } = await admin.from('membership').delete().eq('user_id', id);
+    if (delErr) throw delErr;
+    const { error: upErr } = await admin.from('platform_admin').upsert(
+      { user_id: id, full_name: f.name, phone_e164: f.phone, status: 'active', must_change_password: false, temp_password_expires_at: null },
+      { onConflict: 'user_id' },
+    );
+    if (upErr) throw upErr;
+  }
+  console.log(`fixtures reset: ${TENANTS.length} tenants, ${USERS.length} users, ${SUPER_ADMINS.length} super admins, ${doomed.size} stale users removed`);
 }
 
 if (require.main === module) {

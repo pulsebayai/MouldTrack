@@ -9,7 +9,7 @@ import {
 import { useSession } from '@/lib/session-provider';
 import { Label, Loading, LoadError } from './common';
 import { TargetsPanel } from './targets-panel';
-import { useLoad } from './use-load';
+import { useLoad } from '@/lib/use-load';
 
 type Values = { code: string; name: string; asset_tag: string; make: string; model: string; controller: string; line_id: string | null; status: MachineStatus };
 const FIELDS = ['code', 'name', 'asset_tag', 'make', 'model', 'controller', 'line_id', 'status'];

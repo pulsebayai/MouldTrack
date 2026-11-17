@@ -36,11 +36,20 @@ jobs:
       - name: Apply migrations to dev
         run: npx supabase db push --db-url "$DEV_SUPABASE_DB_URL" --include-all --yes
 
-      - name: Deploy Edge Functions to dev (02 D4-D8)
-        run: npx supabase functions deploy user-admin account --project-ref "$DEV_SUPABASE_PROJECT_REF" --use-api --yes
+      - name: Deploy Edge Functions to dev (02 D4-D8, 03 platform + platform-setup; PLATFORM_SETUP_TOKEN is never set here)
+        run: npx supabase functions deploy user-admin account platform platform-setup --project-ref "$DEV_SUPABASE_PROJECT_REF" --use-api --yes
 
       - name: Set function secrets (CORS origin of the dev web app, D8)
         run: npx supabase secrets set ALLOWED_ORIGINS=https://mouldtrack--dev.expo.app --project-ref "$DEV_SUPABASE_PROJECT_REF" --yes
+
+      - name: Dev never holds a setup token (D11, idempotent, unset if present then verify, values never printed)
+        run: |
+          has_token() { npx supabase secrets list --project-ref "$DEV_SUPABASE_PROJECT_REF" -o json 2>/dev/null | jq -e '[.[] | select(.name == "PLATFORM_SETUP_TOKEN")] | length > 0' >/dev/null; }
+          if has_token; then
+            npx supabase secrets unset PLATFORM_SETUP_TOKEN --project-ref "$DEV_SUPABASE_PROJECT_REF" --yes
+          fi
+          if has_token; then echo "PLATFORM_SETUP_TOKEN still present on dev"; exit 1; fi
+          echo "no PLATFORM_SETUP_TOKEN on dev"
 
       - name: Apply hosted Auth config to dev (D9)
         run: node scripts/auth-config.mjs --apply --ref dev

@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { AppEnv } from './env';
-import { getSessionContext, type SessionContext } from './session';
+import { loadSessionContext, type SessionContext } from './session';
 
 export type SessionState = {
   status: 'loading' | 'ready' | 'error';
@@ -24,11 +24,12 @@ export function useSession(): SessionState {
   return v;
 }
 
-export type AppRoute = '/sign-in' | '/no-access' | '/change-password' | '/home';
+export type AppRoute = '/sign-in' | '/no-access' | '/change-password' | '/home' | '/console';
 export function routeFor(ctx: SessionContext | null): AppRoute {
   if (!ctx) return '/sign-in';
   if ('noAccess' in ctx) return '/no-access';
   if ('mustChangePassword' in ctx) return '/change-password';
+  if ('platform' in ctx) return '/console';
   return '/home';
 }
 
@@ -40,7 +41,7 @@ export function SessionProvider(props: { client: SessionState['client']; appEnv:
 
   const refresh = useCallback(async () => {
     try {
-      setCtx(await getSessionContext(client));
+      setCtx(await loadSessionContext(client));
       setStatus('ready');
     } catch {
       setStatus('error');

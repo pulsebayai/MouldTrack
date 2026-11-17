@@ -1,5 +1,5 @@
 # Architecture: MouldTrack
-Status: approved · Updated: 2026-11-16
+Status: approved · Updated: 2026-11-17
 
 ## Stack
 - **App:** Expo (React Native) + TypeScript + Expo Router, one codebase for Android (supervisors) and web (admins and Super Admin, via react-native-web). Android first; iOS later. Exact Expo SDK version pinned in 01.
@@ -9,18 +9,24 @@ Status: approved · Updated: 2026-11-16
 - **Monitoring:** Sentry Free/Developer (errors only: no tracing, no replay, `sendDefaultPii: false`; 1 user, ~5k errors/month), Supabase logs.
 
 ## Core entities
-Tenant → Site → Line → Machine · Product · MachineProductBenchmark (machine/product/shift, effective dates) · Shift (+ schedule) · ShiftAssignment (shift × machine × supervisor) · ProductionReading · ProductionSummary (versioned calculation) · MachineIssue → IssueAction, IssueOwnershipHistory · ShiftHandover · Attachment · AuditEvent · User/Membership (user × tenant × role).
+Tenant (+ plan label Trial/Active) → Site (one per tenant in R1) → Line (optional grouping) → Machine · Product · TargetVersion (machine × product, pieces per shift, effective-dated, append-only; = the PRD's MachineProductBenchmark; per-shift overrides in 05) · Shift (+ schedule) · ShiftAssignment (shift × machine × supervisor) · ProductionReading · ProductionSummary (versioned calculation) · MachineIssue → IssueAction, IssueOwnershipHistory · ShiftHandover · Attachment · AuditEvent · User/Membership (user × tenant × role).
 
 ## Auth & permissions model
 - Roles: `platform_admin`, `unit_admin`, `supervisor` (`maintenance` reserved).
 - Every tenant-owned row carries `tenant_id`. RLS checks it against the caller's membership. A supervisor additionally sees only assigned machines and shifts.
-- `platform_admin` manages tenants and memberships only. Access to tenant operational data needs an explicit, audited grant.
+- **Platform Super Admin (03)** = a row in `platform_admin` (not a tenant member); same phone + password sign-in, routed to the web Console. One phone per person across `membership` and `platform_admin` (`app.phone_claim`, kept by triggers). SAs register/edit/suspend/activate tenants (plan label Trial/Active is a label only; status Suspended blocks access, sessions kept), create and reset **Unit Admins only**, and manage other SAs (no self-deactivate; never the last active SA). Writes via the `platform` Edge Function → `app.pa_*` via `public.psvc_*` wrappers (service_role only).
+- **SA data boundary:** SAs read `tenant` rows and only what `public.pa_*` read functions expose (tenant summaries with counts, a tenant's UAs with masked phones, the platform audit). No RLS path to membership, tenant users' audit rows or any tenant-owned table; `pm_*`/user-admin paths deny SAs (audited as platform events). Test 022 discovers every table/view with `tenant_id` and fails unless it has fixture rows, the UA control sees them and the SA sees none; it also discovers every client-callable write RPC and asserts SAs are denied. **Extension point:** a feature adding a tenant-owned table adds its fixture rows to 022's fixture block (additions only). Storage objects have no `tenant_id`, so 06 needs its own "SA reads 0 objects" test. Operational-data access grants remain future.
+- **First SA per environment:** `platform-setup` Edge Function (no JWT) needs secret `PLATFORM_SETUP_TOKEN` (≥ 32 characters, generated with `openssl rand -hex 32`; the public local literal is refused off localhost). It refuses once a Super Admin has completed their first password change; until then a setup-created SA whose temporary password expired can be re-issued (audited). With no token configured it refuses without touching the DB. Runbook: `sdlc/releases/README.md`. dev uses fixture SAs (`fixtures-reset`); staging and prod use the runbook (staging with a canonical fixture phone such as `…00098` and an invented name, never a real person).
 - Denied cross-tenant access attempts on RPC paths are recorded as audit events (PRD AC-22).
 - Helpers `app.current_tenant_id()` / `app.current_role()` return null unless the caller's membership is active, the tenant is active **and** `must_change_password = false`; every RLS policy builds on them, so a user with a temporary password sees no tenant data.
 - Unit Admins manage people (create UA/SUP, edit, role change, deactivate/reactivate, reset password) only via the `user-admin` Edge Function. Guards: no self-deactivate/demote/reset; a tenant always keeps ≥ 1 active UA (tenant row lock). The last UA's password is reset by the Super Admin (03). Deactivation = membership `inactive` + Auth ban. Accounts are admin-created only (public sign-up disabled).
+- **Audit actions** are registered in `app.audit_action` (each feature inserts its own; unknown actions fail the CHECK with 23514). SA actions carry `actor_role = 'platform_admin'`; tenant-scoped when they act on a tenant (visible to that tenant's UAs), `tenant_id null` otherwise.
 - **Denials are returned, not raised** in service SQL functions: an authorisation denial commits an `access.denied` audit row and returns `{ok:false, code}`; validation/duplicate/guard errors raise P0001 (nothing to audit). Later features use the same pattern and `app.audit_denied`.
 
 ## Cross-cutting rules
+- **Tenant-owned child tables use composite `(tenant_id, id)` foreign keys** so a row can never reference another tenant's parent (04 pattern).
+- **Effective-dated config is append-only and never backdated** (e.g. `target_version`): changes add versions from a plant date ≥ today; reads go through functions (`app.target_for`), which skip the tenant check only for `service_role`. A site's timezone is locked once targets exist (it defines what stored dates mean).
+- **Client-callable write RPCs** (`public.pm_*` pattern): security definer, empty search_path, **every new one authorises via `app._pm_authorise`** (or `_ua_authorise`) — 022 fails otherwise — (same rules as `current_tenant_id`/`current_role`; SAs denied as platform events), D13 denials, request id tied to its RPC (reuse across RPCs → `validation`).
 - UUID primary keys. All timestamps are `timestamptz` in UTC. Tenant and site keep an IANA timezone for display and shift-boundary maths (overnight shifts supported).
 - State changes (shift open/close, acknowledge, escalate, resolve, verify) go **only** through RPC functions. They are idempotent (client request id) and write an AuditEvent in the same transaction.
 - Ownership, acknowledgement and audit tables are append-only, enforced by revoking UPDATE/DELETE and by triggers.
@@ -38,7 +44,7 @@ None in MVP. Notifications are in-app (R3). Push/email/WhatsApp come later. **Ch
 ## Environments & deploy
 - Supabase, all ap-south-1 (Mumbai, India data residency): org **MouldTrack** (Free) holds **dev** and **staging**; **prod** goes in a second Free org, created at the R1 release (Free = 2 active projects per org). Separate from the owner's Pulsebay account. Staging is kept from pausing by `keepalive.yml` (weekly, read-only); dev by the nightly run.
 - **Prod on Free until pilot completion (owner).** Free has no backups → R1 release blockers: nightly **encrypted** `pg_dump` + Storage export (key held only by the owner; this repo is public, so artifacts are public) and one recorded restore drill.
-- Edge Functions + hosted Auth settings are deployed as code: `deploy-dev.yml` runs `supabase functions deploy`, sets `ALLOWED_ORIGINS`, and `scripts/auth-config.mjs --apply` (sign-up off, password policy) on dev; staging/prod get the same at release. The nightly `hosted-checks` job verifies Auth config, functions deployed, no orphan Auth users (Auth user without membership), and CORS (dev origin allowed, foreign origin never reflected).
+- Edge Functions + hosted Auth settings are deployed as code: `deploy-dev.yml` runs `supabase functions deploy`, sets `ALLOWED_ORIGINS`, and `scripts/auth-config.mjs --apply` (sign-up off, password policy) on dev; staging/prod get the same at release. The nightly `hosted-checks` job verifies Auth config, functions deployed (`user-admin`, `account`, `platform`, `platform-setup`), no orphan Auth users (Auth user without membership or platform_admin), membership/Auth consistency, CORS (dev origin allowed, foreign origin never reflected), and that `platform-setup` refuses on dev (03 step 9).
 - Web: dev = https://mouldtrack--dev.expo.app (alias `dev`), staging alias `staging`, prod = production deployment. CI talks to hosted dev only through GitHub Actions secrets; the database is reached via the **session pooler** (GitHub runners are IPv4-only).
 - Real plant data only in **prod**. dev and staging hold fixture tenants only.
 - Path to prod: PR → main (`deploy-dev.yml`: migrations + web on EAS Hosting alias `dev`) → release Rn to **staging** → gate → prod (migrations, web prod, EAS Update/Build `production`). Every prod step is behind the production-gate hook and the owner's explicit OK.
@@ -58,6 +64,9 @@ Release sign-off: Sidambara Raja · Evidence retention: 90 days · Regulated dat
 ## Known debt & fragile areas
 - **Synthetic Auth identity (02):** sign-in uses `<10 digits>@phone.mouldtrack.invalid` as the Auth email. It never receives mail; when SMS/OTP or email arrives (roadmap "Later") the mapping is replaced by a real phone/email identity and a data migration.
 - **Users search has no index (02):** the Users list filters with `ilike` on name, employee ID and phone. Fine up to about 500 users per tenant; add a trigram index when a tenant approaches that.
+- **Target history on dev (04):** `target_version` is append-only, so `fixtures-reset` retires throwaway test machines/products instead of deleting them; dev slowly accumulates retired `E2E-…` rows.
+- **Console test tenants on dev (03):** the nightly `platform.spec` creates `e2e t3 …` tenants that are suspended, never deleted (audit rows reference them); the Console list grows a little every night.
+- **Platform audit throttling (03):** refused `platform-setup` calls are audited at most once a minute while a token is configured, and not at all when none is configured (by design: no DB writes for anonymous callers).
 - **Staging hosted checks (02, R4):** the nightly `hosted-checks` job runs the Auth config check on staging only; the Edge Function, orphan, consistency and CORS checks are dev-only. The staging `auth-config.mjs --apply` and a first full staging run happen at the R1 release gate, so AC-15 for staging is proven there, not in feature 02.
 
 ## Decision log
@@ -82,3 +91,10 @@ Release sign-off: Sidambara Raja · Evidence retention: 90 days · Regulated dat
 | 2026-11-16 | Must-change-password gate inside `current_tenant_id()`/`current_role()`; deactivation = inactive membership + Auth ban | One gate every RLS policy inherits; ban also blocks refresh tokens | 02 |
 | 2026-11-16 | Later providers: AWS SES (email), AWS End User Messaging SMS (after DLT) | Owner choice; not built yet | 02 |
 | 2026-11-16 | Local/CI Supabase ports 15320–15329 | 54xxx/55xxx sit in the runner's ephemeral range → port-bind flakes (01, 02) | 02 |
+| 2026-11-17 | Audit action registry `app.audit_action` replaces the fixed CHECK list | Features register actions independently; unknown actions still refused (02 test) | Batch A |
+| 2026-11-17 | Plant masters: one site per tenant (R1), optional lines, per-machine tracking, pieces-per-shift targets append-only + effective-dated, no backdating, timezone lock once targets exist | Owner answers; history that readings (06) depend on can't change silently | 04 |
+| 2026-11-17 | Composite `(tenant_id, id)` FKs for tenant-owned children | Cross-tenant references impossible by construction | 04 |
+| 2026-11-17 | Platform Super Admin as a separate identity (`platform_admin`), phone unique across identities (`phone_claim`), same sign-in routed to Console | Owner: same sign-in; PRD: no routine access to tenant data | 03 |
+| 2026-11-17 | SA data boundary enforced in DB (pa_* read functions only) + automatic pgTAP coverage of every tenant-owned table/view | A forgotten policy on a future table fails CI | 03 |
+| 2026-11-17 | One-time `platform-setup` endpoint per environment (token secret only while pending; refuses once an SA exists) | Prod's first SA without SQL against prod | 03 |
+| 2026-11-17 | Batch A split the schema lock by tables (logged exception); merge order registry → 04 → 03 | Disjoint tables; parallel build | Batch A |

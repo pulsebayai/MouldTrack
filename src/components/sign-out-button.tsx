@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useSession } from '@/lib/session-provider';
 import { Button } from './ui';
 
-export function SignOutButton() {
+export function SignOutButton({ onSignedOut }: { onSignedOut?: () => void } = {}) {
   const { client, refresh } = useSession();
   const [busy, setBusy] = useState(false);
   return (
@@ -19,6 +19,7 @@ export function SignOutButton() {
         } finally {
           setBusy(false);
           await refresh();
+          onSignedOut?.();
         }
       }}
     />

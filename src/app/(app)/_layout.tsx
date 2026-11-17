@@ -10,6 +10,8 @@ export default function AppLayout() {
     if (pathname !== '/change-password') return <Redirect href="/change-password" />;
     return <Stack screenOptions={{ headerShown: false }} />;
   }
+  // A Super Admin has one tenant-free screen here: changing their own password. Everything else is the console.
+  if (route === '/console' && pathname === '/change-password') return <Stack screenOptions={{ headerShown: false }} />;
   if (route !== '/home') return <Redirect href={route} />;
   return <Stack screenOptions={{ headerShown: false }} />;
 }

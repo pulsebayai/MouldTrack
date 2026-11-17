@@ -5,7 +5,7 @@ import { Loading, LoadError } from '@/components/plant/common';
 import { PlantContext } from '@/components/plant/plant-context';
 import { PlantTabs, tabFor } from '@/components/plant/plant-tabs';
 import { SiteForm } from '@/components/plant/site-form';
-import { useLoad } from '@/components/plant/use-load';
+import { useLoad } from '@/lib/use-load';
 import { Button, colors } from '@/components/ui';
 import { fetchPlantToday, fetchSite, fetchTenantTimezone } from '@/lib/plant';
 import { isMember } from '@/lib/session';
