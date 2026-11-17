@@ -49,3 +49,9 @@ export const PLANT_FIXTURE = {
 
 /** Throwaway rows created by e2e carry this prefix: fixtures-reset removes (or retires) them. */
 export const throwawayPlantCode = (): string => `E2E-${Math.random().toString(36).slice(2, 10).toUpperCase()}`;
+
+/** 05-shifts-and-assignments fixture shifts (D12): must match supabase/seed.sql and scripts/fixtures-reset.ts. */
+export const SHIFT_FIXTURE = {
+  orgU: { shifts: ['Fixture Morning', 'Fixture Night'], supervisor: 'Fixture Supervisor U3', machines: ['FX-MU1', 'FX-MU2'], unassigned: 'FX-MU3' },
+  orgA: { shifts: ['Fixture Shift A1', 'Fixture Shift A2'], supervisor: 'Fixture Supervisor A', machine: 'FX-MA1' },
+} as const;
