@@ -113,3 +113,7 @@ AC-1–13 → tests (spec table); full suite green after rebase on 03; dev regre
   - Core entities: ShiftAssignment = `assignment_version` (recurring plan) + `assignment_cover` (one occurrence); plan changes never rewrite a started occurrence (use Cover); re-planning supersedes later scheduled versions.
   - `my_shift` rule: every running occurrence where the caller owns >= 1 machine; if none runs, the next one within 36 h (state running | next | none | no_shifts).
 - Next step: step 9 on the owner's go-ahead (not started).
+
+### 2026-11-17 (Opus review of 8a)
+- Accepted 8a. Known debt (flag for architecture.md): 3 pgTAP cases in 031/032 are skipped with an explicit `pass('… skipped …')` inside narrow plant-time windows (first 15 min of the day; after 20:00) because write RPCs use `now()`; daytime PR CI and the 02:30 IST nightly cover the complementary windows. A test-only clock override in production functions was rejected (footgun). Revisit if 06 needs many time-dependent write tests.
+- Next: step 9 hosted proof.
