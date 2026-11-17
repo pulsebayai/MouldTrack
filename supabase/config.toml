@@ -407,10 +407,9 @@ verify_jwt = true
 [functions.platform-setup]
 verify_jwt = false
 
-# Local/ephemeral stacks only (a non-secret literal, like the seed password). Hosted environments get the secret from
-# `supabase secrets set` only while setup is pending (sdlc/releases/README.md); it is unset on dev and staging.
-[edge_runtime.secrets]
-PLATFORM_SETUP_TOKEN = "local-setup-token-not-a-secret-0123456789"
+# No [edge_runtime.secrets] here (D11): the deploy CLI pushes this section to the hosted project. The local stack gets PLATFORM_SETUP_TOKEN from
+# supabase/functions/.env (gitignored; ci.yml's e2e job writes it before `supabase start`, local runs copy it from .env.example). Hosted environments get the
+# secret only from `supabase secrets set` while setup is pending (sdlc/releases/README.md); deploy-dev unsets it and the hosted checks require none on dev.
 
 # [edge_runtime.secrets]
 # secret_key = "env(SECRET_VALUE)"

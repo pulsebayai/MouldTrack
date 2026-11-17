@@ -77,9 +77,23 @@ describe('local literal guard (03 R3)', () => {
     expect(setupTokenUsable(undefined, 'http://127.0.0.1:15321')).toBe(false);
     expect(setupTokenUsable('short', 'http://127.0.0.1:15321')).toBe(false);
   });
-  it('the literal matches supabase/config.toml', () => {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const toml = require('fs').readFileSync(require('path').join(__dirname, '../../../supabase/config.toml'), 'utf8') as string;
-    expect(toml).toContain(`PLATFORM_SETUP_TOKEN = "${LOCAL}"`);
+  // D11: a deploy CLI step pushes config.toml's [edge_runtime.secrets] to the hosted project, so the literal must never live there.
+  const read = (rel: string) => (require('fs').readFileSync(require('path').join(__dirname, '../../../', rel), 'utf8') as string); // eslint-disable-line @typescript-eslint/no-require-imports
+  it('the local literal is not in supabase/config.toml (a deploy would push it to the hosted project)', () => {
+    const toml = read('supabase/config.toml');
+    expect(toml).not.toContain(LOCAL);
+    expect(toml).not.toMatch(/^\s*PLATFORM_SETUP_TOKEN\s*=/m);
   });
+  it('the local stack gets the literal from supabase/functions/.env, written by the e2e job of ci.yml before supabase start and gitignored', () => {
+    const ci = read('.github/workflows/ci.yml');
+    expect(ci).toContain('supabase/functions/.env');
+    expect(ci).toContain(`PLATFORM_SETUP_TOKEN=${LOCAL}`);
+    expect(ci.indexOf('PLATFORM_SETUP_TOKEN=')).toBeLessThan(ci.indexOf('supabase start', ci.indexOf('e2e-web:')));
+    expect(read('.gitignore')).toMatch(/^\.env\*$/m);
+  });
+  it('deploy-dev removes any setup token from dev and the hosted checks require none', () => {
+    expect(read('.github/workflows/deploy-dev.yml')).toContain('secrets unset PLATFORM_SETUP_TOKEN');
+    expect(read('scripts/hosted-checks.sh')).toContain('dev has no PLATFORM_SETUP_TOKEN');
+  });
+
 });
