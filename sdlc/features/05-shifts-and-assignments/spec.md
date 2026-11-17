@@ -12,7 +12,7 @@ Terms: **UA**, **SUP** as before. **Shift occurrence** = (shift, shift date); sh
 - **AC-3 Recurring plan.** A UA assigns one active **supervisor** to one or more machines on a shift **from** a plant date ≥ today, optionally **until** a date. Each (shift, machine) has at most one supervisor per date; assigning a machine already covered on that shift replaces the previous owner from that date (the confirm dialog names who loses it). Ending = machine unassigned from that date. History is append-only. Audited `assignment.set|ended` (one row per call, listing machines).
 - **AC-4 Cover for one occurrence.** For an occurrence that hasn't ended yet (including one running now), a UA moves selected machines to another active supervisor — or to "unassigned" — with a reason (1–200). Only that occurrence changes; the plan doesn't. A later cover for the same machine and occurrence replaces the earlier one (append-only, latest wins). Audited `assignment.covered`.
 - **AC-5 Resolution.** `app.machine_owner(machine, shift, date)` = latest cover for that occurrence if any, else the plan version in force on that date, else null (unassigned). Proven for: plan only, plan change on day D, until-date, cover, cover then re-cover, cover to unassigned, overnight occurrence.
-- **AC-6 Only active supervisors.** Assigning a UA, an inactive or must-change user, or another tenant's user is refused (validation `supervisor`). If an assigned supervisor is later deactivated, the board shows "Inactive supervisor" for their machines (still counted as assigned until the UA changes it).
+- **AC-6 Only active supervisors.** Assigning a UA, an inactive or must-change user is refused (validation `supervisor`); another tenant's user id gets the generic denial (no existence leak). If an assigned supervisor is later deactivated, the board shows "Inactive supervisor" for their machines (still counted as assigned until the UA changes it).
 
 **Per-shift targets**
 - **AC-7 Override.** On a machine's targets panel a UA can set, for a product and a shift, a different pieces-per-shift target from a plant date ≥ today, or end the override (falls back to the base target). Append-only, effective-dated; ending cancels later scheduled overrides (04's R1 rule). Audited `target_override.set|ended`.
@@ -79,3 +79,9 @@ Holiday calendars, weekday patterns, shift swaps, attendance, planned product pe
 
 ## Owner decisions (2026-11-17)
 1. The **supervisor picks the product** when recording the opening reading (06), defaulting to the last product run on that machine. 05's "My shift" lists machines without targets; 06 shows the effective target once the product is picked.
+
+## Clarifications (Opus, 2026-11-17, after review)
+- AC-3: plan changes start at the **first occurrence that hasn't started**; a started or ended occurrence is changed only by Cover. Re-planning **supersedes** later scheduled changes for those machines (listed in the confirm dialog), like 04's "end means end".
+- AC-9: the board's default is the current occurrence of the chosen shift, else its next one (not "plant today").
+- AC-10: if a supervisor owns machines on more than one running occurrence, My shift shows each of them.
+- AC-1: a shift can't be retired while one of its occurrences is running; the site timezone is also locked once any shift data exists.
