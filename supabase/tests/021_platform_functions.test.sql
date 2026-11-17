@@ -2,7 +2,7 @@
 -- Self-contained; rolled back. Phones from the throwaway block +91 90000 21xxx.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(167);
+select plan(173);
 
 create function pg_temp.err(q text) returns jsonb language plpgsql as $f$
 declare d text; m text; st text;
@@ -72,6 +72,13 @@ select is(pg_temp.err($$ select app.pa_tenant_create('00000000-0000-4000-b900-00
 select is(pg_temp.err($$ select app.pa_tenant_create('00000000-0000-4000-b900-0000000000a1', gen_random_uuid(), '   ', null, null) $$) @> '{"code":"validation","field":"name"}', true, 'create: blank name -> validation/name');
 select is(pg_temp.err($$ select app.pa_tenant_create('00000000-0000-4000-b900-0000000000a1', gen_random_uuid(), repeat('n', 81), null, null) $$) @> '{"code":"validation","field":"name"}', true, 'create: name over 80 -> validation/name');
 select is(pg_temp.err($$ select app.pa_tenant_create('00000000-0000-4000-b900-0000000000a1', gen_random_uuid(), 'Bad Zone', 'Mars/Base', null) $$) @> '{"code":"validation","field":"timezone"}', true, 'create: unknown timezone -> validation/timezone');
+-- N-7: one time zone rule, aligned with 04 (pg_timezone_names + `at time zone`) minus the posix/ and right/ aliases; every zone on the client list passes.
+select is(pg_temp.err($$ select app.pa_tenant_create('00000000-0000-4000-b900-0000000000a1', gen_random_uuid(), 'Posix Co', 'posix/Asia/Kolkata', null) $$) @> '{"code":"validation","field":"timezone"}', true, 'create: posix/ zone -> validation/timezone');
+select is(pg_temp.err($$ select app.pa_tenant_create('00000000-0000-4000-b900-0000000000a1', gen_random_uuid(), 'Right Co', 'right/UTC', null) $$) @> '{"code":"validation","field":"timezone"}', true, 'create: right/ zone -> validation/timezone');
+select is(pg_temp.err($$ select app.pa_tenant_update('00000000-0000-4000-b900-0000000000a1', gen_random_uuid(), '19000000-0000-4000-b900-00000000000a', null, 'posix/Asia/Dubai', null) $$) @> '{"code":"validation","field":"timezone"}', true, 'update: posix/ zone -> validation/timezone');
+select is((select count(*)::int from public.tenant where name in ('Posix Co', 'Right Co')), 0, 'time zone refusals leave no tenant');
+select is((select bool_and(app._pa_timezone_ok(z)) from unnest(array['Asia/Kolkata', 'Asia/Dubai', 'Australia/Sydney', 'Pacific/Auckland', 'America/Sao_Paulo', 'America/Los_Angeles', 'Africa/Johannesburg', 'UTC']) z), true, 'zones from the client list are accepted');
+select is((select bool_or(coalesce(app._pa_timezone_ok(z), false)) from unnest(array['POSIX/Asia/Kolkata', 'right/Asia/Kolkata', 'Mars/Base', '', 'Asia/Kolkata; drop table x', null]) z), false, 'posix/, right/, unknown, empty and malformed zones are refused');
 select is(pg_temp.err($$ select app.pa_tenant_create('00000000-0000-4000-b900-0000000000a1', gen_random_uuid(), 'Bad Plan', null, 'gold') $$) @> '{"code":"validation","field":"plan_label"}', true, 'create: unknown plan -> validation/plan_label');
 select is((select count(*)::int from public.tenant where name in ('ACME MOULDS', 'Bad Zone', 'Bad Plan')), 0, 'create: refused inputs leave no tenant');
 

@@ -199,6 +199,31 @@ as $$
   select jsonb_build_object('full_name', a.full_name, 'phone', left(a.phone_e164, 3) || '******' || right(a.phone_e164, 4), 'status', a.status)
 $$;
 
+-- One tenant time zone rule (N-7): a real zone in pg_timezone_names that Postgres accepts for `at time zone` (04's pm_save_site rule), minus the
+-- posix/ and right/ aliases, which are not IANA identifiers a browser or a user would recognise. Any zone on the client list (src/lib/timezones.ts) passes.
+create function app._pa_timezone_ok(p_tz text)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+begin
+  if p_tz is null or p_tz !~ '^([A-Za-z_]+(/[A-Za-z0-9_+-]+)+|UTC)$' or p_tz ~* '^(posix|right)/' then
+    return false;
+  end if;
+  if not exists (select 1 from pg_catalog.pg_timezone_names n where n.name = p_tz) then
+    return false;
+  end if;
+  begin
+    perform now() at time zone p_tz;
+  exception when others then
+    return false;
+  end;
+  return true;
+end
+$$;
+
 create function app._pa_validate_tenant(p_name text, p_tz text, p_plan text, p_required boolean)
 returns void
 language plpgsql
@@ -209,8 +234,7 @@ begin
   if (p_required or p_name is not null) and (p_name is null or length(p_name) not between 1 and 80) then
     perform app._ua_fail('validation', 'Enter a name of 1 to 80 characters', 'name');
   end if;
-  if (p_required or p_tz is not null) and (p_tz is null or p_tz !~ '^([A-Za-z_]+(/[A-Za-z0-9_+-]+)+|UTC)$'
-      or not exists (select 1 from pg_catalog.pg_timezone_names n where n.name = p_tz)) then
+  if (p_required or p_tz is not null) and (p_tz is null or not app._pa_timezone_ok(p_tz)) then
     perform app._ua_fail('validation', 'Choose a valid time zone', 'timezone');
   end if;
   if (p_required or p_plan is not null) and (p_plan is null or p_plan not in ('trial', 'active')) then
