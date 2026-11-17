@@ -33,3 +33,16 @@ export async function expectOnSignIn(page: Page) {
   await expect(page.getByTestId('sign-in-submit')).toBeVisible();
   await expect(page).toHaveURL(/\/sign-in$/);
 }
+
+/** 04-plant-masters fixture plant (D8): must match supabase/seed.sql and scripts/fixtures-reset.ts. */
+export const PLANT_FIXTURE = {
+  site: 'Fixture Plant U',
+  lines: ['Fixture Line 1', 'Fixture Line 2'],
+  machineWithTarget: { code: 'FX-MU1', name: 'Fixture Machine U1', product: 'FX-PU1', pieces: '1,200' },
+  machineWithoutTarget: { code: 'FX-MU3', name: 'Fixture Machine U3' },
+  products: ['FX-PU1', 'FX-PU2', 'FX-PU3'],
+  machineOfOrgA: 'FX-MA1',
+} as const;
+
+/** Throwaway rows created by e2e carry this prefix: fixtures-reset removes (or retires) them. */
+export const throwawayPlantCode = (): string => `E2E-${Math.random().toString(36).slice(2, 10).toUpperCase()}`;

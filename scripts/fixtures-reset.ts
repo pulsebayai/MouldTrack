@@ -10,7 +10,7 @@
  * Env: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, E2E_FIXTURE_PASSWORD, APP_ENV (local|development),
  *      DEV_SUPABASE_PROJECT_REF (required for hosted).
  */
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 export type Fixture = {
   key: string;
@@ -29,6 +29,51 @@ export const TENANTS: { name: string; status: 'active' | 'suspended' }[] = [
   { name: 'e2e org S', status: 'suspended' },
   { name: 'e2e org U', status: 'active' },
 ];
+
+// 04-plant-masters (D8): the fixture plant. Org U is mutated by e2e (own site, lines, machines, products and targets);
+// A and B hold one machine and one product each for read-only isolation checks. Must match supabase/seed.sql.
+export type PlantFixture = {
+  tenant: string;
+  site: string;
+  lines: string[];
+  machines: { code: string; name: string; line?: string }[];
+  products: { code: string; description: string }[];
+  targets: { machine: string; product: string; pieces: number }[];
+};
+export const PLANT: PlantFixture[] = [
+  {
+    tenant: 'e2e org A', site: 'Fixture Plant A', lines: [],
+    machines: [{ code: 'FX-MA1', name: 'Fixture Machine A1' }],
+    products: [{ code: 'FX-PA1', description: 'Fixture Product A1' }],
+    targets: [{ machine: 'FX-MA1', product: 'FX-PA1', pieces: 1000 }],
+  },
+  {
+    tenant: 'e2e org B', site: 'Fixture Plant B', lines: [],
+    machines: [{ code: 'FX-MB1', name: 'Fixture Machine B1' }],
+    products: [{ code: 'FX-PB1', description: 'Fixture Product B1' }],
+    targets: [{ machine: 'FX-MB1', product: 'FX-PB1', pieces: 500 }],
+  },
+  {
+    tenant: 'e2e org U', site: 'Fixture Plant U', lines: ['Fixture Line 1', 'Fixture Line 2'],
+    machines: [
+      { code: 'FX-MU1', name: 'Fixture Machine U1', line: 'Fixture Line 1' },
+      { code: 'FX-MU2', name: 'Fixture Machine U2', line: 'Fixture Line 2' },
+      { code: 'FX-MU3', name: 'Fixture Machine U3' },
+    ],
+    products: [
+      { code: 'FX-PU1', description: 'Fixture Product U1' },
+      { code: 'FX-PU2', description: 'Fixture Product U2' },
+      { code: 'FX-PU3', description: 'Fixture Product U3' },
+    ],
+    targets: [
+      { machine: 'FX-MU1', product: 'FX-PU1', pieces: 1200 },
+      { machine: 'FX-MU2', product: 'FX-PU2', pieces: 800 },
+    ], // FX-MU3 deliberately has no target ("No target set")
+  },
+];
+/** Rows created by e2e tests carry this code/name prefix; fixtures-reset removes (or retires) them. */
+export const isThrowawayPlantName = (name: string): boolean => /^E2E-[A-Za-z0-9]{3,16}$/.test(name);
+const FIXTURE_TARGET_FROM = '2026-01-01';
 
 const AUTH_DOMAIN = 'phone.mouldtrack.invalid';
 const fx = (key: string, phone: string, name: string, employeeId: string, tenant: string | null, role?: Fixture['role'], mustChange = false): Fixture => ({
@@ -71,6 +116,92 @@ export function assertSafeTarget(env: Record<string, string | undefined>, users:
   if (!users.every((u) => u.email.endsWith(`@${AUTH_DOMAIN}`))) throw new Error('Refusing: fixture email must use the reserved .invalid domain');
   if (!users.every((u) => isCanonicalPhone(u.phone))) throw new Error('Refusing: fixture phone outside the canonical block +91 90000 00001-00099');
   if (!users.every((u) => u.email === `${u.phone.slice(3)}@${AUTH_DOMAIN}`)) throw new Error('Refusing: fixture email does not match its phone');
+}
+
+type Admin = SupabaseClient;
+const must = <T>(r: { data: T; error: { message: string } | null }): T => {
+  if (r.error) throw new Error(r.error.message);
+  return r.data;
+};
+
+/** The fixture site exists with its fixture name and time zone (an e2e run may have renamed it; targets never touch it). Returns its id. */
+export async function ensureFixtureSite(admin: Admin, tenantId: string, fx: Pick<PlantFixture, 'site'>): Promise<string> {
+  const want = { name: fx.site, timezone: 'Asia/Kolkata' };
+  const site = must(await admin.from('site').select('id, name, timezone').eq('tenant_id', tenantId).maybeSingle());
+  if (!site) return must(await admin.from('site').insert({ tenant_id: tenantId, ...want }).select('id').single())!.id as string;
+  if (site.name !== want.name || site.timezone !== want.timezone) must(await admin.from('site').update(want).eq('id', site.id).select('id'));
+  return site.id as string;
+}
+
+/**
+ * Plant fixtures (04, D8). target_version is append-only, so targets are only ever inserted (and only when the pair has none);
+ * throwaway machines/products that already have targets are retired instead of deleted. Dev accumulates a few retired rows per run (accepted).
+ */
+async function resetPlant(admin: Admin, tenantIds: Map<string, string>) {
+  for (const fx of PLANT) {
+    const tenantId = tenantIds.get(fx.tenant)!;
+    const siteId = await ensureFixtureSite(admin, tenantId, fx);
+
+    const lineIds = new Map<string, string>();
+    for (const name of fx.lines) {
+      let line = must(await admin.from('line').select('id').eq('site_id', siteId).eq('name', name).is('archived_at', null).maybeSingle());
+      if (!line) line = must(await admin.from('line').insert({ tenant_id: tenantId, site_id: siteId, name }).select('id').single());
+      lineIds.set(name, line!.id as string);
+    }
+    const machineIds = new Map<string, string>();
+    for (const m of fx.machines) {
+      const row = { tenant_id: tenantId, site_id: siteId, code: m.code, name: m.name, line_id: m.line ? lineIds.get(m.line)! : null, status: 'active', retired_at: null };
+      const found = must(await admin.from('machine').select('id').eq('tenant_id', tenantId).eq('code', m.code).maybeSingle());
+      if (found) must(await admin.from('machine').update(row).eq('id', found.id).select('id'));
+      machineIds.set(m.code, found ? (found.id as string) : (must(await admin.from('machine').insert(row).select('id').single())!.id as string));
+    }
+    const productIds = new Map<string, string>();
+    for (const p of fx.products) {
+      const row = { tenant_id: tenantId, code: p.code, description: p.description, uom: 'pcs', retired_at: null };
+      const found = must(await admin.from('product').select('id').eq('tenant_id', tenantId).eq('code', p.code).maybeSingle());
+      if (found) must(await admin.from('product').update(row).eq('id', found.id).select('id'));
+      productIds.set(p.code, found ? (found.id as string) : (must(await admin.from('product').insert(row).select('id').single())!.id as string));
+    }
+    // Targets: only inserted for a pair that has no history at all (history is append-only and never touched).
+    const { data: anyUa } = await admin.from('membership').select('user_id').eq('tenant_id', tenantId).eq('role', 'unit_admin').limit(1);
+    const recordedBy = anyUa?.[0]?.user_id as string | undefined;
+    for (const t of fx.targets) {
+      const machineId = machineIds.get(t.machine)!;
+      const productId = productIds.get(t.product)!;
+      const existing = must(await admin.from('target_version').select('id').eq('machine_id', machineId).eq('product_id', productId).limit(1));
+      if (existing && existing.length > 0) continue;
+      must(await admin.from('target_version').insert({
+        tenant_id: tenantId, machine_id: machineId, product_id: productId, effective_from: FIXTURE_TARGET_FROM,
+        pieces_per_shift: t.pieces, recorded_by: recordedBy ?? '00000000-0000-0000-0000-000000000000',
+      }).select('id'));
+    }
+
+    // Throwaway rows from e2e runs: delete when nothing references them, otherwise retire / archive.
+    const stale = must(await admin.from('machine').select('id, code, retired_at').eq('tenant_id', tenantId).like('code', 'E2E-%'));
+    for (const m of stale ?? []) {
+      if (!isThrowawayPlantName(m.code as string)) continue;
+      const used = must(await admin.from('target_version').select('id').eq('machine_id', m.id).limit(1));
+      if (used && used.length > 0) {
+        if (!m.retired_at) must(await admin.from('machine').update({ retired_at: new Date().toISOString() }).eq('id', m.id).select('id'));
+      } else must(await admin.from('machine').delete().eq('id', m.id).select('id'));
+    }
+    const staleP = must(await admin.from('product').select('id, code, retired_at').eq('tenant_id', tenantId).like('code', 'E2E-%'));
+    for (const p of staleP ?? []) {
+      if (!isThrowawayPlantName(p.code as string)) continue;
+      const used = must(await admin.from('target_version').select('id').eq('product_id', p.id).limit(1));
+      if (used && used.length > 0) {
+        if (!p.retired_at) must(await admin.from('product').update({ retired_at: new Date().toISOString() }).eq('id', p.id).select('id'));
+      } else must(await admin.from('product').delete().eq('id', p.id).select('id'));
+    }
+    const staleL = must(await admin.from('line').select('id, name, archived_at').eq('tenant_id', tenantId).like('name', 'E2E-%'));
+    for (const l of staleL ?? []) {
+      if (!isThrowawayPlantName(l.name as string)) continue;
+      const used = must(await admin.from('machine').select('id').eq('line_id', l.id).limit(1));
+      if (used && used.length > 0) {
+        if (!l.archived_at) must(await admin.from('line').update({ archived_at: new Date().toISOString() }).eq('id', l.id).select('id'));
+      } else must(await admin.from('line').delete().eq('id', l.id).select('id'));
+    }
+  }
 }
 
 async function main() {
@@ -149,6 +280,7 @@ async function main() {
       if (insErr) throw insErr;
     }
   }
+  await resetPlant(admin, tenantIds);
   console.log(`fixtures reset: ${TENANTS.length} tenants, ${USERS.length} users, ${doomed.size} stale users removed`);
 }
 

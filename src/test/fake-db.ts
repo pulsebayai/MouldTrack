@@ -25,7 +25,7 @@ export function fakeDb(handler: (q: Query) => Result | Promise<Result>) {
       } else q.filters.push([name, ...args]);
       return self;
     };
-    for (const n of ['select', 'eq', 'or', 'ilike', 'order', 'range', 'maybeSingle']) self[n] = chain(n);
+    for (const n of ['select', 'eq', 'or', 'ilike', 'is', 'in', 'order', 'range', 'maybeSingle']) self[n] = chain(n);
     self.then = (res: (v: Result) => unknown, rej: (e: unknown) => unknown) => {
       queries.push(q);
       return Promise.resolve(handler(q)).then(res, rej);
