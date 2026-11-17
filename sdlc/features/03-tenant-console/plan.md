@@ -93,4 +93,5 @@ AC-1–16 → tests (spec table); full suite green after rebase on 04; dev regre
 - Done: rebased on origin/main (d970a54, 04 merged) and executed step 8: N-7 (server `app._pa_timezone_ok`, client chips from 04's list), N-10 (one `useLoad`), merge-risk 1 (`_pm_authorise` SA branch, 022 `pm_*` assertions and 04-table coverage), `/plant` in the SA-blocked e2e, spec fixture phone. Details in the Step 8 deviation note.
 - Conflicts: only `scripts/fixtures-reset.ts` (resolved keeping both). Local: Jest 533 tests green (41 suites), lint and typecheck clean; local pgTAP (PG16 harness, my own copy of run.sh pointed at mt-03) 14 files, 751 tests green with and without seed.
 - Flag for Opus: 04's `pm_save_site` accepts `posix/…` and `right/…` zones (03's tenant rule now rejects them); aligning 04 would need a change to 04's function (not done).
-- Next: step 9 (hosted proof) after CI on this branch is green.
+- Proof: PR #9 CI run 44019419505 on e13cb9f: changes, static, db, e2e-web, summary, ci-ok all green (about 5 min).
+- Next: step 9 (hosted proof).
