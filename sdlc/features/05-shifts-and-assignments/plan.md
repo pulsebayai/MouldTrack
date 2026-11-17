@@ -26,7 +26,7 @@ Branches from main (01–04). **03 merges first**; 05 rebases on it in step 8 (0
 - Step 9 only: temporary dev-only triggers (removed before ready)
 
 ## Steps
-- [ ] 1. **Shifts (tests first).** 030: RLS (members read, no client writes), name uniqueness, 15-minute rule, end ≠ start, overnight windows, `shift_window`/`current_occurrences` at boundaries (start minute in, end minute out, 23:59, midnight, overnight started yesterday), time lock after an assignment, retire/reinstate, audit, denials (SUP, must-change, suspended), isolation. Then migration part 1 + `pm_save_shift`, `pm_set_shift_retired`. — proof: CI `db`
+- [x] 1. **Shifts (tests first).** 030: RLS (members read, no client writes), name uniqueness, 15-minute rule, end ≠ start, overnight windows, `shift_window`/`current_occurrences` at boundaries (start minute in, end minute out, 23:59, midnight, overnight started yesterday), time lock after an assignment, retire/reinstate, audit, denials (SUP, must-change, suspended), isolation. Then migration part 1 + `pm_save_shift`, `pm_set_shift_retired`. — proof: CI `db`
 - [ ] 2. **Assignments (tests first).** 031: `pm_assign` (multi-machine, replaces owner from date, until → null version at until+1, `later_change` guard, no backdating), `pm_unassign`, `pm_cover` (running occurrence allowed, ended occurrence refused, re-cover latest wins, cover to unassigned), supervisor validity (UA/inactive/must-change/foreign refused), `machine_owner` cases (spec AC-5 list), append-only on both tables incl. service_role, audit rows, idempotency, isolation. — proof: CI `db`
 - [ ] 3. **Target overrides (tests first).** 032: set/end/cancel-later, ≥ plant date, `effective_target` fallback chain, tenant rule (service-role only skip), audit. — proof: CI `db`
 - [ ] 4. **Reads (tests first).** 033: `shift_board` (UA only, sources, unassigned grouping data, inactive supervisor flag, denial audited for SUP), `my_shift` (current vs next within 36 h, cover in/out, other SUP sees only their own, SUP has no select on version tables). — proof: CI `db`
@@ -48,7 +48,9 @@ Branches from main (01–04). **03 merges first**; 05 rebases on it in step 8 (0
 AC-1–13 → tests (spec table); full suite green after rebase on 03; dev regression green incl. Android `my-shift.yaml`.
 
 ## Deviations from plan
-(filled in during build)
+- **RPC prefix `sh_*`, not `pm_*`** (D2/FR-1): 04's pgTAP test 011 asserts exactly nine `public.pm_*` functions and may not be edited, so 05's RPCs are `sh_save_shift`, `sh_set_shift_retired`, `sh_assign`, `sh_unassign`, `sh_cover`, `sh_set_target_override`, `sh_end_target_override` (audit `source` = `rpc:sh_*`). Helpers `app._sh_*`; 04's `app._pm_authorise/_pm_fail/_pm_audit/_pm_deny/_pm_len` are reused unchanged.
+- Step 1 creates all four tables, RLS, append-only triggers and the nine registry actions (the time-lock test needs `assignment_version`/`assignment_cover`); steps 2-4 only add functions.
+- `app.current_occurrences(p_at)` returns `(tenant_id, shift_id, shift_date, span)`; caller's tenant, or every tenant for the service role. Retired shifts are never current. No FK on `supervisor_id` (history outlives membership); trigger `app.sh_supervisor_same_tenant` checks the tenant.
 
 ## Session log
 ### 2026-11-17
