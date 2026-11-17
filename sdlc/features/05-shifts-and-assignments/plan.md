@@ -45,7 +45,7 @@ Branches from main (01–04). **03 merges first**; 05 rebases on it in step 8 (0
   - **R7 Retiring a running shift (nit 18).** `sh_set_shift_retired(true)` is refused while an occurrence of that shift is running (guard `occurrence_running`, message names the end time).
   - **R8 Nits.** 7 (tenant filter in the board's membership join); 9 (rewrite `my_shift` candidate search as one set-based query; add a pgTAP sanity case with ~300 machines that it completes — no timing assertion); 10 (log `sh_cover` uses `now()`); 11 (document why overrides don't freeze shift times: overrides don't depend on the window); 13 (My shift card refetches on focus and every 60 s, `accessibilityLiveRegion` on loading, "none" text: "No machines assigned in the next 36 hours"); 14 (Maestro `extendedWaitUntil` 15 s); 16 (list the extra files in "Files that change"); 17 (architecture flags in the session log: `sh_*` prefix; read-RPC authorisation pattern `_sh_read_authorise` + SA branch; timezone lock extended; Core entities ShiftAssignment = assignment_version + assignment_cover; my_shift rule).
   - Proof: CI green on PR #13.
-- [ ] 9. **Hosted proof (dev)** after step 8: temporary dev-only triggers; deploy-dev + regression (web incl. api, Android incl. `my-shift.yaml`, hosted-checks, drift); remove triggers; green PR CI. — proof: run URLs
+- [x] 9. **Hosted proof (dev)** after step 8: temporary dev-only triggers; deploy-dev + regression (web incl. api, Android incl. `my-shift.yaml`, hosted-checks, drift); remove triggers; green PR CI. — proof: run URLs
 - [ ] 10. **Review + PR.** sdlc-reviewer, fixes, AC table, session log with architecture flags. — proof: PR CI green
 
 ## Risks
@@ -117,3 +117,13 @@ AC-1–13 → tests (spec table); full suite green after rebase on 03; dev regre
 ### 2026-11-17 (Opus review of 8a)
 - Accepted 8a. Known debt (flag for architecture.md): 3 pgTAP cases in 031/032 are skipped with an explicit `pass('… skipped …')` inside narrow plant-time windows (first 15 min of the day; after 20:00) because write RPCs use `now()`; daytime PR CI and the 02:30 IST nightly cover the complementary windows. A test-only clock override in production functions was rejected (footgun). Revisit if 06 needs many time-dependent write tests.
 - Next: step 9 hosted proof.
+
+### 2026-11-17 (Sonnet, step 9)
+- Done: step 9, hosted proof on dev. Trigger commits: added `a29f94b` (same diff as 03's `e77c628`, applied cleanly: `pull_request` on deploy-dev.yml and regression.yml, dev target only, deploy wait in `setup`), removed `e7a2ed5` (a plain revert; workflow files equal main's again).
+- Proof at `a29f94b` (wall clock about 32 min for the regression):
+  - deploy-dev https://github.com/pulsebayai/MouldTrack/actions/runs/44056572735: deploy success (05 migration applied to dev), 2.5 min.
+  - regression (dev) https://github.com/pulsebayai/MouldTrack/actions/runs/44056572790: setup, drift, web (Playwright 118 passed incl. api), hosted-checks (8/8 PASS), android (Maestro incl. the first run of `my-shift.yaml`: `[Passed] my-shift (38s)`, plus relaunch, sign-in, sign-out, first-sign-in, bad-password), evidence all success; notify skipped.
+  - PR CI at `a29f94b`: run 44056572742 success.
+- PR CI at the last code commit `e7a2ed5`: run 44061692347, all jobs success (changes, static, db, e2e-web, summary, ci-ok), about 6.5 min. Docs-only commits after it skip the suites.
+- Deviations: none. No staging/prod/main touched; no retries were needed.
+- Next step: step 10 (not started).
