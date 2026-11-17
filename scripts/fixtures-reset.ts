@@ -161,6 +161,25 @@ export const ISSUES: IssueFixture[] = [
 export const isThrowawayPlantName = (name: string): boolean => /^E2E-[A-Za-z0-9]{3,16}$/.test(name);
 const FIXTURE_TARGET_FROM = '2026-01-01';
 
+// 06-shift-readings (D11): counter settings, cavities and two past occurrences (Morning shift, fixed date) with the summary numbers pinned by
+// pgTAP 052. Inserted only when missing (readings and summaries are append-only). Must match supabase/seed.sql.
+export const READINGS_DATE = '2026-11-10';
+export const READINGS = {
+  tenant: 'e2e org U',
+  shiftId: '54000000-0000-4000-a000-0000000000e1',
+  machines: [
+    { code: 'FX-MU1', unit: 'shots' as const, max: null as number | null, cavities: { product: 'FX-PU1', count: 4 } },
+    { code: 'FX-MU2', unit: 'pieces' as const, max: 999999, cavities: null as { product: string; count: number } | null },
+  ],
+  occurrences: [
+    { machine: 'FX-MU1', product: 'FX-PU1', openingId: '56000000-0000-4000-a000-0000000000e1', closingId: '56000000-0000-4000-a000-0000000000e2', summaryId: '57000000-0000-4000-a000-0000000000e1',
+      opening: 1000, closing: 1250, good: 950, reject: 30, target: 1200, cavities: 4, unit: 'shots' as const, max: null as number | null, movementUnits: 250, movementPieces: 1000, unaccounted: 20, attainment: 79.17, rollover: false },
+    { machine: 'FX-MU2', product: 'FX-PU2', openingId: '56000000-0000-4000-a000-0000000000e3', closingId: '56000000-0000-4000-a000-0000000000e4', summaryId: '57000000-0000-4000-a000-0000000000e2',
+      opening: 999900, closing: 100, good: 150, reject: 10, target: 800, cavities: 1, unit: 'pieces' as const, max: 999999 as number | null, movementUnits: 200, movementPieces: 200, unaccounted: 40, attainment: 18.75, rollover: true },
+  ],
+};
+
+
 const AUTH_DOMAIN = 'phone.mouldtrack.invalid';
 const fx = (key: string, phone: string, name: string, employeeId: string, tenant: string | null, role?: Fixture['role'], mustChange = false): Fixture => ({
   key, phone, email: `${phone.slice(3)}@${AUTH_DOMAIN}`, name, employeeId, tenant, role, mustChange,
@@ -427,6 +446,55 @@ async function resetIssues(admin: Admin, tenantIds: Map<string, string>) {
   }
 }
 
+/** Reading fixtures (06, D11). Counter settings are restored; cavities, readings and summaries are append-only, so they are inserted only when missing. */
+async function resetReadings(admin: Admin, tenantIds: Map<string, string>) {
+  const tenantId = tenantIds.get(READINGS.tenant);
+  if (!tenantId) return;
+  const ua = must(await admin.from('membership').select('user_id').eq('tenant_id', tenantId).eq('role', 'unit_admin').limit(1));
+  const sup = must(await admin.from('membership').select('user_id').eq('tenant_id', tenantId).eq('role', 'supervisor').eq('employee_id', 'FX-U3').maybeSingle());
+  if (!ua?.length || !sup) return;
+  const uaId = ua[0].user_id as string;
+  const machineId = async (code: string) => (must(await admin.from('machine').select('id').eq('tenant_id', tenantId).eq('code', code).maybeSingle()))?.id as string | undefined;
+  const productId = async (code: string) => (must(await admin.from('product').select('id').eq('tenant_id', tenantId).eq('code', code).maybeSingle()))?.id as string | undefined;
+
+  for (const m of READINGS.machines) {
+    const id = await machineId(m.code);
+    if (!id) continue;
+    const used = must(await admin.from('production_reading').select('id').eq('machine_id', id).limit(1));
+    // The unit is locked once readings exist (they always do for these two), so it is only written before the first reading.
+    must(await admin.from('machine').update(used && used.length > 0 ? { counter_max: m.max } : { counter_unit: m.unit, counter_max: m.max }).eq('id', id).select('id'));
+    if (m.cavities) {
+      const pid = await productId(m.cavities.product);
+      const have = pid ? must(await admin.from('cavity_version').select('id').eq('machine_id', id).eq('product_id', pid).limit(1)) : [];
+      if (pid && have && have.length === 0) {
+        must(await admin.from('cavity_version').insert({ tenant_id: tenantId, machine_id: id, product_id: pid, effective_from: FIXTURE_TARGET_FROM, cavities: m.cavities.count, recorded_by: uaId }).select('id'));
+      }
+    }
+  }
+  for (const o of READINGS.occurrences) {
+    const mid = await machineId(o.machine);
+    const pid = await productId(o.product);
+    if (!mid || !pid) continue;
+    const key = { tenant_id: tenantId, machine_id: mid, shift_id: READINGS.shiftId, shift_date: READINGS_DATE };
+    const recorded = (hhmm: string) => `${READINGS_DATE}T${hhmm}:00+05:30`;
+    const has = async (table: string, id: string) => (must(await admin.from(table).select('id').eq('id', id).maybeSingle())) != null;
+    if (!(await has('production_reading', o.openingId))) {
+      must(await admin.from('production_reading').insert({ id: o.openingId, ...key, kind: 'opening', product_id: pid, counter_value: o.opening, late: false, recorded_by: sup.user_id, recorded_at: recorded('06:05') }).select('id'));
+    }
+    if (!(await has('production_reading', o.closingId))) {
+      must(await admin.from('production_reading').insert({ id: o.closingId, ...key, kind: 'closing', counter_value: o.closing, good: o.good, reject: o.reject, late: false, recorded_by: sup.user_id, recorded_at: recorded('14:05') }).select('id'));
+    }
+    if (!(await has('production_summary', o.summaryId))) {
+      must(await admin.from('production_summary').insert({
+        id: o.summaryId, ...key, calc_version: 1, product_id: pid, counter_unit: o.unit, cavities: o.cavities, counter_max: o.max,
+        opening_reading_id: o.openingId, closing_reading_id: o.closingId, opening_counter: o.opening, closing_counter: o.closing, good: o.good, reject: o.reject,
+        target: o.target, movement_units: o.movementUnits, movement_pieces: o.movementPieces, unaccounted: o.unaccounted, attainment_pct: o.attainment,
+        rollover: o.rollover, needs_review: false, over_reported: false, late_opening: false, late_closing: false, entered_by_ua: false, recorded_by: sup.user_id, recorded_at: recorded('14:05'),
+      }).select('id'));
+    }
+  }
+}
+
 async function main() {
   assertSafeTarget(process.env, [...USERS, ...SUPER_ADMINS]);
   const password = process.env.E2E_FIXTURE_PASSWORD;
@@ -530,6 +598,7 @@ async function main() {
   await resetPlant(admin, tenantIds);
   await resetShifts(admin, tenantIds);
   await resetIssues(admin, tenantIds);
+  await resetReadings(admin, tenantIds);
   // Super Admins: reuse the Auth user, reset password + unban, and put the platform_admin row in its canonical state.
   for (const f of SUPER_ADMINS) {
     let id = existing.get(f.email);

@@ -4,6 +4,7 @@ import {
   assertSafeTarget, coverCorrections, ensureFixtureSite, FIXTURE_PLAN_FROM, isCanonicalPhone, isFixtureAuthEmail, isThrowawayAuthEmail, isThrowawayPlantName, PLANT,
   planCorrections, SHIFTS, TENANTS, USERS,
 } from '../fixtures-reset';
+import { READINGS, READINGS_DATE, PLANT as PLANT06 } from '../fixtures-reset';
 
 const dev = { APP_ENV: 'development', DEV_SUPABASE_PROJECT_REF: 'abcdefghijklmnopqrst', SUPABASE_URL: 'https://abcdefghijklmnopqrst.supabase.co' };
 
@@ -254,5 +255,38 @@ describe('fixtures-reset 05 append-only corrections', () => {
   it('leaves occurrences whose latest cover already names the fixture supervisor', () => {
     const rows = [cover('a', '2026-11-18', OTHER, '2026-11-17T01:00:00+00:00'), cover('b', '2026-11-18', SUP, '2026-11-17T02:00:00+00:00')];
     expect(coverCorrections(rows, SUP, '2026-11-17')).toEqual([]);
+  });
+});
+
+describe('reading fixtures (06, D11)', () => {
+  const seed = readFileSync(join(__dirname, '../../supabase/seed.sql'), 'utf8');
+  it('the seed file defines every fixture reading, summary and counter setting with the same ids and numbers', () => {
+    expect(seed).toContain(`date '${READINGS_DATE}'`);
+    for (const o of READINGS.occurrences) {
+      for (const id of [o.openingId, o.closingId, o.summaryId]) expect(seed).toContain(`'${id}'`);
+      expect(seed).toContain(`, ${o.opening}, `);
+      expect(seed).toContain(`, ${o.attainment}, ${o.rollover}`);
+    }
+    for (const m of READINGS.machines) {
+      expect(seed).toContain(`counter_unit = '${m.unit}'`);
+      if (m.max != null) expect(seed).toContain(`counter_max = ${m.max}`);
+    }
+  });
+  it('every fixture occurrence names a machine, product and target that exist in the plant fixtures', () => {
+    const plant = PLANT06.find((p) => p.tenant === READINGS.tenant)!;
+    for (const o of READINGS.occurrences) {
+      expect(plant.machines.map((m) => m.code)).toContain(o.machine);
+      expect(plant.products.map((p) => p.code)).toContain(o.product);
+      expect(plant.targets.find((t) => t.machine === o.machine && t.product === o.product)?.pieces).toBe(o.target);
+    }
+  });
+  it('the movement arithmetic matches the calculation rule (shots x cavities; rollover through the maximum)', () => {
+    for (const o of READINGS.occurrences) {
+      const units = o.rollover ? o.max! + 1 - o.opening + o.closing : o.closing - o.opening;
+      expect(units).toBe(o.movementUnits);
+      expect(units * o.cavities).toBe(o.movementPieces);
+      expect(o.movementPieces - o.good - o.reject).toBe(o.unaccounted);
+      expect(Math.round((o.good / o.target) * 10000) / 100).toBe(o.attainment);
+    }
   });
 });

@@ -182,7 +182,7 @@ select is(pg_temp.s('roll', 'movement_units') || '/' || pg_temp.s('roll', 'unacc
 select throws_ok($$ update public.production_summary set good = 0 $$, 'P0001', null, 'a summary cannot be changed');
 select throws_ok($$ delete from public.production_summary $$, 'P0001', null, 'or removed');
 select is((select count(distinct calc_version)::int from public.production_summary), 1, 'every summary so far has calc_version 1 (a later rule change adds 2, never rewrites)');
-select is((select count(*)::int from public.production_summary where tenant_id <> pg_temp.id('tx')), 0, 'summaries carry the tenant of their readings');
+select is((select count(*)::int from public.production_summary s where s.tenant_id <> pg_temp.id('tx') and exists (select 1 from ids i where i.v = s.machine_id)), 0, 'summaries carry the tenant of their readings (scoped to this test''s machines: the seed adds fixture summaries of its own)');
 
 select * from finish();
 rollback;
