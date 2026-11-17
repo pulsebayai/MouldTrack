@@ -1,11 +1,11 @@
 # Roadmap: MouldTrack
-Updated: 2026-11-16 · Architecture lock: 03-tenant-console · Schema lock: 03-tenant-console (tenant changes, platform_admin, phone_claim; 04's share released 2026-11-17)
+Updated: 2026-11-17 · Architecture lock: none · Schema lock: 05-shifts-and-assignments
 
 | # | Feature slug | One-line intent | Product metric | Depends on | Touches (entities / screens / shared code) | Arch change? | Batch | Release | Status |
 |---|---|---|---|---|---|---|---|---|---|
 | 01 | walking-skeleton | Expo app (Android + web) with sign-in, a tenant-scoped home screen, base tenant/membership schema + RLS, CI + regression workflow + evidence, deployed to dev | — | — | tenants, memberships, auth, app shell, CI | yes | — | R1 | shipped |
 | 02 | tenancy-and-roles | Roles + RBAC; Unit Admin creates (phone + password, temp password), edits, deactivates and resets users; audit-event base; denied cross-tenant access is auditable (FR-02, AC-22) | enabler | 01 | users, memberships, audit_event, user-admin screens | yes | — | R1 | shipped |
-| 03 | tenant-console | Super Admin web console: register/activate/suspend tenants, create the first Unit Admin, plan status, platform audit; no routine access to tenant operational data (FR-01) | enabler (pilot + tenants 2–3) | 02 | tenants, platform admin screens, audit_event, account fn, session routing | yes | A | R1 | in-progress |
+| 03 | tenant-console | Super Admin web console: register/activate/suspend tenants, create the first Unit Admin, plan status, platform audit; no routine access to tenant operational data (FR-01) | enabler (pilot + tenants 2–3) | 02 | tenants, platform admin screens, audit_event, account fn, session routing | yes | A | R1 | shipped |
 | 04 | plant-masters | Unit Admin manages sites/lines, machines, products and benchmark targets with effective dates (FR-03). **Decides target basis + product changeover** | Target visibility | 02 | site, line, machine, product, target_version, plant screens | no | A | R1 | shipped |
 | 05 | shifts-and-assignments | Shift master and schedules (incl. overnight), supervisor × machine assignments; supervisor sees only assigned work (FR-03, FR-04). **Decides supervisor:machine cardinality** | Reading capture | 04 | shift, shift_assignment, target override, supervisor home | no | — | R1 | in-progress |
 | 06 | shift-readings | Opening/closing counters, display photo to Storage, counter validation + rollover exception, good/reject entry, production summary calc, minimal Admin "today" list of target vs actual (FR-05, FR-10, AC-23). **Decides counter semantics** | Reading capture | 05 | production_reading, production_summary, attachment, storage, supervisor screens | no | — | R1 | planned |
@@ -27,4 +27,6 @@ Every release passes the Release & regression policy (architecture.md). Records 
 - Locks: architecture → 03. Schema lock split by tables (exception to "one holder"; reason: disjoint tables, ordered migration timestamps; risk: shared seed/fixtures conflicts at rebase).
 - 04-plant-masters shipped 2026-11-17 (PR #8). Evidence: PR CI 44014128350 (last code commit) + head run after branch update, dev regression 44011049099 (drift, web incl. api, hosted-checks, Android all green). Architecture flags from 04's session log are applied by 03 (architecture lock holder) in its docs step. The delayed nightly of 2026-11-17 failed `drift` only because dev held 04's unmerged migration (owner-accepted); clears with the next nightly.
 - Next: 03 rebases on 04 (its step 8). **05 started 2026-11-17** (depends only on 04; built alongside 03's final steps; schema: 05's own tables, disjoint from 03's — split, logged).
-(Next candidates: 06 ∥ 07 after 05.)
+- 03-tenant-console shipped 2026-11-17 (PR #9). Evidence: PR CI 44031908641 (last code commit) + head run after branch update, dev regression 44030408923 (web 107 incl. api, hosted-checks 8/8, drift, Android). Architecture updated under its lock (incl. 04's rules). **Batch A complete.**
+- Next: 05 rebases on 03 (its step 8), hosted proof, review. Then the Parallel planning checkpoint for 06 ∥ 07 (07 depends only on 04 and may start earlier).
+(Next candidates: 06 ∥ 07.)
