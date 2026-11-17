@@ -824,6 +824,423 @@ begin
 end
 $$;
 
+-- 11. Reads (D8, D9) ------------------------------------------------------------------------------------------------------------------
+-- Read RPCs return jsonb like the write RPCs: {ok:true, ...} or the generic denial {ok:false, code:'not_allowed'} (audited as access.denied).
+-- R1 of 07's review: clients cannot choose the clock. The bodies are app.*_at(p_at) helpers (pgTAP calls them with explicit moments; only the owner
+-- can execute them) and the public RPCs are thin wrappers that always pass now() and route callers without a membership (a Super Admin, a stranger)
+-- through app._pm_authorise so the audited denial lives in one place (022).
+
+-- The UTC range [start, end) of the occurrence of a shift on a shift date, in the site's time zone. The same formula as app.shift_window (05) but
+-- without its caller/tenant check, for set-based queries over many occurrences; pgTAP 053 pins the two to the same answers.
+create function app._rd_window(p_start time, p_end time, p_date date, p_tz text)
+returns tstzrange
+language sql
+stable
+set search_path = ''
+as $$
+  select tstzrange((p_date + p_start) at time zone p_tz, ((p_date + case when p_end < p_start then 1 else 0 end) + p_end) at time zone p_tz, '[)')
+$$;
+
+-- AC-11: the caller's own machines in every occurrence where a reading can still be recorded: from 30 minutes before the start until 12 hours after
+-- the end (running occurrences, the one that just ended whose closing is due, the next one about to open). The owner is resolved inline by the same
+-- rule as app.machine_owner_src (latest cover of the occurrence, else the plan version in force); pgTAP 053 pins them together. Per machine:
+-- state (opening_due | opening_done | closing_due | closed | opening_missed), the current opening/closing/summary, the default product (the product of the
+-- latest opening still active) and what the caller may do now (can_open / can_close / can_correct) so the client only renders it.
+create function app.reading_state_at(p_at timestamptz)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:reading_state';
+  a jsonb;
+  v_tenant uuid;
+  v_uid uuid;
+  v_plant date;
+  v_occ jsonb;
+begin
+  if not exists (select 1 from public.membership m where m.user_id = auth.uid()) then
+    return app._pm_authorise(null, c_src);
+  end if;
+  a := app._sh_read_authorise(c_src, false);
+  if not (a->>'ok')::boolean then return a; end if;
+  v_tenant := (a->>'tenant_id')::uuid;
+  v_uid := (a->>'actor')::uuid;
+  if not exists (select 1 from public.shift s where s.tenant_id = v_tenant and s.retired_at is null) then
+    return jsonb_build_object('ok', true, 'state', 'no_shifts', 'occurrences', '[]'::jsonb);
+  end if;
+
+  v_plant := app.plant_date_at(v_tenant, p_at);
+  with cand as (
+    select s.id as shift_id, s.name, s.start_time, s.end_time, z.timezone as tz, d.d as shift_date, app._rd_window(s.start_time, s.end_time, d.d, z.timezone) as w
+      from public.shift s
+      join public.site z on z.id = s.site_id
+      cross join lateral unnest(array[v_plant - 2, v_plant - 1, v_plant, v_plant + 1]) as d(d)
+     where s.tenant_id = v_tenant and s.retired_at is null
+  ), win as (
+    select c.* from cand c where p_at >= lower(c.w) - interval '30 minutes' and p_at <= upper(c.w) + interval '12 hours'
+  ), mine as (
+    select w.*, (w.w @> p_at) as running, m.id as machine_id, m.code, m.name as machine_name, m.counter_unit, m.counter_max, l.name as line
+      from win w
+      join public.machine m on m.tenant_id = v_tenant and m.retired_at is null
+      left join public.line l on l.id = m.line_id
+      left join lateral (select true as found, c.supervisor_id from public.assignment_cover c
+                          where c.shift_id = w.shift_id and c.shift_date = w.shift_date and c.machine_id = m.id
+                          order by c.recorded_at desc, c.id desc limit 1) cv on true
+      left join lateral (select v.supervisor_id from public.assignment_version v
+                          where v.shift_id = w.shift_id and v.machine_id = m.id and v.effective_from <= w.shift_date
+                          order by v.effective_from desc, v.recorded_at desc, v.id desc limit 1) pv on true
+     where (case when cv.found then cv.supervisor_id else pv.supervisor_id end) = v_uid
+  ), rd as (
+    select mi.*, o.id as o_id, o.counter_value as o_counter, o.product_id as o_product, op.code as o_product_code, o.recorded_at as o_at, o.late as o_late,
+           o.entered_by_ua as o_ua, o.remarks as o_remarks,
+           c.id as c_id, c.counter_value as c_counter, c.good as c_good, c.reject as c_reject, c.recorded_at as c_at, c.late as c_late, c.entered_by_ua as c_ua, c.remarks as c_remarks,
+           sm.id as s_id, sm.target as s_target, sm.movement_pieces as s_pieces, sm.good as s_good, sm.reject as s_reject, sm.unaccounted as s_unacc, sm.attainment_pct as s_att,
+           sm.rollover as s_roll, sm.needs_review as s_review, sm.over_reported as s_over,
+           dp.product_id as default_product,
+           lower(app._rd_window(mi.start_time, mi.end_time, mi.shift_date + 1, mi.tz)) as next_start
+      from mine mi
+      left join lateral (select r.* from public.production_reading r
+                          where r.machine_id = mi.machine_id and r.shift_id = mi.shift_id and r.shift_date = mi.shift_date and r.kind = 'opening'
+                            and not exists (select 1 from public.production_reading n where n.supersedes_id = r.id) limit 1) o on true
+      left join public.product op on op.id = o.product_id
+      left join lateral (select r.* from public.production_reading r
+                          where r.machine_id = mi.machine_id and r.shift_id = mi.shift_id and r.shift_date = mi.shift_date and r.kind = 'closing'
+                            and not exists (select 1 from public.production_reading n where n.supersedes_id = r.id) limit 1) c on true
+      left join lateral (select x.* from public.production_summary x
+                          where x.machine_id = mi.machine_id and x.shift_id = mi.shift_id and x.shift_date = mi.shift_date
+                          order by x.recorded_at desc, x.id desc limit 1) sm on true
+      left join lateral (select r.product_id from public.production_reading r join public.product p on p.id = r.product_id and p.retired_at is null
+                          where r.machine_id = mi.machine_id and r.kind = 'opening' order by r.recorded_at desc, r.id desc limit 1) dp on true
+  ), mach as (
+    select x.shift_id, x.name, x.start_time, x.end_time, x.shift_date, x.w, x.running,
+           jsonb_build_object(
+             'machine_id', x.machine_id, 'code', x.code, 'name', x.machine_name, 'line', x.line, 'counter_unit', x.counter_unit, 'counter_max', x.counter_max,
+             'state', case when x.c_id is not null then 'closed'
+                           when x.o_id is not null then case when p_at >= upper(x.w) then 'closing_due' else 'opening_done' end
+                           when p_at >= upper(x.w) then 'opening_missed'
+                           else 'opening_due' end,
+             'can_open', (x.o_id is null and p_at >= lower(x.w) - interval '30 minutes' and p_at < upper(x.w)),
+             'can_close', (x.o_id is not null and x.c_id is null and p_at <= upper(x.w) + interval '12 hours'),
+             'can_correct', ((x.o_id is not null or x.c_id is not null) and p_at < x.next_start),
+             'default_product_id', x.default_product,
+             'opening', case when x.o_id is null then null else jsonb_build_object('id', x.o_id, 'counter', x.o_counter, 'product_id', x.o_product, 'product_code', x.o_product_code,
+                          'recorded_at', x.o_at, 'late', x.o_late, 'entered_by_ua', x.o_ua, 'remarks', x.o_remarks) end,
+             'closing', case when x.c_id is null then null else jsonb_build_object('id', x.c_id, 'counter', x.c_counter, 'good', x.c_good, 'reject', x.c_reject,
+                          'recorded_at', x.c_at, 'late', x.c_late, 'entered_by_ua', x.c_ua, 'remarks', x.c_remarks) end,
+             'summary', case when x.s_id is null then null else jsonb_build_object('id', x.s_id, 'target', x.s_target, 'movement_pieces', x.s_pieces, 'good', x.s_good,
+                          'reject', x.s_reject, 'unaccounted', x.s_unacc, 'attainment_pct', x.s_att, 'rollover', x.s_roll, 'needs_review', x.s_review, 'over_reported', x.s_over) end
+           ) as j, x.code
+      from rd x
+  ), occ as (
+    select m.shift_id, m.name, m.start_time, m.end_time, m.shift_date, m.w, m.running, jsonb_agg(m.j order by m.code) as machines
+      from mach m group by m.shift_id, m.name, m.start_time, m.end_time, m.shift_date, m.w, m.running
+  )
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'shift', jsonb_build_object('id', o.shift_id, 'name', o.name, 'start_time', to_char(o.start_time, 'HH24:MI'), 'end_time', to_char(o.end_time, 'HH24:MI')),
+           'shift_date', o.shift_date, 'starts_at', lower(o.w), 'ends_at', upper(o.w), 'running', o.running, 'machines', o.machines)
+           order by lower(o.w), o.name), '[]'::jsonb)
+    into v_occ
+    from occ o;
+  return jsonb_build_object('ok', true, 'state', case when jsonb_array_length(v_occ) = 0 then 'none' else 'active' end, 'occurrences', v_occ);
+end
+$$;
+
+-- AC-15: one machine-occurrence with its full reading history (every reading, corrections included), the current opening/closing, the latest
+-- summary and what the caller may do. A supervisor sees only occurrences they own (also past ones), a Unit Admin every one of the tenant.
+create function app.reading_detail_at(p_machine uuid, p_shift uuid, p_date date, p_at timestamptz)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:reading_detail';
+  a jsonb;
+  v_tenant uuid;
+  v_own text;
+  v_owner uuid;
+  v_w tstzrange;
+  m public.machine;
+  s public.shift;
+  o public.production_reading;
+  c public.production_reading;
+  sm public.production_summary;
+  v_hist jsonb;
+  v_n int;
+  v_next timestamptz;
+begin
+  if not exists (select 1 from public.membership x where x.user_id = auth.uid()) then
+    return app._pm_authorise(null, c_src);
+  end if;
+  a := app._sh_read_authorise(c_src, false);
+  if not (a->>'ok')::boolean then return a; end if;
+  v_tenant := (a->>'tenant_id')::uuid;
+  v_own := app._pm_owned('machine', p_machine, v_tenant);
+  if v_own <> 'ok' then return app._pm_deny(a, v_own, 'machine', p_machine, c_src); end if;
+  v_own := app._sh_owned('shift', p_shift, v_tenant);
+  if v_own <> 'ok' then return app._pm_deny(a, v_own, 'shift', p_shift, c_src); end if;
+  if p_date is null then perform app._pm_fail('validation', 'Choose the shift date', 'shift_date'); end if;
+  v_owner := app.machine_owner(p_machine, p_shift, p_date);
+  if a->>'role' = 'supervisor' and v_owner is distinct from (a->>'actor')::uuid then
+    return app._pm_deny(a, 'not_owner', 'machine', p_machine, c_src);
+  end if;
+
+  select * into m from public.machine x where x.id = p_machine;
+  select * into s from public.shift x where x.id = p_shift;
+  v_w := app.shift_window(p_shift, p_date);
+  select * into o from app._rd_current(p_machine, p_shift, p_date, 'opening');
+  select * into c from app._rd_current(p_machine, p_shift, p_date, 'closing');
+  select * into sm from public.production_summary x
+    where x.machine_id = p_machine and x.shift_id = p_shift and x.shift_date = p_date order by x.recorded_at desc, x.id desc limit 1;
+  select count(*)::int into v_n from public.production_summary x where x.machine_id = p_machine and x.shift_id = p_shift and x.shift_date = p_date;
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'id', r.id, 'kind', r.kind, 'counter', r.counter_value, 'product_id', r.product_id, 'product_code', p.code, 'good', r.good, 'reject', r.reject,
+           'remarks', r.remarks, 'late', r.late, 'entered_by_ua', r.entered_by_ua, 'supersedes_id', r.supersedes_id, 'correction_reason', r.correction_reason,
+           'recorded_by', r.recorded_by, 'recorded_by_name', mem.full_name, 'recorded_at', r.recorded_at,
+           'current', not exists (select 1 from public.production_reading n where n.supersedes_id = r.id)) order by r.kind desc, r.recorded_at, r.id), '[]'::jsonb)
+    into v_hist
+    from public.production_reading r
+    left join public.product p on p.id = r.product_id
+    left join public.membership mem on mem.user_id = r.recorded_by and mem.tenant_id = v_tenant
+    where r.machine_id = p_machine and r.shift_id = p_shift and r.shift_date = p_date;
+  v_next := lower(app.shift_window(p_shift, p_date + 1));
+
+  return jsonb_build_object(
+    'ok', true,
+    'machine', jsonb_build_object('id', m.id, 'code', m.code, 'name', m.name, 'counter_unit', m.counter_unit, 'counter_max', m.counter_max),
+    'shift', jsonb_build_object('id', s.id, 'name', s.name, 'start_time', to_char(s.start_time, 'HH24:MI'), 'end_time', to_char(s.end_time, 'HH24:MI')),
+    'shift_date', p_date, 'starts_at', lower(v_w), 'ends_at', upper(v_w),
+    'owner_id', v_owner, 'owner_name', (select mem.full_name from public.membership mem where mem.user_id = v_owner and mem.tenant_id = v_tenant),
+    'readings', v_hist,
+    'opening', case when o.id is null then null else v_hist -> (select (i - 1)::int from jsonb_array_elements(v_hist) with ordinality as e(x, i) where (e.x ->> 'id')::uuid = o.id) end,
+    'closing', case when c.id is null then null else v_hist -> (select (i - 1)::int from jsonb_array_elements(v_hist) with ordinality as e(x, i) where (e.x ->> 'id')::uuid = c.id) end,
+    'summary', case when sm.id is null then null else to_jsonb(sm) - 'tenant_id' - 'request_id' end,
+    'summary_count', v_n,
+    'allowed', jsonb_build_object(
+      'can_open', (o.id is null and p_at >= lower(v_w) - interval '30 minutes' and p_at < upper(v_w) and m.retired_at is null and s.retired_at is null),
+      'can_close', (o.id is not null and c.id is null and p_at <= upper(v_w) + interval '12 hours'),
+      'can_correct', ((o.id is not null or c.id is not null) and (a->>'role' = 'unit_admin' or p_at < v_next))));
+end
+$$;
+
+-- AC-12: the Unit Admin's Today board. For every active shift its latest started occurrence (current, running or just ended) and the one before it:
+-- every ASSIGNED machine (owner by cover/plan not null; unassigned machines are excluded, retired ones unless they have a reading) with owner,
+-- product, target (the summary's snapshot once closed, else the effective target of the opening's product, else of the machine's default product,
+-- target_assumed:true), opening/closing status (missing | on_time | late), movement, good, reject, unaccounted, attainment and flag keys, plus totals
+-- per occurrence. Totals: target = all machines with a target; good = closed machines; attainment = good / target over closed machines that have a
+-- target (a missing closing is shown as missing, never as a shortfall). One set-based query. Unit Admin only.
+create function app.today_board_at(p_at timestamptz)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:today_board';
+  a jsonb;
+  v_tenant uuid;
+  v_plant date;
+  v_occ jsonb;
+begin
+  if not exists (select 1 from public.membership m where m.user_id = auth.uid()) then
+    return app._pm_authorise(null, c_src);
+  end if;
+  a := app._sh_read_authorise(c_src, true);
+  if not (a->>'ok')::boolean then return a; end if;
+  v_tenant := (a->>'tenant_id')::uuid;
+  v_plant := app.plant_date_at(v_tenant, p_at);
+
+  with cand as (
+    select s.id as shift_id, s.name, s.start_time, s.end_time, z.timezone as tz, d.d as shift_date, app._rd_window(s.start_time, s.end_time, d.d, z.timezone) as w
+      from public.shift s
+      join public.site z on z.id = s.site_id
+      cross join lateral unnest(array[v_plant - 2, v_plant - 1, v_plant, v_plant + 1]) as d(d)
+     where s.tenant_id = v_tenant and s.retired_at is null
+  ), started as (
+    select c.*, row_number() over (partition by c.shift_id order by lower(c.w) desc) as rn from cand c where lower(c.w) <= p_at
+  ), occ as (
+    select * from started where rn <= 2
+  ), assigned as (
+    select o.*, m.id as machine_id, m.code, m.name as machine_name, m.counter_unit,
+           (case when cv.found then cv.supervisor_id else pv.supervisor_id end) as owner_id
+      from occ o
+      join public.machine m on m.tenant_id = v_tenant
+      left join lateral (select true as found, c.supervisor_id from public.assignment_cover c
+                          where c.shift_id = o.shift_id and c.shift_date = o.shift_date and c.machine_id = m.id
+                          order by c.recorded_at desc, c.id desc limit 1) cv on true
+      left join lateral (select v.supervisor_id from public.assignment_version v
+                          where v.shift_id = o.shift_id and v.machine_id = m.id and v.effective_from <= o.shift_date
+                          order by v.effective_from desc, v.recorded_at desc, v.id desc limit 1) pv on true
+     where (case when cv.found then cv.supervisor_id else pv.supervisor_id end) is not null
+       and (m.retired_at is null or exists (select 1 from public.production_reading r where r.machine_id = m.id and r.shift_id = o.shift_id and r.shift_date = o.shift_date))
+  ), rd as (
+    select x.*, mem.full_name as owner_name,
+           o.id as o_id, o.product_id as o_product, op.code as o_product_code, o.late as o_late, o.entered_by_ua as o_ua, o.counter_value as o_counter,
+           c.id as c_id, c.late as c_late, c.entered_by_ua as c_ua, c.counter_value as c_counter,
+           sm.id as s_id, sm.target as s_target, sm.movement_pieces as s_pieces, sm.good as s_good, sm.reject as s_reject, sm.unaccounted as s_unacc,
+           sm.attainment_pct as s_att, sm.rollover as s_roll, sm.needs_review as s_review, sm.over_reported as s_over,
+           dp.product_id as default_product
+      from assigned x
+      left join public.membership mem on mem.user_id = x.owner_id and mem.tenant_id = v_tenant
+      left join lateral (select r.* from public.production_reading r
+                          where r.machine_id = x.machine_id and r.shift_id = x.shift_id and r.shift_date = x.shift_date and r.kind = 'opening'
+                            and not exists (select 1 from public.production_reading n where n.supersedes_id = r.id) limit 1) o on true
+      left join public.product op on op.id = o.product_id
+      left join lateral (select r.* from public.production_reading r
+                          where r.machine_id = x.machine_id and r.shift_id = x.shift_id and r.shift_date = x.shift_date and r.kind = 'closing'
+                            and not exists (select 1 from public.production_reading n where n.supersedes_id = r.id) limit 1) c on true
+      left join lateral (select y.* from public.production_summary y
+                          where y.machine_id = x.machine_id and y.shift_id = x.shift_id and y.shift_date = x.shift_date
+                          order by y.recorded_at desc, y.id desc limit 1) sm on true
+      left join lateral (select r.product_id from public.production_reading r join public.product p on p.id = r.product_id and p.retired_at is null
+                          where o.id is null and r.machine_id = x.machine_id and r.kind = 'opening' order by r.recorded_at desc, r.id desc limit 1) dp on true
+  ), calc as (
+    select r.*,
+           coalesce(r.s_target, case when coalesce(r.o_product, r.default_product) is not null
+                                     then app.effective_target(r.machine_id, coalesce(r.o_product, r.default_product), r.shift_id, r.shift_date) end) as target,
+           (r.s_target is null and r.o_id is null and r.default_product is not null) as target_assumed,
+           case when r.o_id is null then 'missing' when r.o_late then 'late' else 'on_time' end as o_status,
+           case when r.c_id is null then 'missing' when r.c_late then 'late' else 'on_time' end as c_status
+      from rd r
+  ), shaped as (
+    select k.shift_id, k.name, k.start_time, k.end_time, k.shift_date, k.w, k.rn, k.code, k.target, k.o_status, k.c_status, k.c_id, k.s_good,
+           jsonb_build_object(
+             'machine_id', k.machine_id, 'code', k.code, 'name', k.machine_name, 'counter_unit', k.counter_unit, 'owner_id', k.owner_id, 'owner_name', k.owner_name,
+             'product_id', k.o_product, 'product_code', k.o_product_code, 'target', k.target, 'target_assumed', k.target_assumed,
+             'opening_status', k.o_status, 'closing_status', k.c_status, 'opening_counter', k.o_counter, 'closing_counter', k.c_counter,
+             'movement_pieces', k.s_pieces, 'good', k.s_good, 'reject', k.s_reject, 'unaccounted', k.s_unacc, 'attainment_pct', k.s_att,
+             'flags', to_jsonb(array_remove(array[
+                case when k.o_late then 'late_opening' end, case when k.c_late then 'late_closing' end, case when k.s_roll then 'rollover' end,
+                case when k.s_review then 'needs_review' end, case when k.s_over then 'over_reported' end,
+                case when coalesce(k.o_ua, false) or coalesce(k.c_ua, false) then 'entered_by_ua' end], null))) as j
+      from calc k
+  ), agg as (
+    select h.shift_id, h.name, h.start_time, h.end_time, h.shift_date, h.w, h.rn,
+           jsonb_agg(h.j order by h.code) as machines,
+           count(*) as expected,
+           count(*) filter (where h.o_status = 'on_time') as openings_on_time,
+           count(*) filter (where h.c_status = 'on_time') as closings_on_time,
+           count(*) filter (where h.o_status = 'on_time' and h.c_status = 'on_time') as both_on_time,
+           coalesce(sum(h.target) filter (where h.target is not null), 0) as t_all,
+           coalesce(sum(h.target) filter (where h.target is not null and h.c_id is not null), 0) as t_closed,
+           coalesce(sum(h.s_good) filter (where h.c_id is not null), 0) as g_closed,
+           coalesce(sum(h.s_good) filter (where h.c_id is not null and h.target is not null), 0) as g_closed_t
+      from shaped h group by h.shift_id, h.name, h.start_time, h.end_time, h.shift_date, h.w, h.rn
+  )
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'shift', jsonb_build_object('id', g.shift_id, 'name', g.name, 'start_time', to_char(g.start_time, 'HH24:MI'), 'end_time', to_char(g.end_time, 'HH24:MI')),
+           'shift_date', g.shift_date, 'starts_at', lower(g.w), 'ends_at', upper(g.w), 'running', (g.w @> p_at), 'current', (g.rn = 1), 'machines', g.machines,
+           'totals', jsonb_build_object('machines_expected', g.expected, 'openings_on_time', g.openings_on_time, 'closings_on_time', g.closings_on_time,
+                                        'both_on_time', g.both_on_time, 'target', g.t_all, 'target_closed', g.t_closed, 'good', g.g_closed,
+                                        'attainment_pct', case when g.t_closed > 0 then round(g.g_closed_t * 100.0 / g.t_closed, 2) end))
+           order by g.name, lower(g.w) desc), '[]'::jsonb)
+    into v_occ
+    from agg g;
+  return jsonb_build_object('ok', true, 'as_of', p_at, 'occurrences', v_occ);
+end
+$$;
+
+create function public.reading_state()
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if not exists (select 1 from public.membership m where m.user_id = auth.uid()) then
+    return app._pm_authorise(null, 'rpc:reading_state');
+  end if;
+  return app.reading_state_at(now());
+end
+$$;
+create function public.reading_detail(p_machine_id uuid, p_shift_id uuid, p_shift_date date)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if not exists (select 1 from public.membership m where m.user_id = auth.uid()) then
+    return app._pm_authorise(null, 'rpc:reading_detail');
+  end if;
+  return app.reading_detail_at(p_machine_id, p_shift_id, p_shift_date, now());
+end
+$$;
+create function public.today_board()
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if not exists (select 1 from public.membership m where m.user_id = auth.uid()) then
+    return app._pm_authorise(null, 'rpc:today_board');
+  end if;
+  return app.today_board_at(now());
+end
+$$;
+
+-- 12. Reading capture rate (D9, AC-13) ---------------------------------------------------------------------------------------------
+-- The definition of product metric 1 for 09 to report: over the shift dates from..to (at most 366 days), EXPECTED = assigned machine-occurrences
+-- (owner by cover/plan not null) whose window has ended before p_at; ON TIME = those with a current opening AND a current closing that are not
+-- late (a correction carries the Late flag of the earliest submission, so the current row tells). Unassigned machines and occurrences that have not
+-- ended are not counted. App-only (no client can execute it; 09 will wrap it): the tenant is a parameter, not the caller's.
+create function app.reading_capture_at(p_tenant uuid, p_from date, p_to date, p_at timestamptz)
+returns table (expected bigint, on_time bigint)
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+begin
+  if p_tenant is null or p_from is null or p_to is null or p_to < p_from then
+    perform app._pm_fail('validation', 'Choose a valid date range', 'range');
+  end if;
+  if p_to - p_from > 366 then
+    perform app._pm_fail('validation', 'Choose at most 367 days', 'range');
+  end if;
+  return query
+  with occ as (
+    select s.id as shift_id, d.d as shift_date, app._rd_window(s.start_time, s.end_time, d.d, z.timezone) as w, s.retired_at as s_retired
+      from public.shift s
+      join public.site z on z.id = s.site_id
+      cross join lateral (select (p_from + g.n) as d from generate_series(0, p_to - p_from) as g(n)) d
+     where s.tenant_id = p_tenant
+  ), ended as (
+    select o.* from occ o where upper(o.w) <= p_at and (o.s_retired is null or o.s_retired >= upper(o.w))
+  ), owned as (
+    select e.shift_id, e.shift_date, m.id as machine_id
+      from ended e
+      join public.machine m on m.tenant_id = p_tenant and (m.retired_at is null or m.retired_at >= upper(e.w))
+      left join lateral (select true as found, c.supervisor_id from public.assignment_cover c
+                          where c.shift_id = e.shift_id and c.shift_date = e.shift_date and c.machine_id = m.id
+                          order by c.recorded_at desc, c.id desc limit 1) cv on true
+      left join lateral (select v.supervisor_id from public.assignment_version v
+                          where v.shift_id = e.shift_id and v.machine_id = m.id and v.effective_from <= e.shift_date
+                          order by v.effective_from desc, v.recorded_at desc, v.id desc limit 1) pv on true
+     where (case when cv.found then cv.supervisor_id else pv.supervisor_id end) is not null
+  )
+  select count(*)::bigint,
+         count(*) filter (where o.id is not null and not o.late and c.id is not null and not c.late)::bigint
+    from owned w
+    left join lateral (select r.id, r.late from public.production_reading r
+                        where r.machine_id = w.machine_id and r.shift_id = w.shift_id and r.shift_date = w.shift_date and r.kind = 'opening'
+                          and not exists (select 1 from public.production_reading n where n.supersedes_id = r.id) limit 1) o on true
+    left join lateral (select r.id, r.late from public.production_reading r
+                        where r.machine_id = w.machine_id and r.shift_id = w.shift_id and r.shift_date = w.shift_date and r.kind = 'closing'
+                          and not exists (select 1 from public.production_reading n where n.supersedes_id = r.id) limit 1) c on true;
+end
+$$;
+create function app.reading_capture(p_tenant uuid, p_from date, p_to date)
+returns table (expected bigint, on_time bigint)
+language sql
+stable
+security definer
+set search_path = ''
+as $$ select * from app.reading_capture_at(p_tenant, p_from, p_to, now()) $$;
+
 -- 99. Function privileges: no app function is executable by clients (test 004); the public entry points are executable by authenticated only.
 -- Repeated at the end of every step's section: each step adds functions, the loop runs over the whole 06 name range.
 do $$
