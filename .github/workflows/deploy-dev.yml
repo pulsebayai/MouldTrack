@@ -42,7 +42,7 @@ jobs:
       - name: Set function secrets (CORS origin of the dev web app, D8)
         run: npx supabase secrets set ALLOWED_ORIGINS=https://mouldtrack--dev.expo.app --project-ref "$DEV_SUPABASE_PROJECT_REF" --yes
 
-      - name: Dev never holds a setup token (D11; idempotent: unset if present, then verify; values are never printed)
+      - name: Dev never holds a setup token (D11, idempotent, unset if present then verify, values never printed)
         run: |
           has_token() { npx supabase secrets list --project-ref "$DEV_SUPABASE_PROJECT_REF" -o json 2>/dev/null | jq -e '[.[] | select(.name == "PLATFORM_SETUP_TOKEN")] | length > 0' >/dev/null; }
           if has_token; then
