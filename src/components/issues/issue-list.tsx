@@ -34,7 +34,7 @@ export function IssueList({ role }: { role: 'supervisor' | 'unit_admin' }) {
           <Button title="Home" variant="secondary" testID="issues-home" onPress={() => router.replace('/home')} />
         </View>
         {role === 'unit_admin' ? <Button title="Report issue" testID="issues-new" onPress={() => router.push('/issues/new')} /> : null}
-        <View accessibilityRole="tablist" style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
           {tabs.map((t) => (
             <Chip key={t.key} testID={`issues-tab-${t.key}`} label={t.label} selected={tab === t.key} onPress={() => { setTab(t.key); setPage(1); }} />
           ))}
