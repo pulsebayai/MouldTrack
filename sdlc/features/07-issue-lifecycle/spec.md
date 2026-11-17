@@ -99,5 +99,5 @@ Push/SMS/email; SLA/overdue timers; downtime events with times; maintenance acco
 
 ## Clarifications (Opus, 2026-11-17, after review)
 - AC-8: if no supervisor other than the resolver can verify (e.g. a single-shift unit where the resolver owns every shift), a Unit Admin may verify — including their own resolution in that case. Verification eligibility looks at most 60 days ahead.
-- AC-12: photos are fetched with the user's session on every view (no long-lived signed links); access is re-checked each time.
+- AC-12: photos are fetched with the user's session on every view (no long-lived signed links); access is re-checked on every request **except** that hosted Storage's CDN may re-serve an object the same user already downloaded until their access token expires (≤ 1 h) — accepted residual risk (D14).
 - AC-2: "owner now" = the owner of the first running occurrence that has an assigned supervisor.
