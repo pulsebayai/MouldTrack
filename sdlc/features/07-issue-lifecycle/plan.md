@@ -68,6 +68,8 @@ AC-1–16 → tests (spec table, with D8's Android scope); full suite green; dev
 - Step 7: the "verify as the next-shift supervisor" story cannot be driven in real time (a later shift must have started since the resolve, and shifts start on 15-minute marks). The web spec drives report (with photo via the file chooser) -> escalate -> UA acknowledge + reassign -> new owner resolves -> "awaiting verification, resolver has no verify panel" through the UI, then proves verify (Not fixed with a reason; Confirm fixed) on issues seeded by service-role insert as already resolved one hour before the last shift boundary (same method as the fixture issues). Who is "running" is derived from the clock (`setupIssueWorld` in `e2e/api/helpers.ts`; two shifts AM/PM cover the day). Not safe in the two seconds around 00:00/12:00 IST. The API spec covers the verify rule (resolver refused, UA refused while a later supervisor is assigned, reject owner/ownership history) over HTTP.
 - Step 7: web and API e2e could not be run locally (no Docker); they are proven on PR CI only. Maestro `report-issue.yaml` reports a Low issue as supA on fixture machine FX-MA1 and works it to Closed (no photo, D8); it runs nightly only.
 
+- Step 3 (found by CI `db`, real Storage): a client DELETE on `storage.objects` is refused with 42501 by Storage's own protect trigger rather than affecting 0 rows. 042 tests 64-65 now accept `ok` (stub: 0 rows) or `42501` (real Storage); the control test still proves nothing was removed.
+
 ## Session log
 ### 2026-11-17
 - Done: intent + spec approved (owner: categories extendable; High/Critical verified by later-shift owner, UA fallback when unassigned; reporting on non-owned machines; photos visible to all who see the issue; stopped → Critical + UA alerts).

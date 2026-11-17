@@ -178,8 +178,9 @@ select is(pg_temp.seen('uax'), 1, 'and tenant X''s Unit Admin still only sees te
 
 -- No update, no delete -------------------------------------------------------------------------------------------------------------------------------
 select is(pg_temp.try('uax', format($q$with u as (update storage.objects set name = name || 'x' where bucket_id = 'attachments' returning 1) select 1 / (case when count(*) = 0 then 1 else 0 end) from u$q$)), 'ok', 'a client update changes no row (no UPDATE policy)');
-select is(pg_temp.try('uax', $q$with d as (delete from storage.objects where bucket_id = 'attachments' returning 1) select 1 / (case when count(*) = 0 then 1 else 0 end) from d$q$), 'ok', 'a client delete removes no row (no DELETE policy)');
-select is(pg_temp.try('s1', $q$with d as (delete from storage.objects where bucket_id = 'attachments' returning 1) select 1 / (case when count(*) = 0 then 1 else 0 end) from d$q$), 'ok', 'not even the uploader can delete');
+-- Real Storage refuses a direct delete outright (42501, storage.protect_delete); the local stub simply has no policy (0 rows). Either way nothing is removed.
+select ok(pg_temp.try('uax', $q$with d as (delete from storage.objects where bucket_id = 'attachments' returning 1) select 1 / (case when count(*) = 0 then 1 else 0 end) from d$q$) in ('ok', '42501'), 'a client delete removes no row (no DELETE policy)');
+select ok(pg_temp.try('s1', $q$with d as (delete from storage.objects where bucket_id = 'attachments' returning 1) select 1 / (case when count(*) = 0 then 1 else 0 end) from d$q$) in ('ok', '42501'), 'not even the uploader can delete');
 select ok((select count(*) from storage.objects where bucket_id = 'attachments') >= 4 and not exists (select 1 from storage.objects where name like '%x'), 'control: nothing was changed or removed');
 
 -- Table-level guards ------------------------------------------------------------------------------------------------------------------------------------
