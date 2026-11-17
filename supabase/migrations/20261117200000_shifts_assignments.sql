@@ -790,6 +790,156 @@ begin
 end
 $$;
 
+-- 10. Reads (D10) -------------------------------------------------------------------------------------------------
+-- Read RPCs return jsonb like the write RPCs: {ok:true, ...} or the generic denial {ok:false, code:'not_allowed'} (audited as access.denied).
+-- No per-tenant lock (reads don't serialise writers) and no request id (not a recorded request).
+create function app._sh_read_authorise(p_source text, p_ua_only boolean)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_actor uuid := auth.uid();
+  a record;
+  v_reason text;
+begin
+  select m.tenant_id, m.role, m.status, m.must_change_password, t.status as tenant_status
+    into a
+    from public.membership m join public.tenant t on t.id = m.tenant_id
+    where m.user_id = v_actor;
+  if not found then
+    v_reason := 'no_membership';
+  elsif a.status <> 'active' or a.tenant_status <> 'active' then
+    v_reason := 'inactive';
+  elsif a.must_change_password then
+    v_reason := 'must_change_password';
+  elsif p_ua_only and a.role <> 'unit_admin' then
+    v_reason := 'role';
+  end if;
+  if v_reason is not null then
+    perform app.audit_denied(v_actor, a.tenant_id, a.role::text, v_reason, null, null, p_source);
+    return jsonb_build_object('ok', false, 'code', 'not_allowed');
+  end if;
+  return jsonb_build_object('ok', true, 'tenant_id', a.tenant_id, 'actor', v_actor, 'role', a.role);
+end
+$$;
+
+-- AC-9: every non-retired machine of the tenant with its owner on a shift occurrence (default: today's plant date), where the owner comes
+-- from (plan | cover | none, cover reason) and whether the owner is no longer an active supervisor. Unit Admin only.
+create function public.shift_board(p_shift_id uuid, p_date date default null)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:shift_board';
+  a jsonb;
+  v_tenant uuid;
+  v_own text;
+  v_date date;
+  v_shift public.shift;
+  v_window tstzrange;
+  v_machines jsonb;
+begin
+  a := app._sh_read_authorise(c_src, true);
+  if not (a->>'ok')::boolean then return a; end if;
+  v_tenant := (a->>'tenant_id')::uuid;
+  v_own := app._sh_owned('shift', p_shift_id, v_tenant);
+  if v_own <> 'ok' then return app._pm_deny(a, v_own, 'shift', p_shift_id, c_src); end if;
+
+  v_date := coalesce(p_date, app.plant_date(v_tenant));
+  select * into v_shift from public.shift s where s.id = p_shift_id;
+  v_window := app.shift_window(p_shift_id, v_date);
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'machine_id', m.id, 'code', m.code, 'name', m.name, 'line', l.name, 'status', m.status,
+           'owner_id', o.supervisor_id, 'owner_name', mem.full_name,
+           'owner_inactive', (o.supervisor_id is not null and (mem.user_id is null or mem.status <> 'active' or mem.role <> 'supervisor')),
+           'source', o.source, 'reason', o.reason) order by m.code), '[]'::jsonb)
+    into v_machines
+    from public.machine m
+    left join public.line l on l.id = m.line_id
+    cross join lateral app.machine_owner_src(m.id, p_shift_id, v_date) o
+    left join public.membership mem on mem.user_id = o.supervisor_id
+    where m.tenant_id = v_tenant and m.retired_at is null;
+
+  return jsonb_build_object(
+    'ok', true,
+    'shift', jsonb_build_object('id', v_shift.id, 'name', v_shift.name, 'start_time', to_char(v_shift.start_time, 'HH24:MI'),
+                                'end_time', to_char(v_shift.end_time, 'HH24:MI'), 'retired', v_shift.retired_at is not null),
+    'shift_date', v_date, 'starts_at', lower(v_window), 'ends_at', upper(v_window),
+    'machines', v_machines,
+    'unassigned_count', (select count(*) from jsonb_array_elements(v_machines) e where e->>'owner_id' is null));
+end
+$$;
+
+-- AC-10/11: the caller's own machines for their current shift occurrence, or the next one starting within 36 hours. A supervisor sees
+-- planning data only through this function. state: running | next | none (shifts exist, nothing assigned) | no_shifts.
+-- p_at exists so tests can pass an explicit moment; it only moves the clock for the caller's own machines.
+create function public.my_shift(p_at timestamptz default now())
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:my_shift';
+  a jsonb;
+  v_tenant uuid;
+  v_uid uuid;
+  v_plant date;
+  v_pick record;
+  v_machines jsonb;
+begin
+  a := app._sh_read_authorise(c_src, false);
+  if not (a->>'ok')::boolean then return a; end if;
+  v_tenant := (a->>'tenant_id')::uuid;
+  v_uid := (a->>'actor')::uuid;
+
+  if not exists (select 1 from public.shift s where s.tenant_id = v_tenant and s.retired_at is null) then
+    return jsonb_build_object('ok', true, 'state', 'no_shifts');
+  end if;
+
+  v_plant := app.plant_date_at(v_tenant, p_at);
+  select c.shift_id, c.name, c.start_time, c.end_time, c.shift_date, c.w, (c.w @> p_at) as running
+    into v_pick
+    from (
+      select s.id as shift_id, s.name, s.start_time, s.end_time, d.d as shift_date, app.shift_window(s.id, d.d) as w
+      from public.shift s
+      cross join lateral unnest(array[v_plant - 1, v_plant, v_plant + 1, v_plant + 2]) as d(d)
+      where s.tenant_id = v_tenant and s.retired_at is null
+    ) c
+    where upper(c.w) > p_at and lower(c.w) <= p_at + interval '36 hours'
+      and exists (
+        select 1 from public.machine m
+        cross join lateral app.machine_owner_src(m.id, c.shift_id, c.shift_date) o
+        where m.tenant_id = v_tenant and m.retired_at is null and o.supervisor_id = v_uid)
+    order by (c.w @> p_at) desc, lower(c.w), c.name
+    limit 1;
+
+  if v_pick.shift_id is null then
+    return jsonb_build_object('ok', true, 'state', 'none');
+  end if;
+
+  select coalesce(jsonb_agg(jsonb_build_object('machine_id', m.id, 'code', m.code, 'name', m.name, 'line', l.name) order by m.code), '[]'::jsonb)
+    into v_machines
+    from public.machine m
+    left join public.line l on l.id = m.line_id
+    cross join lateral app.machine_owner_src(m.id, v_pick.shift_id, v_pick.shift_date) o
+    where m.tenant_id = v_tenant and m.retired_at is null and o.supervisor_id = v_uid;
+
+  return jsonb_build_object(
+    'ok', true,
+    'state', case when v_pick.running then 'running' else 'next' end,
+    'shift', jsonb_build_object('id', v_pick.shift_id, 'name', v_pick.name, 'start_time', to_char(v_pick.start_time, 'HH24:MI'),
+                                'end_time', to_char(v_pick.end_time, 'HH24:MI')),
+    'shift_date', v_pick.shift_date, 'starts_at', lower(v_pick.w), 'ends_at', upper(v_pick.w),
+    'machines', v_machines);
+end
+$$;
+
 -- 99. Function privileges: no app function is executable by clients (test 004); the public entry points are executable by authenticated only.
 do $$
 declare f record;
