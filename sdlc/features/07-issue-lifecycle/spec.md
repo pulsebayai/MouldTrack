@@ -26,7 +26,7 @@ Terms: **UA**, **SUP**, **SA** as before. **Accountable owner** = the supervisor
 - **AC-11 UA alerts.** UA Home and Issues show **Alerts**: every not-closed High/Critical issue, **stopped machines first**, then Critical, then High, newest first, with machine, category, age and owner. And **Recently closed**: High/Critical closed in the last 7 days with resolution notes. Both refresh on focus and every 60 s.
 - **AC-12 Photos.** JPEG/PNG/WebP, compressed on the device to ≤ 1600 px and ≤ 5 MB (server-enforced limit). Up to 5 photos per action. Stored privately per tenant; viewed only through short-lived signed URLs (≤ 5 min). Visible to everyone who can see the issue (owner). Audited `attachment.added`.
 - **AC-13 Who sees what.**
-  - **SUP:** issues they are accountable for; issues on machines they own now; issues awaiting **their** verification (AC-8); issues they reported (read-only once ownership moved).
+  - **SUP:** issues they are accountable for; issues on machines they own now; issues awaiting **their** verification (AC-8); issues they reported (they keep read access and, per AC-4, may still add notes/photos).
   - **UA:** all issues of the tenant, filters status / priority / category / machine / escalated / stopped / "Needs owner", 25 per page.
   - **SA:** nothing (022 + a Storage test).
 - **AC-14 Screens.** SUP (Android + web): from My shift a machine row → **Report issue**; **My issues** list; issue detail with history timeline (actions, ownership changes, photos) and the actions they may take. UA (web): Issues list + detail + Alerts on Home. 48dp targets, text status labels, axe 0 serious/critical.
@@ -96,3 +96,8 @@ As FR-1/FR-2; all writes return `{ok, id?}` / D13 denials; `issue_detail.allowed
 
 ## Out of scope
 Push/SMS/email; SLA/overdue timers; downtime events with times; maintenance accounts; handover acknowledgement (08); issue analytics (09); counter photos (06 reuses attachments); editing or deleting issues/actions/photos.
+
+## Clarifications (Opus, 2026-11-17, after review)
+- AC-8: if no supervisor other than the resolver can verify (e.g. a single-shift unit where the resolver owns every shift), a Unit Admin may verify — including their own resolution in that case. Verification eligibility looks at most 60 days ahead.
+- AC-12: photos are fetched with the user's session on every view (no long-lived signed links); access is re-checked each time.
+- AC-2: "owner now" = the owner of the first running occurrence that has an assigned supervisor.
