@@ -36,6 +36,19 @@ insert into public.assignment_cover (tenant_id, shift_id, shift_date, machine_id
   ('1f000000-0000-4000-ba00-00000000000a', '5e000000-0000-4000-ba00-000000000005', current_date, '5e000000-0000-4000-ba00-000000000003', null, 'tap22 cover', '00000000-0000-4000-ba00-0000000000b1');
 insert into public.target_override_version (tenant_id, machine_id, product_id, shift_id, effective_from, pieces_per_shift, recorded_by) values
   ('1f000000-0000-4000-ba00-00000000000a', '5e000000-0000-4000-ba00-000000000003', '5e000000-0000-4000-ba00-000000000004', '5e000000-0000-4000-ba00-000000000005', current_date - 2, 90, '00000000-0000-4000-ba00-0000000000b1');
+-- 07's issue tables: one row each (issue_category is seeded by the tenant trigger; the rest inserted as the table owner).
+insert into public.machine_issue (id, tenant_id, machine_id, category_id, priority, description, machine_stopped, reported_by, accountable_owner_id) values
+  ('5e000000-0000-4000-ba00-000000000006', '1f000000-0000-4000-ba00-00000000000a', '5e000000-0000-4000-ba00-000000000003',
+   (select c.id from public.issue_category c where c.tenant_id = '1f000000-0000-4000-ba00-00000000000a' limit 1), 'critical', 'tap22 issue', true,
+   '00000000-0000-4000-ba00-0000000000b2', '00000000-0000-4000-ba00-0000000000b2');
+insert into public.issue_action (id, tenant_id, issue_id, actor_id, actor_role, type, status_after) values
+  ('5e000000-0000-4000-ba00-000000000007', '1f000000-0000-4000-ba00-00000000000a', '5e000000-0000-4000-ba00-000000000006', '00000000-0000-4000-ba00-0000000000b2', 'supervisor', 'report', 'open');
+insert into public.issue_ownership_history (tenant_id, issue_id, new_owner, source, actor_id) values
+  ('1f000000-0000-4000-ba00-00000000000a', '5e000000-0000-4000-ba00-000000000006', '00000000-0000-4000-ba00-0000000000b2', 'report', '00000000-0000-4000-ba00-0000000000b2');
+insert into public.attachment (tenant_id, entity_type, entity_id, storage_path, mime, size_bytes, sha256, uploaded_by) values
+  ('1f000000-0000-4000-ba00-00000000000a', 'issue_action', '5e000000-0000-4000-ba00-000000000007',
+   'tenant/1f000000-0000-4000-ba00-00000000000a/issue/5e000000-0000-4000-ba00-000000000006/5e000000-0000-4000-ba00-000000000008.png', 'image/png', 10, repeat('c', 64),
+   '00000000-0000-4000-ba00-0000000000b2');
 -- tenant events, an SA event, and a denial exist, so "0 rows" is meaningful
 select app.ua_set_status('00000000-0000-4000-ba00-0000000000b1', gen_random_uuid(), '00000000-0000-4000-ba00-0000000000b2', 'inactive');
 select app.ua_set_status('00000000-0000-4000-ba00-0000000000b1', gen_random_uuid(), '00000000-0000-4000-ba00-0000000000b2', 'active');

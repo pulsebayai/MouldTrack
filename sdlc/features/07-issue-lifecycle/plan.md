@@ -29,7 +29,7 @@ Locks: **architecture: 07** (attachments/Storage model). Schema: 07's tables + S
 `20261117300000_issues.sql` (after 05's `20261117200000`). Additive.
 
 ## Steps
-- [ ] 1. **Tables (tests first).** 040: RLS (UA reads tenant rows; SUP no direct select; SA nothing), composite FKs, append-only actions/ownership/attachment (only pending→ready), `machine_stopped → critical` check, starter categories for existing tenants + trigger for new tenants, category uniqueness/retire, registry. Then migration part 1. — proof: CI `db`
+- [x] 1. **Tables (tests first).** 040: RLS (UA reads tenant rows; SUP no direct select; SA nothing), composite FKs, append-only actions/ownership/attachment (only pending→ready), `machine_stopped → critical` check, starter categories for existing tenants + trigger for new tenants, category uniqueness/retire, registry. Then migration part 1. — proof: CI `db`
 - [ ] 2. **Write RPCs (tests first).** 041: report (owner resolution cases spec AC-2 incl. UA on unassigned → "Needs owner"), note/start/assignee/escalate/ack/reassign, resolve by priority, verify (D4 cases: later occurrence owner ok; resolver refused; earlier/same occurrence refused; UA only when unassigned; overnight), reject → owner = verifier, reopen, invalid transitions, timestamps, audit rows, denials (SUP not allowed actions, must-change, suspended, SA), idempotency, isolation. — proof: CI `db`
 - [ ] 3. **Attachments + Storage (tests first).** 042: bucket settings; insert policy (own pending row only, expired pending refused, other tenant's path refused, wrong user refused); select policy via `can_see_attachment` (UA, owning SUP, other SUP refused, SA refused — "SA reads 0 objects"); no update/delete; commit checks size/mime; trigger blocks other transitions. — proof: CI `db`
 - [ ] 4. **Reads (tests first).** 043: `issue_list` visibility matrix (spec AC-13) + filters + paging, `issue_detail.allowed_actions` per role/status, `issue_alerts` (order: stopped, critical, high; recently closed 7 days; UA only). — proof: CI `db`
@@ -53,6 +53,8 @@ AC-1–16 → tests (spec table, with D8's Android scope); full suite green; dev
 
 ## Deviations from plan
 - D8: Android flow without photo (spec's table listed "with photo from gallery fixture").
+
+- Step 1: 022's fixture additions (rows in `machine_issue`, `issue_action`, `issue_ownership_history`, `attachment`) landed in step 1, not step 5: 022 fails otherwise (the discovery requires a row in every tenant-owned table). Step 5 keeps seed/fixtures-reset only. `machine_issue` also carries `resolution_notes` and `closed_by`; `issue_action.type` includes `report`. `attachment.entity_id` for photos = the id of the `photo` action created at commit (entity_type `issue_action`). Pending attachment rows are never deleted (append-only; stale ones are ignored), so fixtures-reset does not clean them.
 
 ## Session log
 ### 2026-11-17
