@@ -104,3 +104,6 @@ AC-1–14 → tests (spec table); full suite green on PR CI; dev regression gree
 - Known: the delayed scheduled nightly 2026-11-17 (started 03:34Z, after the proof) fails `drift` because dev holds 04's unmerged migration (owner accepted this risk); clears when 04 merges.
 - Flag for architecture.md (apply on main at merge): composite `(tenant_id, id)` FK pattern; append-only effective-dated config read via functions (`target_for`), never backdated; site timezone locked once targets exist; audit action registry (`app.audit_action`) with 04's actions; `pm_*` RPC pattern (D2) incl. request id tied to its RPC.
 - Next step: owner merges PR #8 → on main: roadmap 04 shipped, release 04's schema tables, architecture flags (via 03's lock or a docs PR); 03 step 8 rebase; 05 can start.
+
+### 2026-11-17 (Opus, post-merge)
+- PR #8 merged. Roadmap: 04 shipped, its schema tables released. Architecture flags handed to 03 (lock holder).
