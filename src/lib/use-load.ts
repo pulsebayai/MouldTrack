@@ -1,28 +1,28 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 /**
- * Loads data for a screen with loading / ready / error states and a reload. `load` must be memoised (useCallback) over everything it
- * reads: a new `load` starts a new request, and an answer to an older one is ignored.
+ * Loads data keyed by `deps`: reports 'loading' until the result for the current key has arrived (so a stale answer never shows),
+ * ignores out-of-order answers and exposes `reload` for Try again and for refreshing after a write.
  */
-export function useLoad<T>(load: () => Promise<T>, enabled = true) {
+export function useLoad<T>(load: () => Promise<T>, deps: readonly unknown[], enabled = true) {
   const [reloadKey, setReloadKey] = useState(0);
-  const [result, setResult] = useState<{ run: string; error: boolean; data: T | null } | null>(null);
+  const [result, setResult] = useState<{ key: string; error: unknown; failed: boolean; data: T | null } | null>(null);
+  const key = JSON.stringify([...deps, reloadKey]);
+  const loader = useRef(load);
   const token = useRef(0);
-  const runId = `${reloadKey}`;
-  const [loadId, setLoadId] = useState<{ load: () => Promise<T>; id: number }>({ load, id: 0 });
-  if (loadId.load !== load) setLoadId({ load, id: loadId.id + 1 });
-  const key = `${loadId.id}:${runId}`;
-
+  useEffect(() => {
+    loader.current = load;
+  });
   useEffect(() => {
     if (!enabled) return;
     const mine = ++token.current;
-    load().then(
-      (data) => mine === token.current && setResult({ run: key, error: false, data }),
-      () => mine === token.current && setResult({ run: key, error: true, data: null }),
+    loader.current().then(
+      (data) => mine === token.current && setResult({ key, error: null, failed: false, data }),
+      (error) => mine === token.current && setResult({ key, error, failed: true, data: null }),
     );
-  }, [enabled, load, key]);
-
+  }, [key, enabled]);
   const reload = useCallback(() => setReloadKey((k) => k + 1), []);
-  const state: 'loading' | 'ready' | 'error' = !result || result.run !== key ? 'loading' : result.error ? 'error' : 'ready';
-  return { state, data: state === 'ready' ? result!.data : null, reload };
+  const state: 'loading' | 'ready' | 'error' = !result || result.key !== key ? 'loading' : result.failed ? 'error' : 'ready';
+  // `latest` is the last successful answer, kept while a reload is in flight so a form does not unmount (and lose what was typed).
+  return { state, data: state === 'ready' ? result!.data : null, latest: result && !result.failed ? result.data : null, error: state === 'error' ? result!.error : null, reload };
 }

@@ -1,5 +1,6 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react-native';
 import { TenantForm } from '@/components/console/tenant-form';
+import { TIMEZONES } from '@/lib/timezones';
 import * as platform from '@/lib/platform';
 import { renderWithSession } from '@/test/render-with-session';
 
@@ -36,5 +37,33 @@ describe('tenant form', () => {
     await fireEvent.press(screen.getByTestId('tenant-save'));
     await waitFor(() => expect(onDone).toHaveBeenCalled());
     expect(api.tenantUpdate.mock.calls[0].slice(1, 3)).toEqual(['t1', { name: 'Acme Ltd' }]);
+  });
+  it('offers 04\'s time zone list (one source), Asia/Kolkata selected by default', async () => {
+    await renderWithSession(<TenantForm onDone={jest.fn()} onCancel={jest.fn()} />);
+    for (const z of TIMEZONES) expect(screen.getByTestId(`tenant-tz-${z}`)).toBeTruthy();
+    expect(screen.getByTestId('tenant-tz-Asia/Kolkata').props.accessibilityState).toMatchObject({ selected: true });
+  });
+  it('registers with the chosen time zone', async () => {
+    await renderWithSession(<TenantForm onDone={jest.fn()} onCancel={jest.fn()} />);
+    await fireEvent.changeText(screen.getByTestId('tenant-name'), 'Zone Plastics');
+    await fireEvent.press(screen.getByTestId('tenant-tz-Asia/Dubai'));
+    await fireEvent.press(screen.getByTestId('tenant-save'));
+    await waitFor(() => expect(api.tenantCreate).toHaveBeenCalled());
+    expect(api.tenantCreate.mock.calls[0][1]).toMatchObject({ timezone: 'Asia/Dubai' });
+  });
+  it('an edit of a tenant whose zone is not on the list still shows it, and sending nothing else changes nothing', async () => {
+    const tenant = { id: 't1', name: 'Acme', status: 'active' as const, plan_label: 'trial' as const, timezone: 'Europe/Madrid', created_at: '2026-11-01T00:00:00Z', suspended_reason: null };
+    await renderWithSession(<TenantForm tenant={tenant} onDone={jest.fn()} onCancel={jest.fn()} />);
+    expect(screen.getByTestId('tenant-tz-Europe/Madrid').props.accessibilityState).toMatchObject({ selected: true });
+    await fireEvent.press(screen.getByTestId('tenant-save'));
+    expect(screen.getByTestId('tenant-form-error')).toHaveTextContent(/No changes/);
+  });
+  it('shows a server time zone refusal under the zone', async () => {
+    const { ApiError } = jest.requireActual('@/lib/api');
+    api.tenantCreate.mockRejectedValueOnce(new ApiError(422, 'timezone', 'Choose a valid time zone', 'validation'));
+    await renderWithSession(<TenantForm onDone={jest.fn()} onCancel={jest.fn()} />);
+    await fireEvent.changeText(screen.getByTestId('tenant-name'), 'Zone Plastics');
+    await fireEvent.press(screen.getByTestId('tenant-save'));
+    expect(await screen.findByText('Choose a valid time zone')).toBeTruthy();
   });
 });

@@ -40,8 +40,6 @@ export type AuditRow = {
   source: string;
 };
 
-export const DEFAULT_TIMEZONE = 'Asia/Kolkata';
-
 /** Status and plan are always shown as text (never by colour alone). */
 export const TENANT_STATUS_TEXT: Record<TenantStatus, string> = { active: 'Active', suspended: 'Suspended' };
 export const PLAN_TEXT: Record<PlanLabel, string> = { trial: 'Trial', active: 'Active plan' };
@@ -66,16 +64,6 @@ const ACTION_TEXT: Record<string, string> = {
 };
 export function actionText(action: string): string {
   return ACTION_TEXT[action] ?? action;
-}
-
-/** True when the runtime accepts the zone (aliases such as Asia/Kolkata included; `supportedValuesOf` lists only canonical names). */
-export function isKnownTimezone(tz: string): boolean {
-  try {
-    new Intl.DateTimeFormat('en', { timeZone: tz });
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 export function sanitiseSearch(q: string): string {

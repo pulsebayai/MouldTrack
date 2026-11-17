@@ -3,12 +3,12 @@ import { Text, View } from 'react-native';
 import { Button, Chip, ErrorText, Field, colors } from '@/components/ui';
 import { ApiError, keepRequestIdAfter, newRequestId } from '@/lib/api';
 import { toUserMessage } from '@/lib/errors';
-import { DEFAULT_TIMEZONE, PLAN_TEXT, isKnownTimezone, platformApi, type PlanLabel, type TenantDetail } from '@/lib/platform';
+import { PLAN_TEXT, platformApi, type PlanLabel, type TenantDetail } from '@/lib/platform';
 import { useSession } from '@/lib/session-provider';
+import { DEFAULT_TIMEZONE, TIMEZONES, timezoneLabel } from '@/lib/timezones';
 
 type Errors = Partial<Record<'name' | 'timezone' | 'plan_label' | 'form', string>>;
 const NAME_ERROR = 'Enter a name of 1 to 80 characters';
-const TZ_ERROR = 'Choose a valid time zone, for example Asia/Kolkata';
 
 /** Register (no `tenant`) or edit a tenant. The same form serves both; an edit sends only what changed. */
 export function TenantForm({ tenant, onDone, onCancel }: { tenant?: TenantDetail; onDone: (tenantId: string) => void; onCancel: () => void }) {
@@ -20,13 +20,14 @@ export function TenantForm({ tenant, onDone, onCancel }: { tenant?: TenantDetail
   const [errors, setErrors] = useState<Errors>({});
   const [busy, setBusy] = useState(false);
   const requestId = useRef(newRequestId());
+  // 04's list (src/lib/timezones.ts) is the one client source; a tenant already on a zone outside it keeps that zone as a choice. The server validates.
+  const zones = TIMEZONES.includes(timezone) ? TIMEZONES : [timezone, ...TIMEZONES];
 
   async function onSave() {
     const e: Errors = {};
     const n = name.trim();
-    const tz = timezone.trim();
+    const tz = timezone;
     if (n.length < 1 || n.length > 80) e.name = NAME_ERROR;
-    if (!tz || !isKnownTimezone(tz)) e.timezone = TZ_ERROR;
     if (Object.keys(e).length) return setErrors(e);
 
     const diff: { name?: string; timezone?: string; plan_label?: PlanLabel } = {};
@@ -61,7 +62,15 @@ export function TenantForm({ tenant, onDone, onCancel }: { tenant?: TenantDetail
         {editing ? 'Edit tenant' : 'Register tenant'}
       </Text>
       <Field label="Tenant name" testID="tenant-name" value={name} onChangeText={setName} error={errors.name} autoComplete="off" />
-      <Field label="Time zone" testID="tenant-timezone" value={timezone} onChangeText={setTimezone} error={errors.timezone} autoCapitalize="none" autoComplete="off" />
+      <View style={{ gap: 6 }}>
+        <Text style={{ fontSize: 15, fontWeight: '600', color: colors.text }}>Time zone</Text>
+        <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+          {zones.map((z) => (
+            <Chip key={z} testID={`tenant-tz-${z}`} label={timezoneLabel(z)} selected={timezone === z} onPress={() => setTimezone(z)} />
+          ))}
+        </View>
+        {errors.timezone ? <ErrorText testID="tenant-tz-error">{errors.timezone}</ErrorText> : null}
+      </View>
       <View style={{ gap: 6 }}>
         <Text style={{ fontSize: 15, fontWeight: '600', color: colors.text }}>Plan label</Text>
         <View style={{ flexDirection: 'row', gap: 12, flexWrap: 'wrap' }}>
