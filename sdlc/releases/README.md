@@ -10,13 +10,16 @@ Every release Rn follows architecture.md §Release & regression policy. Run on `
 5. **Owner sign-off in chat (Sidambara Raja).** Only then promote to prod (the production-gate hook blocks it until the owner runs/approves it).
 6. After the prod deploy run `regression.yml` with `target=prod` (**smoke only**, read-only) and append its summary. Pass → mark the release `released` in roadmap.md. Fail → roll back, record the incident, add a roadmap item.
 
-## Runbook: first Super Admin on an environment (prod at R1; staging if it has no fixture SA)
-Run from the **owner's own terminal**, never from CI (the repo and its logs are public).
-1. `TOKEN=$(openssl rand -hex 32)` (≥ 32 hex chars; the endpoint refuses short tokens and the local literal).
-2. `supabase secrets set PLATFORM_SETUP_TOKEN="$TOKEN" --project-ref <ref>`
-3. `curl -sS -X POST "https://<ref>.supabase.co/functions/v1/platform-setup" -H "x-setup-token: $TOKEN" -H 'content-type: application/json' -d '{"full_name":"<name>","phone":"<10-digit mobile>"}'` → note the temporary password (shown once), sign in on the web app, change it.
-4. `supabase secrets unset PLATFORM_SETUP_TOKEN --project-ref <ref>`; `unset TOKEN`. A second call must now return 403.
-5. Record the `platform_admin.created` audit event id in the release record. Then create the pilot tenant and its first Unit Admin **in the Console** (no SQL).
+## Runbook: first Super Admin on an environment (prod at R1; staging if it has no SA)
+Run from the **owner's own terminal**, never from CI (the repo and its logs are public). Needs the Supabase CLI logged in (`supabase login`). In zsh, `setopt HIST_IGNORE_SPACE` and start the sensitive lines with a space so they stay out of shell history.
+1. ` TOKEN=$(openssl rand -hex 32)` (≥ 32 characters; the endpoint refuses short tokens and the public local literal).
+2. ` supabase secrets set PLATFORM_SETUP_TOKEN="$TOKEN" --project-ref <ref>`
+3. ` read -r NAME; read -r PHONE` (type them; nothing lands in history), then
+   ` printf 'x-setup-token: %s\n' "$TOKEN" | curl -sS -X POST "https://<ref>.supabase.co/functions/v1/platform-setup" -H @- -H 'content-type: application/json' -d "{\"full_name\":\"$NAME\",\"phone\":\"$PHONE\"}"`
+   → note `user_id` and the temporary password (shown once). Don't redirect the output to a file.
+4. Immediately ` supabase secrets unset PLATFORM_SETUP_TOKEN --project-ref <ref>; unset TOKEN NAME PHONE`.
+5. **Sign in on the web app right away and change the password** (the temporary one expires in 24 h). If it was lost or expired before the first change, repeat steps 1–4: setup re-issues a temporary password for a setup-created SA that never completed a change (audited). Once the change is done, setup is closed for good. Clear the terminal scrollback.
+6. In the release record, note the `user_id` and that the Console's Platform audit shows "Super Admin created · By System setup". Then create the pilot tenant and its first Unit Admin **in the Console** (no SQL).
 
 R1 extra blockers (prod on Supabase Free): nightly **encrypted** DB + Storage backup running, and one **restore drill** recorded below.
 

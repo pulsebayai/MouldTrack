@@ -13,7 +13,7 @@ Determined by branch: a branch containing <NN-slug> → `sdlc/features/<NN-slug>
 - `npm run typecheck` → 0 errors
 - `npm run test` → all pass (Jest + RNTL)
 - `npm run test:db` → all pass (pgTAP / RLS, local Supabase; needs Docker — on the owner's Mac it runs in CI)
-- `npm run test:e2e` → all pass (Playwright: projects `e2e` (web build), `api` (Edge Functions + RLS over HTTP), `smoke`; local Supabase with edge runtime)
+- `npm run test:e2e` → all pass (Playwright: projects `e2e` (web build), `api` (Edge Functions + RLS over HTTP), `api-setup` (local stack only, runs last), `smoke`; local Supabase with edge runtime)
 - `npm run test:e2e:android` → all pass (Maestro, Android emulator; nightly + release only, not on PRs)
 - `npm run build` → exits 0 (`expo export` web + Android prebuild check on a throwaway copy; set `WEB_DIST` outside the iCloud folder for local runs)
 - Hosted checks (GitHub Actions only): `secrets-check`, `deploy-dev`, `regression` (dispatch: target dev | staging | prod-smoke)
