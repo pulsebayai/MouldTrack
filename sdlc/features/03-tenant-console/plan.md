@@ -14,6 +14,14 @@ Batch A with 04 (03 merges **after** 04). Locks: **architecture: 03**; schema sp
 - D9 Setup-endpoint behaviour tests run on the local stack only (spec); the hosted check asserts dev's `platform-setup` refuses (SA exists) — no token is configured on dev.
 - D10 Prod runbook in `sdlc/releases/README.md`: set `PLATFORM_SETUP_TOKEN` on prod via `supabase secrets set` from the owner's terminal, one `curl`, then `supabase secrets unset`; record the audit event id in the release record.
 
+- D11 **(Opus, resolves step 9 blocker: dev holds the local setup token)** A deploy-dev CLI step (`secrets set` or `functions deploy`) pushes `config.toml`'s `[edge_runtime.secrets]` to the hosted project, so the local literal must not live there.
+  1. Remove `PLATFORM_SETUP_TOKEN` from `[edge_runtime.secrets]` in `supabase/config.toml`.
+  2. Give the **local stack only** the token via `supabase/functions/.env` (gitignored), written by ci.yml's e2e job before `supabase start` (and documented in `.env.example` for local runs). If the local edge runtime doesn't load that file on `supabase start`, use `PLATFORM_SETUP_TOKEN = "env(LOCAL_PLATFORM_SETUP_TOKEN)"` in config with the variable set **only** in ci.yml's e2e job — and prove deploy-dev then pushes nothing for it. If neither works, stop: `Blocked - needs Opus`.
+  3. deploy-dev gains a permanent, idempotent step after the secrets step: if `supabase secrets list` shows `PLATFORM_SETUP_TOKEN` on dev, `supabase secrets unset PLATFORM_SETUP_TOKEN` (dev never has a pending setup — it uses fixture SAs). This also removes today's copy.
+  4. Hosted check 7 ("configured token is not the local literal") stays; add a check that dev has **no** `PLATFORM_SETUP_TOKEN` at all.
+  5. Releases README: staging/prod deploys must end with the same "no setup token unless the runbook is in progress" verification.
+  6. Re-run the step 9 proof (temporary triggers, green deploy-dev + regression incl. hosted-checks, remove triggers, green PR CI). Watch the two web tests that failed once in the first proof run (console.spec "register, create a Unit Admin…", plant.spec "Supervisor is blocked"); if either fails again, capture the error text from the job log and report — don't retry into green.
+
 ## Files that change
 - `supabase/migrations/20261117100000_platform_admin.sql`; `supabase/tests/020–022_*.test.sql` — new
 - `supabase/functions/platform/index.ts`, `supabase/functions/platform-setup/index.ts` — new; `supabase/functions/account/index.ts` — modified (D5); `supabase/functions/_shared/*` — additions only; `supabase/config.toml` — function entries
