@@ -4,7 +4,7 @@
 #     1 Auth config (signup off, min length 10, letters+digits)  2 all four Edge Functions deployed (user-admin account platform platform-setup)
 #     3 no orphan Auth users (D4)                                 4 CORS: dev web origin allowed, foreign origin never reflected (D8)
 #     5 every membership's Auth email = its phone, inactive = banned, active = not banned (R7)
-#     6 platform-setup refuses on dev (403 not_allowed: no usable token, no database access)  7 the configured token, if any, is not the local literal (03 step 9)
+#     6 platform-setup refuses on dev (403 not_allowed: no usable token, no database access)  7 the configured token, if any, is not the local literal  8 dev has no PLATFORM_SETUP_TOKEN at all (03 step 9, D11)
 #   TARGET=staging: only check 1 (AC-15, R4), needs SUPABASE_ACCESS_TOKEN and STAGING_SUPABASE_PROJECT_REF. Read-only.
 set -uo pipefail
 TARGET="${TARGET:-dev}"
@@ -23,7 +23,7 @@ if [ "$TARGET" = staging ]; then
 fi
 [ "$TARGET" = dev ] || { echo "TARGET must be dev or staging"; exit 1; }
 : "${DEV_SUPABASE_PROJECT_REF:?}"
-printf 'TAP version 13\n1..7\n' > "$OUT"
+printf 'TAP version 13\n1..8\n' > "$OUT"
 
 node scripts/auth-config.mjs --check --ref dev; tap $? "auth config on dev matches (signup off, min length 10, letters+digits)"
 
@@ -66,8 +66,10 @@ if echo "$secrets_json" | jq -e 'type == "array"' >/dev/null 2>&1; then
   # Metadata only (never the digest or the value): when it was set and whether it equals the local literal.
   echo "$secrets_json" | jq -c --arg d "$local_digest" '.[] | select(.name == "PLATFORM_SETUP_TOKEN") | del(.value) + {equals_local_literal: (((.value // "") | ascii_downcase) == $d)}'
   echo "$secrets_json" | jq -e --arg d "$local_digest" '[.[] | select(.name == "PLATFORM_SETUP_TOKEN" and ((.value // "") | ascii_downcase) == $d)] | length == 0' >/dev/null; tap $? "the configured setup token (if any) is not the local literal"
+  # 8 (D11): dev uses fixture Super Admins and never has a pending setup, so no setup token may exist there at all.
+  echo "$secrets_json" | jq -e '[.[] | select(.name == "PLATFORM_SETUP_TOKEN")] | length == 0' >/dev/null; tap $? "dev has no PLATFORM_SETUP_TOKEN secret"
 else
-  echo "could not list secrets"; tap 1 "the configured setup token (if any) is not the local literal"
+  echo "could not list secrets"; tap 1 "the configured setup token (if any) is not the local literal"; tap 1 "dev has no PLATFORM_SETUP_TOKEN secret"
 fi
 
 exit $([ "$fails" = 0 ] && echo 0 || echo 1)
