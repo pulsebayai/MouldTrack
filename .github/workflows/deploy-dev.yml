@@ -6,6 +6,10 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  # TEMPORARY (04 step 7 proof before merge; remove in the next commit): dispatch only works once the file is on main. Dev target only.
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/deploy-dev.yml', 'supabase/functions/**', 'supabase/migrations/**', 'scripts/auth-config.mjs']
 
 permissions:
   contents: read
