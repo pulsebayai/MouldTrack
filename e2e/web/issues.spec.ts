@@ -19,6 +19,9 @@ async function expectNoSeriousViolations(page: Page) {
 const tid = (page: Page, id: string) => page.locator(`[data-testid="${id}"]:visible`);
 const prefix = (page: Page, p: string) => page.locator(`[data-testid^="${p}"]:visible`);
 
+// Timeline entries only (not their -label children).
+const timeline = (page: Page) => page.locator('[data-testid^="timeline-"]:not([data-testid$="-label"]):visible');
+
 let w: IssueWorld;
 const description = `E2E hydraulic leak ${Math.random().toString(36).slice(2, 8)}`;
 
@@ -60,7 +63,7 @@ test('a supervisor reports a High issue with a photo and escalates it (AC-1, AC-
   await expect(tid(page, 'issue-priority')).toHaveText('High');
   await expect(tid(page, 'issue-description')).toHaveText(description);
   await expect(tid(page, 'issue-owner')).toContainText('Fixture');
-  await expect(prefix(page, 'timeline-').filter({ hasText: 'Photo added' })).toHaveCount(1);
+  await expect(timeline(page).filter({ hasText: 'Photo added' })).toHaveCount(1);
   await expect(prefix(page, 'photo-').first()).toBeVisible();
   await expectNoSeriousViolations(page);
 
@@ -88,7 +91,7 @@ test('the Unit Admin sees the alert, acknowledges the escalation and reassigns t
   await tid(page, 'action-ack_escalation').click();
   await tid(page, 'action-text').fill('Seen, sending the idle shift lead');
   await tid(page, 'action-submit').click();
-  await expect(prefix(page, 'timeline-').filter({ hasText: 'Escalation acknowledged' })).toHaveCount(1);
+  await expect(timeline(page).filter({ hasText: 'Escalation acknowledged' })).toHaveCount(1);
 
   await tid(page, 'action-reassign').click();
   await tid(page, 'action-submit').click();
@@ -100,7 +103,7 @@ test('the Unit Admin sees the alert, acknowledges the escalation and reassigns t
   await tid(page, 'action-submit').click();
   await expect(prefix(page, 'ownership-')).toHaveCount(2);
   await expect(tid(page, 'issue-owner')).toContainText('Fixture');
-  await expect(prefix(page, 'timeline-').filter({ hasText: 'Owner changed' })).toHaveCount(1);
+  await expect(timeline(page).filter({ hasText: 'Owner changed' })).toHaveCount(1);
   await expectNoSeriousViolations(page);
 });
 
@@ -135,13 +138,13 @@ test('the supervisor of the shift that started since verifies: not fixed with a 
   await tid(page, 'action-submit').click();
   await expect(tid(page, 'issue-status')).toHaveText('In progress');
   await expect(tid(page, 'issue-owner')).toContainText('Fixture');
-  await expect(prefix(page, 'timeline-').filter({ hasText: 'Fix rejected' })).toHaveCount(1);
+  await expect(timeline(page).filter({ hasText: 'Fix rejected' })).toHaveCount(1);
 
   await page.goto(`/issues/${confirmed}`);
   await expect(tid(page, 'verify-panel')).toBeVisible();
   await tid(page, 'verify-confirm').click();
   await expect(tid(page, 'issue-status')).toHaveText('Closed');
-  await expect(prefix(page, 'timeline-').filter({ hasText: 'Fix confirmed' })).toHaveCount(1);
+  await expect(timeline(page).filter({ hasText: 'Fix confirmed' })).toHaveCount(1);
 });
 
 test('a Low issue closes as soon as its owner resolves it (AC-7)', async ({ page }) => {
