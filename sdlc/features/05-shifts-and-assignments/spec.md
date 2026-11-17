@@ -1,5 +1,5 @@
 # Spec: Shifts and assignments
-Intent: ./intent.md · Status: draft · Date: 2026-11-17
+Intent: ./intent.md · Status: approved · Date: 2026-11-17
 
 Terms: **UA**, **SUP** as before. **Shift occurrence** = (shift, shift date); shift date = plant date on which it starts; its window = [start, end) in the site timezone, end on the next day for overnight shifts. All 02/04 patterns apply: `pm_*`-style RPCs via `app._pm_authorise`, D13 denials, request ids tied to the RPC, append-only effective-dated history, audit registry, plant date on the server.
 
