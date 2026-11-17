@@ -40,6 +40,25 @@ serveJson(async (req, body) => {
   const fullName = requireString(body, 'full_name');
   const phone = phoneOf(body, true)!;
   const tempPassword = generateTempPassword(randomBytes);
+
+  // F2: the only Super Admin is the setup-created one and its temporary password expired unused: re-issue it (same account; name and phone
+  // in the body are ignored). Auth first, then the database: a failure in between leaves the account re-issuable, never locked out.
+  const reissueId = (check.data as { reissue?: boolean; user_id?: string } | null)?.reissue ? (check.data as { user_id: string }).user_id : null;
+  if (reissueId) {
+    const upd = await sb.auth.admin.updateUserById(reissueId, { password: tempPassword });
+    if (upd.error) {
+      console.error('setup_reissue_auth_failed', upd.error.code ?? 'unknown');
+      throw new HttpError(500, { message: 'Something went wrong. Try again.' });
+    }
+    const re = await sb.rpc('psvc_pa_setup_first', { p_user_id: reissueId, p_full_name: fullName, p_phone: phone });
+    if (re.error || (re.data as { ok?: boolean } | null)?.ok !== true) {
+      if (re.error) console.error('setup_reissue_failed', re.error.code ?? 'unknown');
+      if (re.error) throw new HttpError(500, { message: 'Something went wrong. Try again.' });
+      throw refusal(re.data);
+    }
+    return { user_id: reissueId, temp_password: tempPassword };
+  }
+
   const userId = await createAuthUser(sb, phoneToAuthEmail(phone), tempPassword);
 
   const res = await sb.rpc('psvc_pa_setup_first', { p_user_id: userId, p_full_name: fullName, p_phone: phone });

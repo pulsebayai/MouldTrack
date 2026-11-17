@@ -664,9 +664,24 @@ language plpgsql
 security definer
 set search_path = ''
 as $$
+declare
+  v_reissue uuid;
 begin
   perform pg_advisory_xact_lock(hashtext('app.platform_setup'));
   if exists (select 1 from public.platform_admin) then
+    -- F2 (no lock-out): while the ONLY Super Admin is the one setup created, still on its temporary password and that password has expired,
+    -- nobody has ever signed in, so setup offers a re-issue for that account. After any completed password change, or once a second
+    -- Super Admin exists (console-created), setup is closed for good.
+    select pa.user_id into v_reissue
+    from public.platform_admin pa
+    where (select count(*) from public.platform_admin) = 1
+      and pa.must_change_password
+      and pa.temp_password_expires_at is not null and pa.temp_password_expires_at < now()
+      and exists (select 1 from public.audit_event e
+                  where e.action = 'platform_admin.created' and e.source = 'edge:platform-setup' and e.entity_id = pa.user_id);
+    if v_reissue is not null then
+      return jsonb_build_object('ok', true, 'reissue', true, 'user_id', v_reissue);
+    end if;
     if not exists (
       select 1 from public.audit_event e
       where e.action = 'access.denied' and e.reason = 'setup_closed' and e.occurred_at > now() - interval '1 minute'
@@ -715,6 +730,19 @@ declare
 begin
   v_check := app.pa_setup_check();
   if not (v_check->>'ok')::boolean then return v_check; end if;
+  if v_check ? 'reissue' then
+    -- F2: the caller (Edge Function) passes the account the check offered; anything else is not a re-issue. Name and phone are not changed.
+    if p_user_id is distinct from (v_check->>'user_id')::uuid then
+      return jsonb_build_object('ok', false, 'code', 'not_allowed');
+    end if;
+    update public.platform_admin pa
+    set must_change_password = true, temp_password_expires_at = now() + interval '24 hours', updated_at = now()
+    where pa.user_id = p_user_id;
+    perform app._revoke_sessions(p_user_id);
+    insert into public.audit_event (tenant_id, actor_user_id, actor_role, action, entity_type, entity_id, source)
+    values (null, null, null, 'platform_admin.password_reset', 'platform_admin', p_user_id, 'edge:platform-setup');
+    return jsonb_build_object('ok', true, 'user_id', p_user_id, 'reissued', true);
+  end if;
   perform app._pa_validate_sa(v_name, p_phone);
   perform app._ua_dupcheck(null, null, p_phone, null);
   begin

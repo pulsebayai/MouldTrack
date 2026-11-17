@@ -2,7 +2,7 @@
 -- Self-contained; rolled back. Phones from the throwaway block +91 90000 21xxx.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(173);
+select plan(186);
 
 create function pg_temp.err(q text) returns jsonb language plpgsql as $f$
 declare d text; m text; st text;
@@ -255,6 +255,31 @@ select results_eq($$ select full_name, status::text, must_change_password, creat
 select results_eq($$ select action, source, actor_user_id is null, after->>'phone', entity_id from public.audit_event where action = 'platform_admin.created' and source = 'edge:platform-setup' $$,
   $$ values ('platform_admin.created'::text, 'edge:platform-setup'::text, true, '+91******1401'::text, '00000000-0000-4000-b900-0000000000e4'::uuid) $$, 'setup_first: audited with source edge:platform-setup and a masked phone');
 select is(app.pa_setup_first('00000000-0000-4000-b900-0000000000e5', 'Second', '+919000021402'), '{"ok": false, "code": "setup_closed"}'::jsonb, 'setup_first: a second call is refused');
+
+-- F2: setup stays open until a Super Admin has completed a password change (no lock-out after a lost or expired temporary password) -------------
+select is(app.pa_setup_check(), '{"ok": false, "code": "setup_closed"}'::jsonb, 'F2: closed while the setup Super Admin''s temporary password is still valid');
+update public.platform_admin set temp_password_expires_at = now() - interval '1 minute' where user_id = '00000000-0000-4000-b900-0000000000e4';
+select is(app.pa_setup_check(), '{"ok": true, "reissue": true, "user_id": "00000000-0000-4000-b900-0000000000e4"}'::jsonb, 'F2: expired temporary password of the setup-created Super Admin -> setup offers a re-issue');
+insert into auth.sessions (id, user_id) values ('51000000-0000-4000-b900-000000000006', '00000000-0000-4000-b900-0000000000e4');
+select is((app.pa_setup_first('00000000-0000-4000-b900-0000000000e4', 'Ignored Name', '+919000021499'))->>'reissued', 'true', 'F2: setup_first re-issues instead of refusing');
+select results_eq($$ select full_name, phone_e164, must_change_password, temp_password_expires_at > now() + interval '23 hours', (select count(*) from public.platform_admin) from public.platform_admin $$,
+  $$ values ('First Admin'::text, '+919000021401'::text, true, true, 1::bigint) $$, 'F2: re-issue keeps the existing Super Admin (no second row, name and phone untouched), new 24 h expiry, must change');
+select is((select count(*)::int from auth.sessions where user_id = '00000000-0000-4000-b900-0000000000e4'), 0, 'F2: re-issue ends the Super Admin''s sessions');
+select results_eq($$ select action, source, actor_user_id is null, tenant_id is null, entity_id from public.audit_event where action = 'platform_admin.password_reset' and source = 'edge:platform-setup' $$,
+  $$ values ('platform_admin.password_reset'::text, 'edge:platform-setup'::text, true, true, '00000000-0000-4000-b900-0000000000e4'::uuid) $$, 'F2: re-issue is audited as platform_admin.password_reset, source setup');
+select is((select count(*)::int from public.audit_event where action = 'platform_admin.created' and source = 'edge:platform-setup'), 1, 'F2: re-issue creates no second created event');
+select is(app.pa_setup_check(), '{"ok": false, "code": "setup_closed"}'::jsonb, 'F2: closed again once the new temporary password is valid');
+update public.platform_admin set must_change_password = false, temp_password_expires_at = null where user_id = '00000000-0000-4000-b900-0000000000e4';
+select is(app.pa_setup_check(), '{"ok": false, "code": "setup_closed"}'::jsonb, 'F2: closed for good after a completed password change');
+update public.platform_admin set must_change_password = true, temp_password_expires_at = now() - interval '1 minute' where user_id = '00000000-0000-4000-b900-0000000000e4';
+insert into public.platform_admin (user_id, full_name, phone_e164, status, must_change_password, temp_password_expires_at)
+  values ('00000000-0000-4000-b900-0000000000e5', 'Console SA', '+919000021403', 'active', true, now() - interval '1 minute');
+select is(app.pa_setup_check(), '{"ok": false, "code": "setup_closed"}'::jsonb, 'F2: closed when a second Super Admin exists (created through the console, not by setup)');
+select is(app.pa_setup_first('00000000-0000-4000-b900-0000000000e4', 'X', '+919000021499'), '{"ok": false, "code": "setup_closed"}'::jsonb, 'F2: setup_first refuses then as well');
+delete from public.platform_admin where user_id = '00000000-0000-4000-b900-0000000000e5';
+select is(app.pa_setup_check()->>'reissue', 'true', 'F2: with only the expired setup Super Admin left, a re-issue is offered again');
+select is(app.pa_setup_first('00000000-0000-4000-b900-0000000000e3', 'Other', '+919000021498'), '{"ok": false, "code": "not_allowed"}'::jsonb, 'F2: a re-issue for a user id that is not the setup Super Admin is refused');
+update public.platform_admin set temp_password_expires_at = now() + interval '1 hour' where user_id = '00000000-0000-4000-b900-0000000000e4';
 
 -- Own password change (D5) ---------------------------------------------------------------------------------------------------------------------------------
 update public.platform_admin set temp_password_expires_at = now() + interval '1 hour' where user_id = '00000000-0000-4000-b900-0000000000e4';

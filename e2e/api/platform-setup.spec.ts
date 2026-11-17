@@ -92,3 +92,32 @@ test('two simultaneous setup calls on an empty platform create exactly one Super
   expect(results.filter((r) => r.status === 403)).toHaveLength(1);
   expect((await service().from('platform_admin').select('user_id')).data).toHaveLength(1);
 });
+
+test('F2: an expired setup password does not lock the platform out: the token re-issues a new one for the same Super Admin', async ({ request }) => {
+  const sb = service();
+  const sa = (await sb.from('platform_admin').select('user_id, phone_e164, full_name').single()).data!;
+  // Still valid: closed.
+  const closed = await callSetup(request, TOKEN, { full_name: 'Again', phone: throwawayPhone() });
+  expect(closed.status).toBe(403);
+  expect(closed.body).toEqual({ code: 'setup_closed', message: 'Not allowed' });
+  // The temporary password expires without anyone signing in: setup re-opens for that account only.
+  await sb.from('platform_admin').update({ temp_password_expires_at: new Date(Date.now() - 60_000).toISOString() }).eq('user_id', sa.user_id);
+  const wrong = await callSetup(request, 'wrong-token', { full_name: 'Again', phone: throwawayPhone() });
+  expect(wrong.status).toBe(403);
+  expect((await sb.from('platform_admin').select('temp_password_expires_at').eq('user_id', sa.user_id).single()).data!.temp_password_expires_at).not.toBeNull();
+  const r = await callSetup(request, TOKEN, { full_name: 'Again', phone: throwawayPhone() });
+  expect(r.status).toBe(200);
+  expect(r.body.user_id).toBe(sa.user_id);
+  expect(r.body.temp_password).toMatch(/^[A-HJ-NP-Za-km-z2-9]{12}$/);
+  const row = (await sb.from('platform_admin').select('full_name, phone_e164, must_change_password, temp_password_expires_at').eq('user_id', sa.user_id).single()).data!;
+  expect(row).toMatchObject({ full_name: sa.full_name, phone_e164: sa.phone_e164, must_change_password: true });
+  expect(new Date(row.temp_password_expires_at!).getTime()).toBeGreaterThan(Date.now() + 23 * 3600_000);
+  expect((await sb.from('platform_admin').select('user_id')).data).toHaveLength(1);
+  const events = await auditRows({ action: 'platform_admin.password_reset', entity: sa.user_id });
+  expect(events).toHaveLength(1);
+  expect(events[0]).toMatchObject({ source: 'edge:platform-setup', actor_user_id: null, tenant_id: null });
+  expect(JSON.stringify(events)).not.toContain(r.body.temp_password);
+  await signIn(sa.phone_e164, r.body.temp_password); // the new password works
+  const again = await callSetup(request, TOKEN, { full_name: 'Again', phone: throwawayPhone() });
+  expect(again.status).toBe(403); // closed again while the new password is valid
+});
