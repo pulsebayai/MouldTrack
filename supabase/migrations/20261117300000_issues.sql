@@ -1113,6 +1113,217 @@ begin
 end
 $$;
 
+-- 9. Reads (step 4, D9) -------------------------------------------------------------------------------------------------------------------------------
+-- Read RPCs return jsonb like the write RPCs: {ok:true, ...} or the generic denial {ok:false, code:'not_allowed'} (audited as access.denied).
+-- Callers without a membership (a Super Admin, a stranger) go through app._pm_authorise (022); members through 05's app._sh_read_authorise.
+-- No tenant lock and no request id. p_at exists so tests can pass an explicit moment; it moves the clock for visibility, verification and ages.
+
+-- What the caller may do to an issue right now. The client renders only these; the RPCs enforce the same rules (the pgTAP file 043 pins the two).
+create function app._iss_allowed(p_issue uuid, p_user uuid, p_role text, p_at timestamptz)
+returns text[]
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  i public.machine_issue;
+  v_ua boolean := p_role = 'unit_admin';
+  v_owner boolean;
+  v_out text[] := array['note', 'photo'];
+begin
+  select * into i from public.machine_issue x where x.id = p_issue;
+  v_owner := i.accountable_owner_id is not distinct from p_user and p_role = 'supervisor';
+  if i.status = 'open' and (v_ua or v_owner) then v_out := array_append(v_out, 'start'); end if;
+  if i.status <> 'closed' and (v_ua or v_owner) then v_out := array_append(v_out, 'set_assignee'); end if;
+  if i.status in ('open', 'in_progress') and v_owner and i.escalated_at is null then v_out := array_append(v_out, 'escalate'); end if;
+  if v_ua and i.escalated_at is not null then v_out := array_append(v_out, 'ack_escalation'); end if;
+  if v_ua and i.status <> 'closed' then v_out := array_append(v_out, 'reassign'); end if;
+  if i.status in ('open', 'in_progress') and (v_ua or v_owner) then v_out := array_append(v_out, 'resolve'); end if;
+  if i.status = 'resolved' and app.issue_can_verify(p_issue, p_user, p_at) then v_out := array_append(v_out, 'verify'); end if;
+  if v_ua and i.status = 'closed' then v_out := array_append(v_out, 'reopen'); end if;
+  return v_out;
+end
+$$;
+
+-- The list row shared by issue_list and issue_alerts.
+create function app._iss_row(p_issue uuid, p_at timestamptz)
+returns jsonb
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select jsonb_build_object(
+    'id', i.id, 'machine_id', i.machine_id, 'machine_code', m.code, 'machine_name', m.name, 'category', c.name, 'category_id', i.category_id,
+    'priority', i.priority, 'status', i.status, 'machine_stopped', i.machine_stopped, 'escalated', i.escalated_at is not null,
+    'description', i.description, 'technical_assignee', i.technical_assignee,
+    'owner_id', i.accountable_owner_id, 'owner_name', o.full_name, 'needs_owner', i.accountable_owner_id is null,
+    'reported_by', i.reported_by, 'reported_by_name', r.full_name, 'reported_at', i.reported_at,
+    'resolved_at', i.resolved_at, 'closed_at', i.closed_at, 'resolution_notes', i.resolution_notes,
+    'age_minutes', greatest(0, floor(extract(epoch from (p_at - i.reported_at)) / 60))::int)
+  from public.machine_issue i
+  join public.machine m on m.id = i.machine_id
+  join public.issue_category c on c.id = i.category_id
+  left join public.membership o on o.user_id = i.accountable_owner_id
+  left join public.membership r on r.user_id = i.reported_by
+  where i.id = p_issue
+$$;
+
+create function public.issue_list(p_filters jsonb default '{}'::jsonb, p_page integer default 1, p_at timestamptz default now())
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:issue_list';
+  a jsonb;
+  v_tenant uuid;
+  v_uid uuid;
+  v_ua boolean;
+  f jsonb := coalesce(p_filters, '{}'::jsonb);
+  v_page int := greatest(coalesce(p_page, 1), 1);
+  v_status text := nullif(btrim(f->>'status'), '');
+  v_prio text := nullif(btrim(f->>'priority'), '');
+  v_cat uuid;
+  v_mach uuid;
+  v_esc boolean;
+  v_stop boolean;
+  v_need boolean;
+  v_total int;
+  v_items jsonb;
+begin
+  if not exists (select 1 from public.membership m where m.user_id = auth.uid()) then
+    return app._pm_authorise(null, c_src);
+  end if;
+  a := app._sh_read_authorise(c_src, false);
+  if not (a->>'ok')::boolean then return a; end if;
+  v_tenant := (a->>'tenant_id')::uuid;
+  v_uid := (a->>'actor')::uuid;
+  v_ua := a->>'role' = 'unit_admin';
+
+  if jsonb_typeof(f) <> 'object' then perform app._pm_fail('validation', 'Filters must be an object', 'filters'); end if;
+  begin
+    v_cat := nullif(f->>'category_id', '')::uuid;
+    v_mach := nullif(f->>'machine_id', '')::uuid;
+    v_esc := nullif(f->>'escalated', '')::boolean;
+    v_stop := nullif(f->>'stopped', '')::boolean;
+    v_need := nullif(f->>'needs_owner', '')::boolean;
+  exception when others then
+    perform app._pm_fail('validation', 'A filter value is not valid', 'filters');
+  end;
+  if v_status is not null and v_status not in ('open', 'in_progress', 'resolved', 'closed', 'not_closed') then
+    perform app._pm_fail('validation', 'Unknown status filter', 'status');
+  end if;
+  if v_prio is not null and v_prio not in ('low', 'medium', 'high', 'critical') then
+    perform app._pm_fail('validation', 'Unknown priority filter', 'priority');
+  end if;
+
+  with vis as (
+    select i.id, i.reported_at
+    from public.machine_issue i
+    where i.tenant_id = v_tenant
+      and (v_status is null or i.status = v_status or (v_status = 'not_closed' and i.status <> 'closed'))
+      and (v_prio is null or i.priority = v_prio)
+      and (v_cat is null or i.category_id = v_cat)
+      and (v_mach is null or i.machine_id = v_mach)
+      and (v_esc is null or (i.escalated_at is not null) = v_esc)
+      and (v_stop is null or i.machine_stopped = v_stop)
+      and (v_need is null or (i.accountable_owner_id is null) = v_need)
+      and (v_ua
+           or i.accountable_owner_id = v_uid or i.reported_by = v_uid
+           or exists (select 1 from app.machine_owner_now_src(i.machine_id, p_at) r where r.supervisor_id = v_uid)
+           or (i.status = 'resolved' and i.priority in ('high', 'critical') and app.issue_can_verify(i.id, v_uid, p_at)))
+  )
+  select (select count(*)::int from vis),
+         (select coalesce(jsonb_agg(app._iss_row(q.id, p_at) order by q.reported_at desc, q.id), '[]'::jsonb)
+            from (select v.id, v.reported_at from vis v order by v.reported_at desc, v.id limit 25 offset (v_page - 1) * 25) q)
+    into v_total, v_items;
+  return jsonb_build_object('ok', true, 'page', v_page, 'page_size', 25, 'total', v_total, 'items', v_items);
+end
+$$;
+
+create function public.issue_detail(p_id uuid, p_at timestamptz default now())
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:issue_detail';
+  a jsonb;
+  v_uid uuid;
+  v_own text;
+  v_actions jsonb;
+  v_owners jsonb;
+begin
+  if not exists (select 1 from public.membership m where m.user_id = auth.uid()) then
+    return app._pm_authorise(null, c_src);
+  end if;
+  a := app._sh_read_authorise(c_src, false);
+  if not (a->>'ok')::boolean then return a; end if;
+  v_uid := (a->>'actor')::uuid;
+  v_own := app._iss_owned('issue', p_id, (a->>'tenant_id')::uuid);
+  if v_own <> 'ok' then return app._pm_deny(a, v_own, 'machine_issue', p_id, c_src); end if;
+  if not app.can_see_issue(p_id, v_uid, p_at) then return app._pm_deny(a, 'not_visible', 'machine_issue', p_id, c_src); end if;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'id', x.id, 'type', x.type, 'at', x.at, 'actor_id', x.actor_id, 'actor_name', m.full_name, 'actor_role', x.actor_role,
+           'notes', x.notes, 'status_before', x.status_before, 'status_after', x.status_after,
+           'attachments', (select coalesce(jsonb_agg(jsonb_build_object('id', t.id, 'path', t.storage_path, 'mime', t.mime, 'size_bytes', t.size_bytes) order by t.ready_at), '[]'::jsonb)
+                           from public.attachment t where t.entity_type = 'issue_action' and t.entity_id = x.id and t.status = 'ready')) order by x.at, x.id), '[]'::jsonb)
+    into v_actions
+    from public.issue_action x left join public.membership m on m.user_id = x.actor_id
+   where x.issue_id = p_id;
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'at', h.at, 'source', h.source, 'reason', h.reason, 'previous_owner', h.previous_owner, 'previous_owner_name', po.full_name,
+           'new_owner', h.new_owner, 'new_owner_name', no.full_name, 'actor_id', h.actor_id, 'actor_name', am.full_name) order by h.at, h.id), '[]'::jsonb)
+    into v_owners
+    from public.issue_ownership_history h
+    left join public.membership po on po.user_id = h.previous_owner
+    left join public.membership no on no.user_id = h.new_owner
+    left join public.membership am on am.user_id = h.actor_id
+   where h.issue_id = p_id;
+
+  return jsonb_build_object('ok', true, 'issue', app._iss_row(p_id, p_at), 'actions', v_actions, 'ownership', v_owners,
+    'allowed_actions', to_jsonb(app._iss_allowed(p_id, v_uid, a->>'role', p_at)));
+end
+$$;
+
+-- AC-11: the Unit Admin's alerts (every not-closed High/Critical issue: stopped machines first, then Critical, then High, newest first) and the
+-- High/Critical issues closed in the last 7 days. Unit Admin only.
+create function public.issue_alerts(p_at timestamptz default now())
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:issue_alerts';
+  a jsonb;
+  v_tenant uuid;
+  v_alerts jsonb;
+  v_closed jsonb;
+begin
+  if not exists (select 1 from public.membership m where m.user_id = auth.uid()) then
+    return app._pm_authorise(null, c_src);
+  end if;
+  a := app._sh_read_authorise(c_src, true);
+  if not (a->>'ok')::boolean then return a; end if;
+  v_tenant := (a->>'tenant_id')::uuid;
+  select coalesce(jsonb_agg(app._iss_row(q.id, p_at) order by q.machine_stopped desc, (q.priority = 'critical') desc, q.reported_at desc, q.id), '[]'::jsonb) into v_alerts
+    from (select i.id, i.machine_stopped, i.priority, i.reported_at from public.machine_issue i
+           where i.tenant_id = v_tenant and i.status <> 'closed' and i.priority in ('high', 'critical')) q;
+  select coalesce(jsonb_agg(app._iss_row(q.id, p_at) || jsonb_build_object('resolved_by_name', rm.full_name, 'closed_by_name', cm.full_name) order by q.closed_at desc, q.id), '[]'::jsonb) into v_closed
+    from (select i.id, i.closed_at, i.resolved_by, i.closed_by from public.machine_issue i
+           where i.tenant_id = v_tenant and i.status = 'closed' and i.priority in ('high', 'critical') and i.closed_at > p_at - interval '7 days') q
+    left join public.membership rm on rm.user_id = q.resolved_by
+    left join public.membership cm on cm.user_id = q.closed_by;
+  return jsonb_build_object('ok', true, 'alert_count', jsonb_array_length(v_alerts), 'alerts', v_alerts, 'recently_closed', v_closed);
+end
+$$;
+
 -- 99. Function privileges: no app function is executable by clients (test 004); the public entry points are executable by authenticated only.
 -- (Repeated at the end of every step's section: each step adds functions, the loop is re-run over the whole 07 name range.)
 do $$
