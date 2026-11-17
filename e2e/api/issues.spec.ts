@@ -149,19 +149,25 @@ test.describe('Who can read a photo (AC-11, AC-13)', () => {
   });
 });
 
-test.describe('A user who loses access stops reading photos at once (R3)', () => {
-  test('a deactivated supervisor, with a token still valid, cannot download', async () => {
+test.describe('A user who loses access gets no new photo and no issue data (R3, D14)', () => {
+  // D14: hosted Storage's CDN caches an authenticated download per user until the JWT expires, so a re-fetch of an object the user already
+  // downloaded is not asserted. A photo they never fetched, and all issue data, are refused at once.
+  test('a deactivated supervisor, with a token still valid, cannot download a photo they never fetched', async () => {
     const issueId = (await report(w.running.session)).data.id as string;
-    const { begin } = await addPhoto(w.running.session, issueId);
-    await w.running.session.client.rpc('iss_attachment_commit', { p_request_id: uuid(), p_attachment_id: begin.id });
-    // The idle supervisor becomes the owner, reads the photo, is then deactivated (service role, like the user-admin function's membership change).
+    const first = (await addPhoto(w.running.session, issueId)).begin;
+    await w.running.session.client.rpc('iss_attachment_commit', { p_request_id: uuid(), p_attachment_id: first.id });
+    const second = (await addPhoto(w.running.session, issueId)).begin;
+    await w.running.session.client.rpc('iss_attachment_commit', { p_request_id: uuid(), p_attachment_id: second.id });
+    // The idle supervisor becomes the owner and reads the first photo (control: access works), never the second.
     expect((await w.ua.client.rpc('iss_reassign', { p_request_id: uuid(), p_issue_id: issueId, p_new_owner: w.idle.session.userId, p_reason: 'E2E R3' })).data).toMatchObject({ ok: true });
-    expect((await w.idle.session.client.storage.from('attachments').download(begin.path)).error).toBeNull();
+    expect((await w.idle.session.client.rpc('issue_detail', { p_id: issueId })).data).toMatchObject({ ok: true });
+    expect((await w.idle.session.client.storage.from('attachments').download(first.path)).error).toBeNull();
     try {
       const off = await service().from('membership').update({ status: 'inactive' }).eq('user_id', w.idle.session.userId).select('user_id');
       expect(off.error).toBeNull();
-      expect((await w.idle.session.client.storage.from('attachments').download(begin.path)).error).not.toBeNull();
+      expect((await w.idle.session.client.storage.from('attachments').download(second.path)).error).not.toBeNull();
       expect((await w.idle.session.client.rpc('issue_detail', { p_id: issueId })).data).toEqual(DENIED);
+      expect((await w.idle.session.client.rpc('issue_list', { p_filters: {}, p_page: 1 })).data).toEqual(DENIED);
     } finally {
       await service().from('membership').update({ status: 'active' }).eq('user_id', w.idle.session.userId);
     }
