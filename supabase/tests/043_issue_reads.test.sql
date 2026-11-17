@@ -4,7 +4,7 @@
 -- Clock (D10): tenant X has shift R running now and shift N starting ~3.5 h ahead, built from the current time; reads take explicit moments.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(98);
+select plan(99);
 
 create temp table ids (k text primary key, v uuid);
 create function pg_temp.id(k text) returns uuid language sql as $$ select v from ids where k = $1 $$;
