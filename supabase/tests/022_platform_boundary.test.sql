@@ -3,7 +3,7 @@
 -- added by a later feature fails this test until it is covered. Self-contained; rolled back. Phones +91 90000 22xxx.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(43);
+select plan(37);
 
 insert into auth.users (id, email, aud, role) values
   ('00000000-0000-4000-ba00-0000000000a1', 'tap22-sa@example.test', 'authenticated', 'authenticated'),
@@ -103,20 +103,31 @@ select results_eq($$ select actor_role, reason, tenant_id is null from public.au
   $$ values ('platform_admin'::text, 'platform_admin'::text, true), ('platform_admin'::text, 'platform_admin'::text, true), ('platform_admin'::text, 'platform_admin'::text, true) $$,
   'each is audited with actor role platform_admin (so it shows in the platform audit)');
 
--- 04's pm_* write paths deny and audit an SA (AC-11, step 8): _pm_authorise has the same SA branch as _ua_authorise -----------------------------
-select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname like 'pm\_%'), 9,
-  'there are exactly 9 pm_* functions (a new one fails here until this section covers it)');
+-- Tenant write RPCs deny and audit an SA (AC-11, F3): DISCOVERED, not listed. Every public function that is security definer, returns jsonb, is executable by
+-- `authenticated` and is not a pa_* platform function is a tenant write path (04's pm_*, and whatever later features add). Each is called as the SA with
+-- all-null arguments and must return the generic denial; a new one is covered automatically, and its body must go through a shared authorise helper.
+create function public.tap22_rpcs() returns table (proname text, args text, src text) language sql stable as $$
+  select p.proname::text, (select string_agg('null::' || format_type(t.oid, null), ', ' order by t.o) from unnest(p.proargtypes::oid[]) with ordinality as t(oid, o)), p.prosrc
+  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+  where n.nspname = 'public' and p.prosecdef and p.prorettype = 'jsonb'::regtype and has_function_privilege('authenticated', p.oid, 'execute') and p.proname !~ '^pa_'
+$$;
+create function public.tap22_denied_count() returns int language plpgsql as $$
+declare r record; res jsonb; n int := 0;
+begin
+  for r in select * from public.tap22_rpcs() loop
+    execute format('select public.%I(%s)', r.proname, coalesce(r.args, '')) into res;
+    if res = '{"ok": false, "code": "not_allowed"}'::jsonb then n := n + 1; end if;
+  end loop;
+  return n;
+end $$;
+grant execute on function public.tap22_rpcs(), public.tap22_denied_count() to authenticated;
+
+select ok((select count(*) from public.tap22_rpcs()) >= 9, 'discovery finds the tenant write RPCs (04''s nine pm_* at least)');
+select is((select count(*)::int from public.tap22_rpcs() where src not like '%app._pm_authorise(%' and src not like '%app._ua_authorise(%'), 0,
+  'every discovered RPC body calls app._pm_authorise( or app._ua_authorise( (the helpers with the Super Admin branch)');
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-ba00-0000000000a1","role":"authenticated"}', true);
-select is(public.pm_save_site(gen_random_uuid(), 'SA site', 'Asia/Kolkata'), '{"ok": false, "code": "not_allowed"}'::jsonb, 'pm_save_site denies an SA');
-select is(public.pm_save_line(gen_random_uuid(), null, 'SA line'), '{"ok": false, "code": "not_allowed"}'::jsonb, 'pm_save_line denies an SA');
-select is(public.pm_archive_line(gen_random_uuid(), '5e000000-0000-4000-ba00-000000000002'), '{"ok": false, "code": "not_allowed"}'::jsonb, 'pm_archive_line denies an SA');
-select is(public.pm_save_machine(gen_random_uuid(), null, 'SA-M', 'SA machine', null, null, null, null, null, 'active'), '{"ok": false, "code": "not_allowed"}'::jsonb, 'pm_save_machine denies an SA');
-select is(public.pm_set_machine_retired(gen_random_uuid(), '5e000000-0000-4000-ba00-000000000003', true), '{"ok": false, "code": "not_allowed"}'::jsonb, 'pm_set_machine_retired denies an SA');
-select is(public.pm_save_product(gen_random_uuid(), null, 'SA-P', 'SA product', 'pcs'), '{"ok": false, "code": "not_allowed"}'::jsonb, 'pm_save_product denies an SA');
-select is(public.pm_set_product_retired(gen_random_uuid(), '5e000000-0000-4000-ba00-000000000004', true), '{"ok": false, "code": "not_allowed"}'::jsonb, 'pm_set_product_retired denies an SA');
-select is(public.pm_set_target(gen_random_uuid(), '5e000000-0000-4000-ba00-000000000003', '5e000000-0000-4000-ba00-000000000004', 5, current_date + 1), '{"ok": false, "code": "not_allowed"}'::jsonb, 'pm_set_target denies an SA');
-select is(public.pm_end_target(gen_random_uuid(), '5e000000-0000-4000-ba00-000000000003', '5e000000-0000-4000-ba00-000000000004', current_date), '{"ok": false, "code": "not_allowed"}'::jsonb, 'pm_end_target denies an SA');
+select is(public.tap22_denied_count(), (select count(*)::int from public.tap22_rpcs()), 'every discovered tenant write RPC denies an SA with all-null arguments');
 select set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-ba00-0000000000a2","role":"authenticated"}', true);
 select is(public.pm_save_site(gen_random_uuid(), 'SA site', 'Asia/Kolkata'), '{"ok": false, "code": "not_allowed"}'::jsonb, 'an inactive SA is denied by pm_* as well');
 reset role;
@@ -124,21 +135,19 @@ select results_eq($$ select (select count(*) from public.site where tenant_id = 
                           (select count(*) from public.machine where tenant_id = '1f000000-0000-4000-ba00-00000000000a' and retired_at is null),
                           (select count(*) from public.product where tenant_id = '1f000000-0000-4000-ba00-00000000000a' and retired_at is null),
                           (select count(*) from public.target_version where tenant_id = '1f000000-0000-4000-ba00-00000000000a') $$,
-  $$ values (1::bigint, 1::bigint, 1::bigint, 1::bigint, 1::bigint) $$, 'the denied pm_* calls changed nothing');
-select results_eq($$ select source, actor_role, reason, tenant_id is null from public.audit_event
-                     where action = 'access.denied' and actor_user_id = '00000000-0000-4000-ba00-0000000000a1' and source like 'rpc:pm\_%' order by source $$,
-  $$ values ('rpc:pm_archive_line'::text, 'platform_admin'::text, 'platform_admin'::text, true), ('rpc:pm_end_target', 'platform_admin', 'platform_admin', true),
-            ('rpc:pm_save_line', 'platform_admin', 'platform_admin', true), ('rpc:pm_save_machine', 'platform_admin', 'platform_admin', true),
-            ('rpc:pm_save_product', 'platform_admin', 'platform_admin', true), ('rpc:pm_save_site', 'platform_admin', 'platform_admin', true),
-            ('rpc:pm_set_machine_retired', 'platform_admin', 'platform_admin', true), ('rpc:pm_set_product_retired', 'platform_admin', 'platform_admin', true),
-            ('rpc:pm_set_target', 'platform_admin', 'platform_admin', true) $$,
-  'each pm_* denial is audited with actor role platform_admin and an SA-specific reason');
+  $$ values (1::bigint, 1::bigint, 1::bigint, 1::bigint, 1::bigint) $$, 'the denied calls changed nothing');
+select is((select count(*)::int from public.audit_event where action = 'access.denied' and actor_user_id = '00000000-0000-4000-ba00-0000000000a1' and actor_role = 'platform_admin'
+             and reason = 'platform_admin' and tenant_id is null and source in (select 'rpc:' || proname from public.tap22_rpcs())), (select count(*)::int from public.tap22_rpcs()),
+  'each denial is audited with actor role platform_admin and an SA-specific reason (one row per discovered RPC)');
+select is((select count(distinct source)::int from public.audit_event where action = 'access.denied' and actor_user_id = '00000000-0000-4000-ba00-0000000000a1' and source in (select 'rpc:' || proname from public.tap22_rpcs())),
+  (select count(*)::int from public.tap22_rpcs()), 'and every discovered RPC left its own row');
 select is((select count(*)::int from public.audit_event where action = 'access.denied' and actor_user_id = '00000000-0000-4000-ba00-0000000000a2' and source = 'rpc:pm_save_site' and actor_role = 'platform_admin'), 1,
   'the inactive SA''s pm_* denial is audited as a platform event too');
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-ba00-0000000000a1","role":"authenticated"}', true);
-select is((select count(*)::int from public.pa_audit(0) where action = 'access.denied' and source like 'rpc:pm\_%'), 10, 'the platform audit lists the pm_* denials of both SAs (pa_audit)');
-select is((select count(*)::int from public.pa_audit(0) where action = 'access.denied' and source like 'rpc:pm\_%' and tenant_name is not null), 0, 'and they carry no tenant (an SA has none)');
+select is((select count(*)::int from public.pa_audit(0) where action = 'access.denied' and source in (select 'rpc:' || proname from public.tap22_rpcs())), (select count(*)::int from public.tap22_rpcs()) + 1,
+  'the platform audit lists them: one per discovered RPC plus the inactive SA''s (pa_audit)');
+select is((select count(*)::int from public.pa_audit(0) where action = 'access.denied' and source in (select 'rpc:' || proname from public.tap22_rpcs()) and tenant_name is not null), 0, 'and they carry no tenant (an SA has none)');
 reset role;
 select is(
   (select count(*)::int from public.audit_event where action = 'access.denied' and reason = 'no_membership' and actor_user_id = '00000000-0000-4000-ba00-0000000000a1'), 0,
