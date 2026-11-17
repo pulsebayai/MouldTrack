@@ -58,7 +58,7 @@ Locks: **architecture: 07** (attachments/Storage model). Schema: 07's tables + S
   - Proof: CI green on PR #16.
 - [x] 8. **Hosted proof (dev).** temporary dev-only triggers; deploy-dev (migration incl. bucket) + regression (web incl. api, Android incl. `report-issue.yaml`, hosted-checks + new bucket check, drift); remove triggers; green PR CI. — proof: run URLs
 - [x] 9. **Docs (lock).** architecture.md per D13; releases README: real-phone photo check on the R1 checklist. — proof: docs diff
-- [ ] 10. **Review + PR.** sdlc-reviewer (focus Storage policies, verify eligibility, visibility matrix), fixes, AC table. — proof: PR CI green
+- [x] 10. **Review + PR.** sdlc-reviewer (focus Storage policies, verify eligibility, visibility matrix), fixes, AC table. — proof: PR CI green
 
 ## Risks
 - **Storage RLS** (new): dedicated pgTAP 042 + API tests over real Storage + hosted bucket check.
@@ -132,3 +132,7 @@ AC-1–16 → tests (spec table, with D8's Android scope); full suite green; dev
 - Final proof, head 136c352: deploy-dev run 44131104171 success (07 migration + bucket on dev). Regression run 44131103899: setup success, drift success, web success (143 passed, 6 skipped, 0 failed, incl. api project and the 07 specs), hosted-checks success (9/9 incl. the bucket check), android success (7/7 flows incl. report-issue 1m10s and sign-in), evidence success, notify skipped. PR CI on 136c352 success (run 44131104083).
 - Deviations: see "Step 8 / D16 implementation" and the D14 test change above; the single re-run of 44119023893 was a deliberate re-run for hosted-dev 503/timeouts in unrelated tests (not a retry of 07 code), and it still failed, which led to D16.
 - Blockers: none. Steps 9-10 not started.
+
+### 2026-11-17 (Opus, steps 9–10)
+- Done: architecture.md updated under the lock (05 + 07 flags); R1 checklist gains the real-phone photo check. sdlc-reviewer (6 Important + 15 nits → 7a), hosted findings D14–D16. Final proof: regression 44131103899 (web 143, hosted-checks 9/9, Android 7/7, drift); last code commit 31bcdc6 PR CI 44138191766 green. PR #16 ready.
+- Next: owner merges → roadmap 07 shipped, release architecture lock; 06 rebases (its step 6).
