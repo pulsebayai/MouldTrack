@@ -1,5 +1,5 @@
 # Plan: Issue lifecycle
-Spec: ./spec.md · Status: draft · Date: 2026-11-17
+Spec: ./spec.md · Status: approved · Date: 2026-11-17
 Locks: **architecture: 07** (attachments/Storage model). Schema: 07's tables + Storage bucket (05 has shipped, so no split is needed unless 06 starts in parallel — then split with 06, logged). Branch is on main incl. 01–05.
 
 ## Decisions (Opus)
