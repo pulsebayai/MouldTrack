@@ -95,7 +95,6 @@ create table public.issue_action (
   constraint issue_action_issue_fk foreign key (tenant_id, issue_id) references public.machine_issue (tenant_id, id) on delete restrict
 );
 create index issue_action_issue_idx on public.issue_action (issue_id, at);
-create unique index issue_action_actor_request_key on public.issue_action (actor_id, request_id) where request_id is not null;
 
 -- Append-only accountable-owner history. source: report | reassign | verification_rejected | handover (08).
 create table public.issue_ownership_history (
@@ -263,6 +262,697 @@ $$;
 create trigger tenant_issue_categories after insert on public.tenant for each row execute function app.issue_tenant_seed();
 select app.issue_seed_categories(t.id) from public.tenant t;
 
+-- 6. Authorisation and lookup helpers (step 2) --------------------------------------------------------------------------------------
+-- Same contract as 04's _pm_authorise (per-tenant row lock first, idempotency by request id + source, generic audited denial) but any active
+-- member passes unless p_ua_only. The iss_* RPCs call app._pm_authorise( first for callers without a membership (a Super Admin, a stranger), so
+-- that denial rule lives in one place and 022's static check holds.
+create function app._iss_authorise(p_request_id uuid, p_source text, p_ua_only boolean)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_actor uuid := auth.uid();
+  v_tenant uuid;
+  a record;
+  v_reason text;
+  v_done uuid;
+begin
+  select m.tenant_id into v_tenant from public.membership m where m.user_id = v_actor;
+  if v_tenant is not null then
+    perform 1 from public.tenant t where t.id = v_tenant for no key update;
+  end if;
+  select m.tenant_id, m.role, m.status, m.must_change_password, t.status as tenant_status
+    into a
+    from public.membership m join public.tenant t on t.id = m.tenant_id
+    where m.user_id = v_actor;
+  if not found then
+    v_reason := 'no_membership';
+  elsif a.status <> 'active' or a.tenant_status <> 'active' then
+    v_reason := 'inactive';
+  elsif a.must_change_password then
+    v_reason := 'must_change_password';
+  elsif p_ua_only and a.role <> 'unit_admin' then
+    v_reason := 'role';
+  end if;
+  if v_reason is not null then
+    perform app.audit_denied(v_actor, v_tenant, a.role::text, v_reason, null, null, p_source);
+    return jsonb_build_object('ok', false, 'code', 'not_allowed');
+  end if;
+  if p_request_id is null then
+    perform app._pm_fail('validation', 'A request id is required', 'request_id');
+  end if;
+  select e.entity_id into v_done from public.audit_event e where e.actor_user_id = v_actor and e.request_id = p_request_id and e.source = p_source;
+  return jsonb_build_object('ok', true, 'tenant_id', a.tenant_id, 'actor', v_actor, 'role', a.role, 'done', v_done);
+end
+$$;
+
+-- 'ok' when the row exists in the caller's tenant, else 'cross_tenant' (exists elsewhere) or 'not_found'. kind: issue | category.
+create function app._iss_owned(p_kind text, p_id uuid, p_tenant uuid)
+returns text
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_tenant uuid;
+begin
+  if p_id is null then return 'not_found'; end if;
+  if p_kind = 'issue' then select i.tenant_id into v_tenant from public.machine_issue i where i.id = p_id;
+  elsif p_kind = 'category' then select c.tenant_id into v_tenant from public.issue_category c where c.id = p_id;
+  else raise exception 'unknown kind %', p_kind; end if;
+  if v_tenant is null then return 'not_found'; end if;
+  if v_tenant <> p_tenant then return 'cross_tenant'; end if;
+  return 'ok';
+end
+$$;
+
+-- The user when they are an active supervisor (not waiting for a password change), else null. Inactive owners count as "nobody".
+create function app._iss_active_sup(p_user uuid)
+returns uuid
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select m.user_id from public.membership m
+  where m.user_id = p_user and m.role = 'supervisor' and m.status = 'active' and m.must_change_password = false
+$$;
+
+-- D3: the running occurrences of any shift for a machine (earliest-started first) with the active supervisor who owns it there (null = unassigned).
+-- Caller's tenant only (service role: any), like app.current_occurrences.
+create function app.machine_owner_now_src(p_machine uuid, p_at timestamptz default now())
+returns table (shift_id uuid, shift_date date, supervisor_id uuid, started_at timestamptz)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select o.shift_id, o.shift_date, app._iss_active_sup(app.machine_owner(p_machine, o.shift_id, o.shift_date)), lower(o.span)
+  from app.current_occurrences(p_at) o
+  where exists (select 1 from public.machine m where m.id = p_machine and m.tenant_id = o.tenant_id)
+  order by lower(o.span), o.shift_id
+$$;
+
+-- The owner of a machine now = the owner in the earliest-started running occurrence (null when none runs or it is unassigned).
+create function app.machine_owner_now(p_machine uuid, p_at timestamptz default now())
+returns uuid
+language sql
+stable
+security definer
+set search_path = ''
+as $$ select r.supervisor_id from app.machine_owner_now_src(p_machine, p_at) r limit 1 $$;
+
+-- The occurrence to record on an issue for a user: a running one in which they own the machine, else the earliest-started running one (null, null if none).
+create function app._iss_occurrence(p_machine uuid, p_user uuid, p_at timestamptz)
+returns table (shift_id uuid, shift_date date)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select r.shift_id, r.shift_date from app.machine_owner_now_src(p_machine, p_at) r
+  order by (r.supervisor_id is not distinct from p_user) desc, r.started_at, r.shift_id
+  limit 1
+$$;
+
+-- D4: may this user verify the issue now? Pure (explicit p_at). status resolved + priority high/critical, and
+--  - a supervisor: owns the machine in an occurrence that started after the resolve time (running counts) and is not the resolver;
+--  - a Unit Admin: only when no active supervisor is assigned to the machine in the first occurrence of EVERY shift that starts after the resolve time.
+-- Retired shifts are ignored. Occurrences are read through app.shift_window, so the caller's tenant (or the service role) applies.
+create function app.issue_can_verify(p_issue uuid, p_user uuid, p_at timestamptz default now())
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  i public.machine_issue;
+  mem record;
+  v_from date;
+  v_to date;
+begin
+  select * into i from public.machine_issue x where x.id = p_issue;
+  if not found or i.status <> 'resolved' or i.priority not in ('high', 'critical') or i.resolved_at is null then return false; end if;
+  select m.role, m.status, m.must_change_password into mem from public.membership m where m.user_id = p_user and m.tenant_id = i.tenant_id;
+  if not found or mem.status <> 'active' or mem.must_change_password then return false; end if;
+  v_from := app.plant_date_at(i.tenant_id, i.resolved_at) - 1;
+  v_to := greatest(app.plant_date_at(i.tenant_id, p_at), v_from);
+  if mem.role = 'supervisor' then
+    if p_user = i.resolved_by then return false; end if;
+    return exists (
+      select 1
+      from public.shift s
+      cross join lateral generate_series(0, v_to - v_from) as g(n)
+      cross join lateral (select app.shift_window(s.id, v_from + g.n) as w) x
+      where s.tenant_id = i.tenant_id and s.retired_at is null
+        and lower(x.w) > i.resolved_at and lower(x.w) <= p_at
+        and app._iss_active_sup(app.machine_owner(i.machine_id, s.id, v_from + g.n)) = p_user);
+  end if;
+  if mem.role <> 'unit_admin' then return false; end if;
+  return not exists (
+    select 1
+    from public.shift s
+    cross join lateral (
+      select min(v_from + g.n) as d
+      from generate_series(0, v_to - v_from + 3) as g(n)
+      where lower(app.shift_window(s.id, v_from + g.n)) > i.resolved_at
+    ) f
+    where s.tenant_id = i.tenant_id and s.retired_at is null and f.d is not null
+      and app._iss_active_sup(app.machine_owner(i.machine_id, s.id, f.d)) is not null);
+end
+$$;
+
+-- FR-4: may this user (default: the caller) see the issue? A Unit Admin sees every issue of the tenant; a supervisor the issues they are accountable
+-- for or reported, issues on a machine they own now, and issues awaiting their verification. Nobody else (a Super Admin never).
+create function app.can_see_issue(p_issue uuid, p_user uuid default null, p_at timestamptz default now())
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  u uuid := coalesce(p_user, auth.uid());
+  i public.machine_issue;
+  mem record;
+begin
+  select * into i from public.machine_issue x where x.id = p_issue;
+  if not found then return false; end if;
+  select m.role, m.status, m.must_change_password, t.status as tenant_status into mem
+    from public.membership m join public.tenant t on t.id = m.tenant_id
+    where m.user_id = u and m.tenant_id = i.tenant_id;
+  if not found or mem.status <> 'active' or mem.tenant_status <> 'active' or mem.must_change_password then return false; end if;
+  if mem.role = 'unit_admin' then return true; end if;
+  if mem.role <> 'supervisor' then return false; end if;
+  return i.accountable_owner_id = u or i.reported_by = u
+      or exists (select 1 from app.machine_owner_now_src(i.machine_id, p_at) r where r.supervisor_id = u)
+      or app.issue_can_verify(p_issue, u, p_at);
+end
+$$;
+
+-- FR-4: the open issues of a machine (not closed), for 08's carry-forward and 06's context. Caller's tenant only (service role: any).
+create function app.issue_open_for_machine(p_machine uuid)
+returns setof uuid
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select i.id from public.machine_issue i
+  where i.machine_id = p_machine and i.status <> 'closed'
+    and (auth.role() = 'service_role' or i.tenant_id = app.current_tenant_id())
+  order by i.reported_at
+$$;
+
+-- 7. Write RPCs (step 2, D2) ---------------------------------------------------------------------------------------------------------------
+-- public.iss_*: security definer, executable by authenticated. Each authorises first (a caller without a membership goes through
+-- app._pm_authorise, which audits the denial; members go through app._iss_authorise), validates, writes and audits in one transaction.
+-- Authorisation failures COMMIT an access.denied row and RETURN {ok:false, code:'not_allowed'}; validation / guard / duplicate failures RAISE P0001
+-- with detail {code, field?}. Success returns {ok:true, id, ...}. Time: write RPCs use now() (05's rule).
+
+create function public.iss_report(
+  p_request_id uuid, p_machine_id uuid, p_category_id uuid, p_priority text, p_description text, p_machine_stopped boolean
+) returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:iss_report';
+  a jsonb;
+  v_tenant uuid;
+  v_actor uuid;
+  v_own text;
+  v_desc text := btrim(p_description);
+  v_prio text := lower(btrim(p_priority));
+  v_owner uuid;
+  v_shift uuid;
+  v_date date;
+  v_cat public.issue_category;
+  v_machine public.machine;
+  v_id uuid;
+begin
+  if not exists (select 1 from public.membership m where m.user_id = auth.uid()) then
+    return app._pm_authorise(p_request_id, c_src);
+  end if;
+  a := app._iss_authorise(p_request_id, c_src, false);
+  if not (a->>'ok')::boolean then return a; end if;
+  if a->>'done' is not null then return jsonb_build_object('ok', true, 'id', (a->>'done')::uuid, 'already', true); end if;
+  v_tenant := (a->>'tenant_id')::uuid;
+  v_actor := (a->>'actor')::uuid;
+
+  v_own := app._pm_owned('machine', p_machine_id, v_tenant);
+  if v_own <> 'ok' then return app._pm_deny(a, v_own, 'machine', p_machine_id, c_src); end if;
+  v_own := app._iss_owned('category', p_category_id, v_tenant);
+  if v_own <> 'ok' then return app._pm_deny(a, v_own, 'issue_category', p_category_id, c_src); end if;
+
+  perform app._pm_len(v_desc, 1, 1000, 'description', 'Describe the problem in 1 to 1000 characters');
+  if p_machine_stopped is null then perform app._pm_fail('validation', 'Say whether the machine is stopped', 'machine_stopped'); end if;
+  if p_machine_stopped then
+    v_prio := 'critical'; -- a stopped machine is always Critical (owner)
+  elsif v_prio is null or v_prio not in ('low', 'medium', 'high', 'critical') then
+    perform app._pm_fail('validation', 'Choose Low, Medium, High or Critical', 'priority');
+  end if;
+  select * into v_machine from public.machine m where m.id = p_machine_id;
+  if v_machine.retired_at is not null then perform app._pm_fail('guard', 'This machine is retired', 'machine_id'); end if;
+  select * into v_cat from public.issue_category c where c.id = p_category_id;
+  if v_cat.retired_at is not null then perform app._pm_fail('guard', 'This category is retired', 'category_id'); end if;
+
+  -- AC-2: a supervisor who owns the machine now is accountable; otherwise the machine's owner now; otherwise the reporter if a supervisor, else nobody.
+  select o.shift_id, o.shift_date into v_shift, v_date from app._iss_occurrence(p_machine_id, v_actor, now()) o;
+  if a->>'role' = 'supervisor' and exists (select 1 from app.machine_owner_now_src(p_machine_id, now()) r where r.supervisor_id = v_actor) then
+    v_owner := v_actor;
+  else
+    v_owner := app.machine_owner_now(p_machine_id, now());
+    if v_owner is null and a->>'role' = 'supervisor' then v_owner := v_actor; end if;
+  end if;
+
+  insert into public.machine_issue (tenant_id, machine_id, category_id, priority, description, machine_stopped, accountable_owner_id,
+                                    reported_by, reported_shift_id, reported_shift_date)
+  values (v_tenant, p_machine_id, p_category_id, v_prio, v_desc, p_machine_stopped, v_owner, v_actor, v_shift, v_date)
+  returning id into v_id;
+  insert into public.issue_action (tenant_id, issue_id, actor_id, actor_role, type, status_after, request_id)
+  values (v_tenant, v_id, v_actor, a->>'role', 'report', 'open', p_request_id);
+  insert into public.issue_ownership_history (tenant_id, issue_id, previous_owner, new_owner, source, actor_id)
+  values (v_tenant, v_id, null, v_owner, 'report', v_actor);
+  perform app._pm_audit(a, 'issue.reported', 'machine_issue', v_id, null,
+    jsonb_build_object('machine_code', v_machine.code, 'category', v_cat.name, 'priority', v_prio, 'machine_stopped', p_machine_stopped, 'owner_id', v_owner),
+    p_request_id, c_src);
+  return jsonb_build_object('ok', true, 'id', v_id, 'priority', v_prio, 'owner_id', v_owner);
+end
+$$;
+
+-- Shared prelude of the actions on an existing issue (the caller has already routed non-members to app._pm_authorise). Returns the authorisation result; when it is ok, the issue row is the caller's (a foreign or
+-- unknown id gives the generic audited denial). p_mode: any (a member who can see it) | owner (accountable owner or Unit Admin) | owner_only | ua.
+create function app._iss_act(p_request_id uuid, p_source text, p_issue uuid, p_mode text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  a jsonb;
+  v_own text;
+  i public.machine_issue;
+begin
+  a := app._iss_authorise(p_request_id, p_source, p_mode = 'ua');
+  if not (a->>'ok')::boolean then return a; end if;
+  if a->>'done' is not null then return jsonb_build_object('ok', true, 'id', (a->>'done')::uuid, 'already', true, 'replay', true); end if;
+  v_own := app._iss_owned('issue', p_issue, (a->>'tenant_id')::uuid);
+  if v_own <> 'ok' then return app._pm_deny(a, v_own, 'machine_issue', p_issue, p_source); end if;
+  select * into i from public.machine_issue x where x.id = p_issue;
+  if p_mode = 'any' and not app.can_see_issue(p_issue, (a->>'actor')::uuid) then
+    return app._pm_deny(a, 'not_visible', 'machine_issue', p_issue, p_source);
+  elsif p_mode = 'owner' and a->>'role' <> 'unit_admin' and i.accountable_owner_id is distinct from (a->>'actor')::uuid then
+    return app._pm_deny(a, 'not_owner', 'machine_issue', p_issue, p_source);
+  elsif p_mode = 'owner_only' and (a->>'role' <> 'supervisor' or i.accountable_owner_id is distinct from (a->>'actor')::uuid) then
+    return app._pm_deny(a, 'not_owner', 'machine_issue', p_issue, p_source);
+  end if;
+  return a;
+end
+$$;
+
+create function public.iss_note(p_request_id uuid, p_issue_id uuid, p_notes text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:iss_note';
+  a jsonb;
+  v_notes text := btrim(p_notes);
+  i public.machine_issue;
+begin
+  if not exists (select 1 from public.membership m where m.user_id = auth.uid()) then
+    return app._pm_authorise(p_request_id, c_src);
+  end if;
+  a := app._iss_act(p_request_id, c_src, p_issue_id, 'any');
+  if not (a->>'ok')::boolean or a ? 'replay' then return a - 'replay'; end if;
+  perform app._pm_len(v_notes, 1, 1000, 'notes', 'Enter a note of 1 to 1000 characters');
+  select * into i from public.machine_issue x where x.id = p_issue_id;
+  insert into public.issue_action (tenant_id, issue_id, actor_id, actor_role, type, notes, status_before, status_after, request_id)
+  values (i.tenant_id, i.id, (a->>'actor')::uuid, a->>'role', 'note', v_notes, i.status, i.status, p_request_id);
+  perform app._pm_audit(a, 'issue.noted', 'machine_issue', i.id, null, jsonb_build_object('status', i.status), p_request_id, c_src);
+  return jsonb_build_object('ok', true, 'id', i.id);
+end
+$$;
+
+create function public.iss_start(p_request_id uuid, p_issue_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:iss_start';
+  a jsonb;
+  i public.machine_issue;
+begin
+  if not exists (select 1 from public.membership m where m.user_id = auth.uid()) then
+    return app._pm_authorise(p_request_id, c_src);
+  end if;
+  a := app._iss_act(p_request_id, c_src, p_issue_id, 'owner');
+  if not (a->>'ok')::boolean or a ? 'replay' then return a - 'replay'; end if;
+  select * into i from public.machine_issue x where x.id = p_issue_id;
+  if i.status <> 'open' then perform app._pm_fail('guard', 'Only an open issue can be started', 'invalid_status'); end if;
+  update public.machine_issue x set status = 'in_progress', updated_at = now() where x.id = i.id;
+  insert into public.issue_action (tenant_id, issue_id, actor_id, actor_role, type, status_before, status_after, request_id)
+  values (i.tenant_id, i.id, (a->>'actor')::uuid, a->>'role', 'start', 'open', 'in_progress', p_request_id);
+  perform app._pm_audit(a, 'issue.started', 'machine_issue', i.id, jsonb_build_object('status', 'open'), jsonb_build_object('status', 'in_progress'), p_request_id, c_src);
+  return jsonb_build_object('ok', true, 'id', i.id);
+end
+$$;
+
+create function public.iss_set_assignee(p_request_id uuid, p_issue_id uuid, p_assignee text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:iss_set_assignee';
+  a jsonb;
+  v_name text := btrim(p_assignee);
+  i public.machine_issue;
+begin
+  if not exists (select 1 from public.membership m where m.user_id = auth.uid()) then
+    return app._pm_authorise(p_request_id, c_src);
+  end if;
+  a := app._iss_act(p_request_id, c_src, p_issue_id, 'owner');
+  if not (a->>'ok')::boolean or a ? 'replay' then return a - 'replay'; end if;
+  perform app._pm_len(v_name, 1, 80, 'assignee', 'Enter who is fixing it, up to 80 characters');
+  select * into i from public.machine_issue x where x.id = p_issue_id;
+  if i.status = 'closed' then perform app._pm_fail('guard', 'This issue is closed', 'invalid_status'); end if;
+  update public.machine_issue x set technical_assignee = v_name, updated_at = now() where x.id = i.id;
+  insert into public.issue_action (tenant_id, issue_id, actor_id, actor_role, type, notes, status_before, status_after, request_id)
+  values (i.tenant_id, i.id, (a->>'actor')::uuid, a->>'role', 'assignee', v_name, i.status, i.status, p_request_id);
+  perform app._pm_audit(a, 'issue.assignee_set', 'machine_issue', i.id, jsonb_build_object('assignee', i.technical_assignee), jsonb_build_object('assignee', v_name), p_request_id, c_src);
+  return jsonb_build_object('ok', true, 'id', i.id);
+end
+$$;
+
+create function public.iss_escalate(p_request_id uuid, p_issue_id uuid, p_reason text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:iss_escalate';
+  a jsonb;
+  v_reason text := btrim(p_reason);
+  i public.machine_issue;
+begin
+  if not exists (select 1 from public.membership m where m.user_id = auth.uid()) then
+    return app._pm_authorise(p_request_id, c_src);
+  end if;
+  a := app._iss_act(p_request_id, c_src, p_issue_id, 'owner_only');
+  if not (a->>'ok')::boolean or a ? 'replay' then return a - 'replay'; end if;
+  perform app._pm_len(v_reason, 1, 200, 'reason', 'Enter a reason of 1 to 200 characters');
+  select * into i from public.machine_issue x where x.id = p_issue_id;
+  if i.status not in ('open', 'in_progress') then perform app._pm_fail('guard', 'Only an open issue can be escalated', 'invalid_status'); end if;
+  if i.escalated_at is not null then perform app._pm_fail('guard', 'This issue is already escalated', 'already_escalated'); end if;
+  update public.machine_issue x set escalated_at = now(), updated_at = now() where x.id = i.id;
+  insert into public.issue_action (tenant_id, issue_id, actor_id, actor_role, type, notes, status_before, status_after, request_id)
+  values (i.tenant_id, i.id, (a->>'actor')::uuid, a->>'role', 'escalate', v_reason, i.status, i.status, p_request_id);
+  perform app._pm_audit(a, 'issue.escalated', 'machine_issue', i.id, jsonb_build_object('escalated', false), jsonb_build_object('escalated', true, 'reason', v_reason), p_request_id, c_src);
+  return jsonb_build_object('ok', true, 'id', i.id);
+end
+$$;
+
+create function public.iss_ack_escalation(p_request_id uuid, p_issue_id uuid, p_note text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:iss_ack_escalation';
+  a jsonb;
+  v_note text := btrim(p_note);
+  i public.machine_issue;
+begin
+  if not exists (select 1 from public.membership m where m.user_id = auth.uid()) then
+    return app._pm_authorise(p_request_id, c_src);
+  end if;
+  a := app._iss_act(p_request_id, c_src, p_issue_id, 'ua');
+  if not (a->>'ok')::boolean or a ? 'replay' then return a - 'replay'; end if;
+  perform app._pm_len(v_note, 1, 200, 'note', 'Enter a note of 1 to 200 characters');
+  select * into i from public.machine_issue x where x.id = p_issue_id;
+  if i.escalated_at is null then perform app._pm_fail('guard', 'This issue is not escalated', 'not_escalated'); end if;
+  update public.machine_issue x set escalated_at = null, updated_at = now() where x.id = i.id;
+  insert into public.issue_action (tenant_id, issue_id, actor_id, actor_role, type, notes, status_before, status_after, request_id)
+  values (i.tenant_id, i.id, (a->>'actor')::uuid, a->>'role', 'escalation_ack', v_note, i.status, i.status, p_request_id);
+  perform app._pm_audit(a, 'issue.escalation_acknowledged', 'machine_issue', i.id, jsonb_build_object('escalated', true), jsonb_build_object('escalated', false), p_request_id, c_src);
+  return jsonb_build_object('ok', true, 'id', i.id);
+end
+$$;
+
+create function public.iss_reassign(p_request_id uuid, p_issue_id uuid, p_new_owner uuid, p_reason text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:iss_reassign';
+  a jsonb;
+  v_own text;
+  v_reason text := btrim(p_reason);
+  i public.machine_issue;
+begin
+  if not exists (select 1 from public.membership m where m.user_id = auth.uid()) then
+    return app._pm_authorise(p_request_id, c_src);
+  end if;
+  a := app._iss_act(p_request_id, c_src, p_issue_id, 'ua');
+  if not (a->>'ok')::boolean or a ? 'replay' then return a - 'replay'; end if;
+  if p_new_owner is not null then
+    v_own := app._sh_owned('member', p_new_owner, (a->>'tenant_id')::uuid);
+    if v_own <> 'ok' then return app._pm_deny(a, v_own, 'member', p_new_owner, c_src); end if;
+  end if;
+  perform app._pm_len(v_reason, 1, 200, 'reason', 'Enter a reason of 1 to 200 characters');
+  if p_new_owner is null or app._iss_active_sup(p_new_owner) is null then perform app._pm_fail('validation', 'Choose an active supervisor', 'supervisor'); end if;
+  select * into i from public.machine_issue x where x.id = p_issue_id;
+  if i.status = 'closed' then perform app._pm_fail('guard', 'This issue is closed', 'invalid_status'); end if;
+  if i.accountable_owner_id is not distinct from p_new_owner then perform app._pm_fail('guard', 'This supervisor is already accountable', 'same_owner'); end if;
+  update public.machine_issue x set accountable_owner_id = p_new_owner, escalated_at = null, updated_at = now() where x.id = i.id;
+  insert into public.issue_ownership_history (tenant_id, issue_id, previous_owner, new_owner, source, reason, actor_id)
+  values (i.tenant_id, i.id, i.accountable_owner_id, p_new_owner, 'reassign', v_reason, (a->>'actor')::uuid);
+  insert into public.issue_action (tenant_id, issue_id, actor_id, actor_role, type, notes, status_before, status_after, request_id)
+  values (i.tenant_id, i.id, (a->>'actor')::uuid, a->>'role', 'reassign', v_reason, i.status, i.status, p_request_id);
+  perform app._pm_audit(a, 'issue.reassigned', 'machine_issue', i.id,
+    jsonb_build_object('owner_id', i.accountable_owner_id), jsonb_build_object('owner_id', p_new_owner, 'reason', v_reason), p_request_id, c_src);
+  return jsonb_build_object('ok', true, 'id', i.id);
+end
+$$;
+
+create function public.iss_resolve(p_request_id uuid, p_issue_id uuid, p_notes text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:iss_resolve';
+  a jsonb;
+  v_notes text := btrim(p_notes);
+  v_actor uuid;
+  v_shift uuid;
+  v_date date;
+  v_after text;
+  i public.machine_issue;
+begin
+  if not exists (select 1 from public.membership m where m.user_id = auth.uid()) then
+    return app._pm_authorise(p_request_id, c_src);
+  end if;
+  a := app._iss_act(p_request_id, c_src, p_issue_id, 'owner');
+  if not (a->>'ok')::boolean or a ? 'replay' then return a - 'replay'; end if;
+  v_actor := (a->>'actor')::uuid;
+  perform app._pm_len(v_notes, 1, 1000, 'notes', 'Enter resolution notes of 1 to 1000 characters');
+  select * into i from public.machine_issue x where x.id = p_issue_id;
+  if i.status not in ('open', 'in_progress') then perform app._pm_fail('guard', 'Only an open issue can be resolved', 'invalid_status'); end if;
+  v_after := case when i.priority in ('high', 'critical') then 'resolved' else 'closed' end; -- AC-7
+  select o.shift_id, o.shift_date into v_shift, v_date from app._iss_occurrence(i.machine_id, v_actor, now()) o;
+  update public.machine_issue x
+     set status = v_after, escalated_at = null, resolved_by = v_actor, resolved_at = now(), resolved_shift_id = v_shift, resolved_shift_date = v_date,
+         resolution_notes = v_notes, closed_at = case when v_after = 'closed' then now() end, closed_by = case when v_after = 'closed' then v_actor end,
+         updated_at = now()
+   where x.id = i.id;
+  insert into public.issue_action (tenant_id, issue_id, actor_id, actor_role, type, notes, status_before, status_after, request_id)
+  values (i.tenant_id, i.id, v_actor, a->>'role', 'resolve', v_notes, i.status, v_after, p_request_id);
+  perform app._pm_audit(a, 'issue.resolved', 'machine_issue', i.id, jsonb_build_object('status', i.status),
+    jsonb_build_object('status', v_after, 'priority', i.priority), p_request_id, c_src);
+  return jsonb_build_object('ok', true, 'id', i.id, 'status', v_after);
+end
+$$;
+
+create function public.iss_verify(p_request_id uuid, p_issue_id uuid, p_confirm boolean, p_reason text default null)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:iss_verify';
+  a jsonb;
+  v_reason text := nullif(btrim(p_reason), '');
+  v_actor uuid;
+  i public.machine_issue;
+begin
+  if not exists (select 1 from public.membership m where m.user_id = auth.uid()) then
+    return app._pm_authorise(p_request_id, c_src);
+  end if;
+  a := app._iss_act(p_request_id, c_src, p_issue_id, 'verify');
+  if not (a->>'ok')::boolean or a ? 'replay' then return a - 'replay'; end if;
+  v_actor := (a->>'actor')::uuid;
+  select * into i from public.machine_issue x where x.id = p_issue_id;
+  if p_confirm is null then perform app._pm_fail('validation', 'Choose Confirm fixed or Not fixed', 'confirm'); end if;
+  if i.status <> 'resolved' then perform app._pm_fail('guard', 'This issue is not awaiting verification', 'invalid_status'); end if;
+  -- AC-8: only a later-shift owner (never the resolver), or a Unit Admin when no later-shift supervisor is assigned
+  if not app.issue_can_verify(i.id, v_actor, now()) then
+    return app._pm_deny(a, 'not_verifier', 'machine_issue', i.id, c_src);
+  end if;
+  if p_confirm then
+    perform app._pm_len(v_reason, 0, 200, 'reason', 'Enter a note of up to 200 characters');
+    update public.machine_issue x set status = 'closed', closed_at = now(), closed_by = v_actor, updated_at = now() where x.id = i.id;
+    insert into public.issue_action (tenant_id, issue_id, actor_id, actor_role, type, notes, status_before, status_after, request_id)
+    values (i.tenant_id, i.id, v_actor, a->>'role', 'verify_confirm', v_reason, 'resolved', 'closed', p_request_id);
+    perform app._pm_audit(a, 'issue.verified', 'machine_issue', i.id, jsonb_build_object('status', 'resolved'), jsonb_build_object('status', 'closed'), p_request_id, c_src);
+    return jsonb_build_object('ok', true, 'id', i.id, 'status', 'closed');
+  end if;
+  perform app._pm_len(v_reason, 1, 200, 'reason', 'Enter a reason of 1 to 200 characters');
+  -- reject: back to In progress; a rejecting supervisor becomes the accountable owner (ownership history, source verification_rejected)
+  update public.machine_issue x
+     set status = 'in_progress', updated_at = now(),
+         accountable_owner_id = case when a->>'role' = 'supervisor' then v_actor else x.accountable_owner_id end
+   where x.id = i.id;
+  if a->>'role' = 'supervisor' and i.accountable_owner_id is distinct from v_actor then
+    insert into public.issue_ownership_history (tenant_id, issue_id, previous_owner, new_owner, source, reason, actor_id)
+    values (i.tenant_id, i.id, i.accountable_owner_id, v_actor, 'verification_rejected', v_reason, v_actor);
+  end if;
+  insert into public.issue_action (tenant_id, issue_id, actor_id, actor_role, type, notes, status_before, status_after, request_id)
+  values (i.tenant_id, i.id, v_actor, a->>'role', 'verify_reject', v_reason, 'resolved', 'in_progress', p_request_id);
+  perform app._pm_audit(a, 'issue.verification_rejected', 'machine_issue', i.id, jsonb_build_object('status', 'resolved', 'owner_id', i.accountable_owner_id),
+    jsonb_build_object('status', 'in_progress', 'reason', v_reason), p_request_id, c_src);
+  return jsonb_build_object('ok', true, 'id', i.id, 'status', 'in_progress');
+end
+$$;
+
+create function public.iss_reopen(p_request_id uuid, p_issue_id uuid, p_reason text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:iss_reopen';
+  a jsonb;
+  v_reason text := btrim(p_reason);
+  i public.machine_issue;
+begin
+  if not exists (select 1 from public.membership m where m.user_id = auth.uid()) then
+    return app._pm_authorise(p_request_id, c_src);
+  end if;
+  a := app._iss_act(p_request_id, c_src, p_issue_id, 'ua');
+  if not (a->>'ok')::boolean or a ? 'replay' then return a - 'replay'; end if;
+  perform app._pm_len(v_reason, 1, 200, 'reason', 'Enter a reason of 1 to 200 characters');
+  select * into i from public.machine_issue x where x.id = p_issue_id;
+  if i.status <> 'closed' then perform app._pm_fail('guard', 'Only a closed issue can be reopened', 'invalid_status'); end if;
+  update public.machine_issue x set status = 'in_progress', closed_at = null, closed_by = null, updated_at = now() where x.id = i.id;
+  insert into public.issue_action (tenant_id, issue_id, actor_id, actor_role, type, notes, status_before, status_after, request_id)
+  values (i.tenant_id, i.id, (a->>'actor')::uuid, a->>'role', 'reopen', v_reason, 'closed', 'in_progress', p_request_id);
+  perform app._pm_audit(a, 'issue.reopened', 'machine_issue', i.id, jsonb_build_object('status', 'closed'),
+    jsonb_build_object('status', 'in_progress', 'reason', v_reason), p_request_id, c_src);
+  return jsonb_build_object('ok', true, 'id', i.id);
+end
+$$;
+
+-- Categories (Unit Admin only) ------------------------------------------------------------------------------------------------------------
+create function public.iss_category_save(p_request_id uuid, p_id uuid, p_name text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:iss_category_save';
+  a jsonb;
+  v_tenant uuid;
+  v_own text;
+  v_name text := btrim(p_name);
+  cur public.issue_category;
+  upd public.issue_category;
+  v_c text;
+begin
+  if not exists (select 1 from public.membership m where m.user_id = auth.uid()) then
+    return app._pm_authorise(p_request_id, c_src);
+  end if;
+  a := app._iss_authorise(p_request_id, c_src, true);
+  if not (a->>'ok')::boolean then return a; end if;
+  if a->>'done' is not null then return jsonb_build_object('ok', true, 'id', (a->>'done')::uuid, 'already', true); end if;
+  v_tenant := (a->>'tenant_id')::uuid;
+  if p_id is not null then
+    v_own := app._iss_owned('category', p_id, v_tenant);
+    if v_own <> 'ok' then return app._pm_deny(a, v_own, 'issue_category', p_id, c_src); end if;
+  end if;
+  perform app._pm_len(v_name, 1, 40, 'name', 'Enter a name of 1 to 40 characters');
+  begin
+    if p_id is null then
+      insert into public.issue_category (tenant_id, name, sort) values (v_tenant, v_name,
+        coalesce((select max(c.sort) from public.issue_category c where c.tenant_id = v_tenant), 0) + 10) returning * into upd;
+    else
+      select * into cur from public.issue_category c where c.id = p_id;
+      update public.issue_category c set name = v_name, updated_at = now() where c.id = p_id returning * into upd;
+    end if;
+  exception when unique_violation then
+    get stacked diagnostics v_c = constraint_name;
+    if v_c = 'issue_category_tenant_name_key' then perform app._pm_fail('duplicate', 'A category with this name already exists', 'name'); end if;
+    raise;
+  end;
+  if p_id is null then
+    perform app._pm_audit(a, 'issue_category.created', 'issue_category', upd.id, null, jsonb_build_object('name', upd.name), p_request_id, c_src);
+  else
+    perform app._pm_audit(a, 'issue_category.updated', 'issue_category', upd.id, jsonb_build_object('name', cur.name), jsonb_build_object('name', upd.name), p_request_id, c_src);
+  end if;
+  return jsonb_build_object('ok', true, 'id', upd.id);
+end
+$$;
+
+create function public.iss_category_set_retired(p_request_id uuid, p_id uuid, p_retired boolean)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:iss_category_set_retired';
+  a jsonb;
+  v_own text;
+  cur public.issue_category;
+begin
+  if not exists (select 1 from public.membership m where m.user_id = auth.uid()) then
+    return app._pm_authorise(p_request_id, c_src);
+  end if;
+  a := app._iss_authorise(p_request_id, c_src, true);
+  if not (a->>'ok')::boolean then return a; end if;
+  if a->>'done' is not null then return jsonb_build_object('ok', true, 'id', (a->>'done')::uuid, 'already', true); end if;
+  v_own := app._iss_owned('category', p_id, (a->>'tenant_id')::uuid);
+  if v_own <> 'ok' then return app._pm_deny(a, v_own, 'issue_category', p_id, c_src); end if;
+  if p_retired is null then perform app._pm_fail('validation', 'Choose retire or reinstate', 'retired'); end if;
+  select * into cur from public.issue_category c where c.id = p_id;
+  if (cur.retired_at is not null) = p_retired then return jsonb_build_object('ok', true, 'id', p_id, 'changed', false); end if;
+  update public.issue_category c set retired_at = case when p_retired then now() end, updated_at = now() where c.id = p_id;
+  perform app._pm_audit(a, case when p_retired then 'issue_category.retired' else 'issue_category.reinstated' end, 'issue_category', p_id,
+    jsonb_build_object('name', cur.name, 'retired', cur.retired_at is not null), jsonb_build_object('name', cur.name, 'retired', p_retired), p_request_id, c_src);
+  return jsonb_build_object('ok', true, 'id', p_id, 'changed', true);
+end
+$$;
+
 -- 99. Function privileges: no app function is executable by clients (test 004); the public entry points are executable by authenticated only.
 -- (Repeated at the end of every step's section: each step adds functions, the loop is re-run over the whole 07 name range.)
 do $$
@@ -271,7 +961,7 @@ begin
   for f in
     select p.oid::regprocedure as sig, n.nspname
     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-    where (n.nspname = 'app' and p.proname ~ '^(iss_|_iss_|issue_|attachment_|machine_owner_now$|can_see_)')
+    where (n.nspname = 'app' and p.proname ~ '^(iss_|_iss_|issue_|attachment_|machine_owner_now|can_see_)')
        or (n.nspname = 'public' and p.proname ~ '^(iss_|issue_)')
   loop
     execute format('revoke all on function %s from public, anon, authenticated', f.sig);
