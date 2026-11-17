@@ -5,6 +5,8 @@ import { Chip } from '@/components/ui';
 const TABS = [
   { key: 'machines', label: 'Machines', href: '/plant' },
   { key: 'products', label: 'Products', href: '/plant/products' },
+  { key: 'shifts', label: 'Shifts', href: '/plant/shifts' },
+  { key: 'assignments', label: 'Assignments', href: '/plant/assignments' },
   { key: 'site', label: 'Site & lines', href: '/plant/site' },
 ] as const;
 
@@ -12,6 +14,8 @@ export type PlantTab = (typeof TABS)[number]['key'];
 
 export function tabFor(pathname: string): PlantTab {
   if (pathname.startsWith('/plant/products')) return 'products';
+  if (pathname.startsWith('/plant/shifts')) return 'shifts';
+  if (pathname.startsWith('/plant/assignments')) return 'assignments';
   if (pathname.startsWith('/plant/site')) return 'site';
   return 'machines';
 }

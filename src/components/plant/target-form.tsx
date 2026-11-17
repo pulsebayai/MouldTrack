@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { Text, View } from 'react-native';
 import { Button, ErrorText, Field, colors } from '@/components/ui';
 import { toUserMessage } from '@/lib/errors';
-import { PlantError, RequestIds, formatPieces, formatPlantDate, isValidDate, parsePieces, plantApi, scheduledAfter, validateTargetForm, type FieldErrors, type TargetVersion } from '@/lib/plant';
+import { PlantError, RequestIds, formatPieces, formatPlantDate, isValidDate, parsePieces, plantApi, scheduledAfter, shiftApi, validateTargetForm, type FieldErrors, type TargetVersion } from '@/lib/plant';
 import { useSession } from '@/lib/session-provider';
 
 export type TargetFormProps = {
@@ -14,12 +14,14 @@ export type TargetFormProps = {
   /** This pair's versions: ending also cancels the scheduled changes after the chosen date, and the form says which. */
   versions?: TargetVersion[];
   unit?: string;
+  /** Set when the target applies to one shift only (an override of the machine/product target, AC-9). */
+  shift?: { id: string; name: string };
   onDone: () => void;
   onCancel: () => void;
 };
 
 /** Set (pieces + start date) or end (date only) a target. The date must be today or later in plant time; the server decides. */
-export function TargetForm({ mode, machineId, productId, productLabel, today, versions = [], unit = 'pcs/shift', onDone, onCancel }: TargetFormProps) {
+export function TargetForm({ mode, machineId, productId, productLabel, today, versions = [], unit = 'pcs/shift', shift, onDone, onCancel }: TargetFormProps) {
   const { client } = useSession();
   const [pieces, setPieces] = useState('');
   const [date, setDate] = useState(today ?? '');
@@ -35,11 +37,15 @@ export function TargetForm({ mode, machineId, productId, productLabel, today, ve
       setErrors(e);
       return;
     }
-    const key = JSON.stringify([mode, machineId, productId, pieces.replace(/[,\s]/g, ''), date.trim()]);
+    const key = JSON.stringify([mode, machineId, productId, shift?.id ?? null, pieces.replace(/[,\s]/g, ''), date.trim()]);
     setBusy(true);
     setErrors({});
     try {
-      if (setting) {
+      if (shift && setting) {
+        await shiftApi.setOverride(client, { machineId, productId, shiftId: shift.id, pieces: parsePieces(pieces)!, effectiveFrom: date.trim() }, ids.current.get(key));
+      } else if (shift) {
+        await shiftApi.endOverride(client, { machineId, productId, shiftId: shift.id, effectiveFrom: date.trim() }, ids.current.get(key));
+      } else if (setting) {
         await plantApi.setTarget(client, { machineId, productId, pieces: parsePieces(pieces)!, effectiveFrom: date.trim() }, ids.current.get(key));
       } else {
         await plantApi.endTarget(client, { machineId, productId, effectiveFrom: date.trim() }, ids.current.get(key));
@@ -58,12 +64,12 @@ export function TargetForm({ mode, machineId, productId, productLabel, today, ve
   return (
     <View testID="target-form" style={{ gap: 12, borderWidth: 2, borderColor: colors.primary, borderRadius: 12, padding: 16 }}>
       <Text accessibilityRole="header" style={{ fontSize: 18, fontWeight: '700', color: colors.text }}>
-        {setting ? 'Set target' : 'End target'} · {productLabel}
+        {setting ? 'Set target' : 'End target'}{shift ? ` for ${shift.name}` : ''} · {productLabel}
       </Text>
       {setting ? (
         <Field label="Pieces per shift" testID="target-pieces" value={pieces} onChangeText={setPieces} error={errors.pieces} keyboardType="number-pad" inputMode="numeric" autoComplete="off" />
       ) : (
-        <Text style={{ fontSize: 15, color: colors.text }}>The target stops applying from the date you choose.</Text>
+        <Text style={{ fontSize: 15, color: colors.text }}>{shift ? `The ${shift.name} target stops applying from the date you choose; the machine target applies again.` : 'The target stops applying from the date you choose.'}</Text>
       )}
       <Field
         label={setting ? 'Effective from (YYYY-MM-DD)' : 'Ends on (YYYY-MM-DD)'}
