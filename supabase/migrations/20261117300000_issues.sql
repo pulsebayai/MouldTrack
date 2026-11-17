@@ -125,12 +125,15 @@ create table public.attachment (
   sha256 text not null check (sha256 ~ '^[0-9a-f]{64}$'),
   status text not null default 'pending' check (status in ('pending', 'ready')),
   uploaded_by uuid not null,
+  parent_id uuid, -- the aggregate the entity belongs to (07: the issue); no FK so 06 can point at its own parent
+  begin_request_id uuid, -- the request id of iss_attachment_begin: a retried begin returns the same pending row
   created_at timestamptz not null default now(),
   ready_at timestamptz,
   constraint attachment_tenant_id_key unique (tenant_id, id),
   constraint attachment_ready_at check ((status = 'ready') = (ready_at is not null)),
   constraint attachment_path_tenant check (storage_path like 'tenant/' || tenant_id::text || '/%')
 );
+create unique index attachment_begin_request_key on public.attachment (uploaded_by, begin_request_id) where begin_request_id is not null;
 create index attachment_entity_idx on public.attachment (entity_type, entity_id);
 create index attachment_pending_idx on public.attachment (uploaded_by, created_at) where status = 'pending';
 
@@ -190,9 +193,9 @@ set search_path = ''
 as $$
 begin
   if old.status = 'pending' and new.status = 'ready'
-     and (new.id, new.tenant_id, new.entity_type, new.entity_id, new.storage_path, new.mime, new.size_bytes, new.sha256, new.uploaded_by, new.created_at)
+     and (new.id, new.tenant_id, new.entity_type, new.entity_id, new.storage_path, new.mime, new.size_bytes, new.sha256, new.uploaded_by, new.created_at, new.parent_id, new.begin_request_id)
          is not distinct from
-         (old.id, old.tenant_id, old.entity_type, old.entity_id, old.storage_path, old.mime, old.size_bytes, old.sha256, old.uploaded_by, old.created_at) then
+         (old.id, old.tenant_id, old.entity_type, old.entity_id, old.storage_path, old.mime, old.size_bytes, old.sha256, old.uploaded_by, old.created_at, old.parent_id, old.begin_request_id) then
     return new;
   end if;
   raise exception 'attachment is append-only (only pending to ready)' using errcode = 'P0001';
@@ -950,6 +953,163 @@ begin
   perform app._pm_audit(a, case when p_retired then 'issue_category.retired' else 'issue_category.reinstated' end, 'issue_category', p_id,
     jsonb_build_object('name', cur.name, 'retired', cur.retired_at is not null), jsonb_build_object('name', cur.name, 'retired', p_retired), p_request_id, c_src);
   return jsonb_build_object('ok', true, 'id', p_id, 'changed', true);
+end
+$$;
+
+-- 8. Attachments and Storage (step 3, D6) ---------------------------------------------------------------------------------------------------------
+-- Two-phase upload: iss_attachment_begin writes a pending row and returns the storage path; the client uploads the bytes to the private bucket
+-- `attachments` (the INSERT policy only lets a user write the path of their own pending row, within 10 minutes); iss_attachment_commit checks the
+-- object exists with the declared size and type, marks the row ready and appends a `photo` action. Reading goes through the SELECT policy, which asks
+-- whether the caller may see the issue the photo belongs to. No UPDATE or DELETE policy exists, so clients can never change or remove an object.
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('attachments', 'attachments', false, 5242880, array['image/jpeg', 'image/png', 'image/webp'])
+on conflict (id) do update
+  set public = false, file_size_limit = 5242880, allowed_mime_types = array['image/jpeg', 'image/png', 'image/webp'];
+
+-- The two Storage policy helpers live in their own schema: storage.objects policies run as the calling role, which therefore needs EXECUTE, and
+-- 02's test 004 forbids client-executable functions in `app` (except the two RLS helpers). `app_policy` is not exposed through the API (only `public`
+-- is), so these are reachable only from policy expressions. Both are security definer and call the `app` helpers as their owner.
+create schema app_policy;
+revoke all on schema app_policy from public;
+grant usage on schema app_policy to authenticated;
+
+-- INSERT: the caller may write exactly the path of their own pending attachment created in the last 10 minutes (tenant must still be theirs).
+create function app_policy.attachment_upload_ok(p_name text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1 from public.attachment a
+    where a.storage_path = p_name and a.status = 'pending' and a.uploaded_by = auth.uid()
+      and a.created_at > now() - interval '10 minutes'
+      and a.tenant_id = app.current_tenant_id())
+$$;
+
+-- SELECT: the uploader sees their own pending object (an INSERT ... RETURNING needs it); a ready object is visible to whoever may see the issue.
+create function app_policy.can_see_attachment(p_name text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1 from public.attachment a
+    where a.storage_path = p_name
+      and a.tenant_id = app.current_tenant_id()
+      and (
+        (a.status = 'pending' and a.uploaded_by = auth.uid())
+        or (a.status = 'ready' and a.entity_type = 'issue_action'
+            and exists (select 1 from public.issue_action x where x.id = a.entity_id and x.tenant_id = a.tenant_id and app.can_see_issue(x.issue_id)))))
+$$;
+revoke all on function app_policy.attachment_upload_ok(text), app_policy.can_see_attachment(text) from public, anon;
+grant execute on function app_policy.attachment_upload_ok(text), app_policy.can_see_attachment(text) to authenticated;
+
+create policy attachments_insert_own_pending on storage.objects for insert to authenticated
+  with check (bucket_id = 'attachments' and app_policy.attachment_upload_ok(name));
+create policy attachments_select_visible on storage.objects for select to authenticated
+  using (bucket_id = 'attachments' and app_policy.can_see_attachment(name));
+
+create function public.iss_attachment_begin(p_request_id uuid, p_issue_id uuid, p_mime text, p_size bigint, p_sha256 text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:iss_attachment_begin';
+  a jsonb;
+  v_actor uuid;
+  v_sha text := lower(btrim(p_sha256));
+  v_ext text;
+  v_id uuid := gen_random_uuid();
+  v_path text;
+  v_action uuid := gen_random_uuid();
+  ex public.attachment;
+begin
+  if not exists (select 1 from public.membership m where m.user_id = auth.uid()) then
+    return app._pm_authorise(p_request_id, c_src);
+  end if;
+  a := app._iss_act(p_request_id, c_src, p_issue_id, 'any');
+  if not (a->>'ok')::boolean or a ? 'replay' then return a - 'replay'; end if;
+  v_actor := (a->>'actor')::uuid;
+
+  v_ext := case lower(btrim(p_mime)) when 'image/jpeg' then 'jpg' when 'image/png' then 'png' when 'image/webp' then 'webp' end;
+  if v_ext is null then perform app._pm_fail('validation', 'Photos must be JPEG, PNG or WebP', 'mime'); end if;
+  if p_size is null or p_size < 1 or p_size > 5242880 then perform app._pm_fail('validation', 'A photo must be 5 MB or smaller', 'size'); end if;
+  if v_sha is null or v_sha !~ '^[0-9a-f]{64}$' then perform app._pm_fail('validation', 'The checksum must be a SHA-256 hex digest', 'sha256'); end if;
+
+  -- a retried begin (same request id) returns the same row
+  select * into ex from public.attachment x where x.uploaded_by = v_actor and x.begin_request_id = p_request_id;
+  if found then
+    if ex.parent_id is distinct from p_issue_id then perform app._pm_fail('validation', 'This request id was already used for another action', 'request_id'); end if;
+    return jsonb_build_object('ok', true, 'id', ex.id, 'path', ex.storage_path, 'action_id', ex.entity_id, 'status', ex.status, 'already', true);
+  end if;
+
+  if (select count(*) from public.attachment x where x.uploaded_by = v_actor and x.parent_id = p_issue_id and x.status = 'pending'
+        and x.created_at > now() - interval '10 minutes') >= 5 then
+    perform app._pm_fail('guard', 'Finish or wait for the photos already being uploaded (up to 5 at a time)', 'too_many_pending');
+  end if;
+  if (select count(*) from public.attachment x where x.parent_id = p_issue_id and x.entity_type = 'issue_action' and x.status = 'ready') >= 30 then
+    perform app._pm_fail('guard', 'This issue already has 30 photos', 'photo_limit');
+  end if;
+
+  v_path := 'tenant/' || (a->>'tenant_id') || '/issue/' || p_issue_id::text || '/' || v_id::text || '.' || v_ext;
+  insert into public.attachment (id, tenant_id, entity_type, entity_id, storage_path, mime, size_bytes, sha256, uploaded_by, parent_id, begin_request_id)
+  values (v_id, (a->>'tenant_id')::uuid, 'issue_action', v_action, v_path, lower(btrim(p_mime)), p_size::integer, v_sha, v_actor, p_issue_id, p_request_id);
+  return jsonb_build_object('ok', true, 'id', v_id, 'path', v_path, 'action_id', v_action, 'status', 'pending');
+end
+$$;
+
+create function public.iss_attachment_commit(p_request_id uuid, p_attachment_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:iss_attachment_commit';
+  a jsonb;
+  v_actor uuid;
+  v_own text;
+  att public.attachment;
+  obj record;
+  i public.machine_issue;
+begin
+  if not exists (select 1 from public.membership m where m.user_id = auth.uid()) then
+    return app._pm_authorise(p_request_id, c_src);
+  end if;
+  a := app._iss_authorise(p_request_id, c_src, false);
+  if not (a->>'ok')::boolean then return a; end if;
+  if a->>'done' is not null then return jsonb_build_object('ok', true, 'id', (a->>'done')::uuid, 'already', true); end if;
+  v_actor := (a->>'actor')::uuid;
+
+  select * into att from public.attachment x where x.id = p_attachment_id;
+  if not found then return app._pm_deny(a, 'not_found', 'attachment', p_attachment_id, c_src); end if;
+  if att.tenant_id <> (a->>'tenant_id')::uuid then return app._pm_deny(a, 'cross_tenant', 'attachment', p_attachment_id, c_src); end if;
+  if att.uploaded_by <> v_actor then return app._pm_deny(a, 'not_uploader', 'attachment', p_attachment_id, c_src); end if;
+  if att.entity_type <> 'issue_action' then perform app._pm_fail('guard', 'This attachment is not an issue photo', 'entity_type'); end if;
+  if att.status <> 'pending' then perform app._pm_fail('guard', 'This photo is already attached', 'already_ready'); end if;
+  if att.created_at < now() - interval '1 hour' then perform app._pm_fail('guard', 'This upload expired. Start again', 'expired'); end if;
+  if not app.can_see_issue(att.parent_id, v_actor) then return app._pm_deny(a, 'not_visible', 'attachment', p_attachment_id, c_src); end if;
+
+  select o.metadata into obj from storage.objects o where o.bucket_id = 'attachments' and o.name = att.storage_path;
+  if not found then perform app._pm_fail('guard', 'The photo has not been uploaded', 'not_uploaded'); end if;
+  if (obj.metadata->>'size')::bigint is distinct from att.size_bytes or obj.metadata->>'mimetype' is distinct from att.mime then
+    perform app._pm_fail('guard', 'The uploaded photo does not match what was declared', 'mismatch');
+  end if;
+
+  select * into i from public.machine_issue x where x.id = att.parent_id;
+  update public.attachment x set status = 'ready', ready_at = now() where x.id = att.id;
+  insert into public.issue_action (id, tenant_id, issue_id, actor_id, actor_role, type, status_before, status_after, request_id)
+  values (att.entity_id, att.tenant_id, i.id, v_actor, a->>'role', 'photo', i.status, i.status, p_request_id);
+  update public.machine_issue x set updated_at = now() where x.id = i.id;
+  perform app._pm_audit(a, 'attachment.added', 'attachment', att.id, null,
+    jsonb_build_object('issue_id', i.id, 'mime', att.mime, 'size_bytes', att.size_bytes, 'sha256', att.sha256), p_request_id, c_src);
+  return jsonb_build_object('ok', true, 'id', att.id, 'action_id', att.entity_id);
 end
 $$;
 
