@@ -63,6 +63,8 @@ local_digest="$(printf '%s' "$LOCAL_SETUP_TOKEN" | sha256sum | cut -d' ' -f1)"
 secrets_json="$(npx supabase secrets list --project-ref "$DEV_SUPABASE_PROJECT_REF" -o json 2>/dev/null)"
 if echo "$secrets_json" | jq -e 'type == "array"' >/dev/null 2>&1; then
   echo "setup token secret present on dev: $(echo "$secrets_json" | jq -r '[.[] | select(.name == "PLATFORM_SETUP_TOKEN")] | length')"
+  # Metadata only (never the digest or the value): when it was set and whether it equals the local literal.
+  echo "$secrets_json" | jq -c --arg d "$local_digest" '.[] | select(.name == "PLATFORM_SETUP_TOKEN") | del(.value) + {equals_local_literal: (((.value // "") | ascii_downcase) == $d)}'
   echo "$secrets_json" | jq -e --arg d "$local_digest" '[.[] | select(.name == "PLATFORM_SETUP_TOKEN" and ((.value // "") | ascii_downcase) == $d)] | length == 0' >/dev/null; tap $? "the configured setup token (if any) is not the local literal"
 else
   echo "could not list secrets"; tap 1 "the configured setup token (if any) is not the local literal"
