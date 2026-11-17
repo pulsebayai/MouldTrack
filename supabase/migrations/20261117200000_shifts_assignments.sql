@@ -342,6 +342,300 @@ begin
 end
 $$;
 
+-- 7. Ownership resolution (D8) ---------------------------------------------------------------------------------------
+-- Who is responsible for a machine on a shift occurrence: the latest cover of that occurrence (its supervisor, possibly null =
+-- explicitly unassigned), else the plan version in force on the shift date (null = unassigned), else nobody. Returns one row
+-- (supervisor_id, source plan|cover|none, cover reason), or no row when the shift is not the caller's (only the service role skips
+-- the tenant check, like app.target_for). app.machine_owner is the contract for features 06-09; the board and my_shift use the same rows.
+create function app.machine_owner_src(p_machine uuid, p_shift uuid, p_date date)
+returns table (supervisor_id uuid, source text, reason text)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  with t as (
+    select s.id from public.shift s
+    where s.id = p_shift and (auth.role() = 'service_role' or s.tenant_id = app.current_tenant_id())
+  ),
+  cv as (
+    select c.supervisor_id, c.reason
+    from public.assignment_cover c join t on t.id = c.shift_id
+    where c.shift_date = p_date and c.machine_id = p_machine
+    order by c.recorded_at desc, c.id desc
+    limit 1
+  ),
+  pv as (
+    select v.supervisor_id
+    from public.assignment_version v join t on t.id = v.shift_id
+    where v.machine_id = p_machine and v.effective_from <= p_date
+    order by v.effective_from desc, v.recorded_at desc, v.id desc
+    limit 1
+  )
+  select cv.supervisor_id, 'cover'::text, cv.reason from cv
+  union all
+  select pv.supervisor_id, case when pv.supervisor_id is null then 'none' else 'plan' end, null::text from pv where not exists (select 1 from cv)
+  union all
+  select null::uuid, 'none'::text, null::text
+  where exists (select 1 from t) and not exists (select 1 from cv) and not exists (select 1 from pv)
+$$;
+
+create function app.machine_owner(p_machine uuid, p_shift uuid, p_date date)
+returns uuid
+language sql
+stable
+security definer
+set search_path = ''
+as $$ select o.supervisor_id from app.machine_owner_src(p_machine, p_shift, p_date) o $$;
+
+-- 8. Write RPCs: assignments and cover -------------------------------------------------------------------------------
+-- Machine id list: required, at most 500, de-duplicated by the callers. Returns the generic denial (audited) when an id is not the caller's.
+create function app._sh_check_machines(p_auth jsonb, p_ids uuid[], p_src text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_id uuid;
+  v_own text;
+begin
+  if p_ids is null or cardinality(p_ids) = 0 then perform app._pm_fail('validation', 'Choose at least one machine', 'machine_ids'); end if;
+  if cardinality(p_ids) > 500 then perform app._pm_fail('validation', 'Choose at most 500 machines at a time', 'machine_ids'); end if;
+  foreach v_id in array p_ids loop
+    v_own := app._pm_owned('machine', v_id, (p_auth->>'tenant_id')::uuid);
+    if v_own <> 'ok' then return app._pm_deny(p_auth, v_own, 'machine', v_id, p_src); end if;
+  end loop;
+  return null;
+end
+$$;
+
+-- A supervisor to assign or cover with: an active, not-must-change member with the supervisor role (validation 'supervisor' otherwise).
+create function app._sh_check_supervisor(p_user uuid)
+returns void
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+begin
+  if not exists (select 1 from public.membership m
+                 where m.user_id = p_user and m.role = 'supervisor' and m.status = 'active' and m.must_change_password = false) then
+    perform app._pm_fail('validation', 'Choose an active supervisor', 'supervisor');
+  end if;
+end
+$$;
+
+-- The plan-level owner (ignores covers) of a machine on a plant date, for "who loses it" and the audit trail.
+create function app._sh_plan_owner(p_shift uuid, p_machine uuid, p_date date)
+returns uuid
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select v.supervisor_id from public.assignment_version v
+  where v.shift_id = p_shift and v.machine_id = p_machine and v.effective_from <= p_date
+  order by v.effective_from desc, v.recorded_at desc, v.id desc
+  limit 1
+$$;
+
+create function public.sh_assign(
+  p_request_id uuid, p_shift_id uuid, p_supervisor_id uuid, p_machine_ids uuid[], p_from date, p_until date default null
+) returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:sh_assign';
+  a jsonb;
+  v_tenant uuid;
+  v_own text;
+  v_deny jsonb;
+  v_ids uuid[];
+  v_shift public.shift;
+  v_codes text[];
+  v_retired text[];
+  v_later jsonb;
+  v_prev jsonb;
+  v_id uuid;
+begin
+  a := app._pm_authorise(p_request_id, c_src);
+  if not (a->>'ok')::boolean then return a; end if;
+  if a->>'done' is not null then return jsonb_build_object('ok', true, 'id', (a->>'done')::uuid, 'already', true); end if;
+  v_tenant := (a->>'tenant_id')::uuid;
+
+  v_own := app._sh_owned('shift', p_shift_id, v_tenant);
+  if v_own <> 'ok' then return app._pm_deny(a, v_own, 'shift', p_shift_id, c_src); end if;
+  if p_supervisor_id is null then perform app._pm_fail('validation', 'Choose a supervisor', 'supervisor'); end if;
+  v_own := app._sh_owned('member', p_supervisor_id, v_tenant);
+  if v_own <> 'ok' then return app._pm_deny(a, v_own, 'member', p_supervisor_id, c_src); end if;
+  v_ids := (select coalesce(array_agg(distinct x), '{}') from unnest(p_machine_ids) x);
+  v_deny := app._sh_check_machines(a, v_ids, c_src);
+  if v_deny is not null then return v_deny; end if;
+
+  if p_from is null then perform app._pm_fail('validation', 'Choose a start date', 'from'); end if;
+  if p_from < app.plant_date(v_tenant) then perform app._pm_fail('validation', 'Assignments can''t start in the past', 'from'); end if;
+  if p_until is not null and p_until < p_from then perform app._pm_fail('validation', 'The end date can''t be before the start date', 'until'); end if;
+  perform app._sh_check_supervisor(p_supervisor_id);
+  select * into v_shift from public.shift s where s.id = p_shift_id;
+  if v_shift.retired_at is not null then perform app._pm_fail('guard', 'This shift is retired', 'shift_id'); end if;
+  select array_agg(m.code order by m.code) into v_retired from public.machine m where m.id = any (v_ids) and m.retired_at is not null;
+  if v_retired is not null then
+    perform app._pm_fail('guard', 'Retired machines can''t be assigned', 'machine_ids', jsonb_build_object('machines', to_jsonb(v_retired)));
+  end if;
+
+  -- A change already scheduled after the start date would silently override this one (D5): the Unit Admin unassigns from that date first.
+  select jsonb_build_object('machines', jsonb_agg(distinct m.code), 'dates', jsonb_agg(distinct v.effective_from)) into v_later
+    from public.assignment_version v join public.machine m on m.id = v.machine_id
+    where v.shift_id = p_shift_id and v.machine_id = any (v_ids) and v.effective_from > p_from;
+  if v_later->'machines' is not null and jsonb_typeof(v_later->'machines') = 'array' then
+    perform app._pm_fail('guard', 'A later change is already scheduled for these machines', 'later_change', v_later);
+  end if;
+
+  select array_agg(m.code order by m.code), jsonb_agg(jsonb_build_object('machine_code', m.code, 'supervisor_id', app._sh_plan_owner(p_shift_id, m.id, p_from)) order by m.code)
+    into v_codes, v_prev
+    from public.machine m where m.id = any (v_ids);
+
+  insert into public.assignment_version (tenant_id, shift_id, machine_id, supervisor_id, effective_from, recorded_by, request_id)
+  select v_tenant, p_shift_id, x, p_supervisor_id, p_from, (a->>'actor')::uuid, p_request_id from unnest(v_ids) x;
+  if p_until is not null then
+    insert into public.assignment_version (tenant_id, shift_id, machine_id, supervisor_id, effective_from, recorded_by, request_id)
+    select v_tenant, p_shift_id, x, null, p_until + 1, (a->>'actor')::uuid, p_request_id from unnest(v_ids) x;
+  end if;
+
+  perform app._pm_audit(a, 'assignment.set', 'shift', p_shift_id,
+    jsonb_build_object('previous', v_prev),
+    jsonb_build_object('shift', v_shift.name, 'machines', to_jsonb(v_codes), 'supervisor_id', p_supervisor_id, 'from', p_from, 'until', p_until),
+    p_request_id, c_src);
+  return jsonb_build_object('ok', true, 'id', p_shift_id, 'machines', cardinality(v_ids));
+end
+$$;
+
+create function public.sh_unassign(p_request_id uuid, p_shift_id uuid, p_machine_ids uuid[], p_from date)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:sh_unassign';
+  a jsonb;
+  v_tenant uuid;
+  v_own text;
+  v_deny jsonb;
+  v_ids uuid[];
+  v_shift public.shift;
+  v_ended uuid[];
+  v_codes text[];
+  v_later jsonb;
+  v_prev jsonb;
+begin
+  a := app._pm_authorise(p_request_id, c_src);
+  if not (a->>'ok')::boolean then return a; end if;
+  if a->>'done' is not null then return jsonb_build_object('ok', true, 'id', (a->>'done')::uuid, 'already', true); end if;
+  v_tenant := (a->>'tenant_id')::uuid;
+
+  v_own := app._sh_owned('shift', p_shift_id, v_tenant);
+  if v_own <> 'ok' then return app._pm_deny(a, v_own, 'shift', p_shift_id, c_src); end if;
+  v_ids := (select coalesce(array_agg(distinct x), '{}') from unnest(p_machine_ids) x);
+  v_deny := app._sh_check_machines(a, v_ids, c_src);
+  if v_deny is not null then return v_deny; end if;
+
+  if p_from is null then perform app._pm_fail('validation', 'Choose a date', 'from'); end if;
+  if p_from < app.plant_date(v_tenant) then perform app._pm_fail('validation', 'Assignments can''t end in the past', 'from'); end if;
+  select * into v_shift from public.shift s where s.id = p_shift_id;
+
+  select jsonb_build_object('machines', jsonb_agg(distinct m.code), 'dates', jsonb_agg(distinct v.effective_from)) into v_later
+    from public.assignment_version v join public.machine m on m.id = v.machine_id
+    where v.shift_id = p_shift_id and v.machine_id = any (v_ids) and v.effective_from > p_from;
+  if v_later->'machines' is not null and jsonb_typeof(v_later->'machines') = 'array' then
+    perform app._pm_fail('guard', 'A later change is already scheduled for these machines', 'later_change', v_later);
+  end if;
+
+  -- Only machines that have a supervisor on that date are ended; refused when none has.
+  select coalesce(array_agg(m.id order by m.code), '{}'), array_agg(m.code order by m.code),
+         jsonb_agg(jsonb_build_object('machine_code', m.code, 'supervisor_id', app._sh_plan_owner(p_shift_id, m.id, p_from)) order by m.code)
+    into v_ended, v_codes, v_prev
+    from public.machine m where m.id = any (v_ids) and app._sh_plan_owner(p_shift_id, m.id, p_from) is not null;
+  if cardinality(v_ended) = 0 then perform app._pm_fail('guard', 'None of these machines is assigned from that date', 'not_assigned'); end if;
+
+  insert into public.assignment_version (tenant_id, shift_id, machine_id, supervisor_id, effective_from, recorded_by, request_id)
+  select v_tenant, p_shift_id, x, null, p_from, (a->>'actor')::uuid, p_request_id from unnest(v_ended) x;
+
+  perform app._pm_audit(a, 'assignment.ended', 'shift', p_shift_id,
+    jsonb_build_object('previous', v_prev),
+    jsonb_build_object('shift', v_shift.name, 'machines', to_jsonb(v_codes), 'from', p_from),
+    p_request_id, c_src);
+  return jsonb_build_object('ok', true, 'id', p_shift_id, 'machines', cardinality(v_ended));
+end
+$$;
+
+create function public.sh_cover(p_request_id uuid, p_shift_id uuid, p_shift_date date, p_machine_ids uuid[], p_supervisor_id uuid, p_reason text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:sh_cover';
+  a jsonb;
+  v_tenant uuid;
+  v_own text;
+  v_deny jsonb;
+  v_ids uuid[];
+  v_reason text := btrim(p_reason);
+  v_shift public.shift;
+  v_window tstzrange;
+  v_codes text[];
+  v_retired text[];
+  v_prev jsonb;
+begin
+  a := app._pm_authorise(p_request_id, c_src);
+  if not (a->>'ok')::boolean then return a; end if;
+  if a->>'done' is not null then return jsonb_build_object('ok', true, 'id', (a->>'done')::uuid, 'already', true); end if;
+  v_tenant := (a->>'tenant_id')::uuid;
+
+  v_own := app._sh_owned('shift', p_shift_id, v_tenant);
+  if v_own <> 'ok' then return app._pm_deny(a, v_own, 'shift', p_shift_id, c_src); end if;
+  if p_supervisor_id is not null then
+    v_own := app._sh_owned('member', p_supervisor_id, v_tenant);
+    if v_own <> 'ok' then return app._pm_deny(a, v_own, 'member', p_supervisor_id, c_src); end if;
+  end if;
+  v_ids := (select coalesce(array_agg(distinct x), '{}') from unnest(p_machine_ids) x);
+  v_deny := app._sh_check_machines(a, v_ids, c_src);
+  if v_deny is not null then return v_deny; end if;
+
+  if p_shift_date is null then perform app._pm_fail('validation', 'Choose the shift date', 'shift_date'); end if;
+  perform app._pm_len(v_reason, 1, 200, 'reason', 'Enter a reason of 1 to 200 characters');
+  if p_supervisor_id is not null then perform app._sh_check_supervisor(p_supervisor_id); end if;
+  select * into v_shift from public.shift s where s.id = p_shift_id;
+  if v_shift.retired_at is not null then perform app._pm_fail('guard', 'This shift is retired', 'shift_id'); end if;
+  select array_agg(m.code order by m.code) into v_retired from public.machine m where m.id = any (v_ids) and m.retired_at is not null;
+  if v_retired is not null then
+    perform app._pm_fail('guard', 'Retired machines can''t be covered', 'machine_ids', jsonb_build_object('machines', to_jsonb(v_retired)));
+  end if;
+  -- Cover is for an occurrence that has not ended (a running one included) - D6.
+  v_window := app.shift_window(p_shift_id, p_shift_date);
+  if now() >= upper(v_window) then perform app._pm_fail('guard', 'This shift has already ended', 'occurrence_ended'); end if;
+
+  select array_agg(m.code order by m.code),
+         jsonb_agg(jsonb_build_object('machine_code', m.code, 'supervisor_id', (select o.supervisor_id from app.machine_owner_src(m.id, p_shift_id, p_shift_date) o)) order by m.code)
+    into v_codes, v_prev
+    from public.machine m where m.id = any (v_ids);
+
+  insert into public.assignment_cover (tenant_id, shift_id, shift_date, machine_id, supervisor_id, reason, recorded_by, request_id)
+  select v_tenant, p_shift_id, p_shift_date, x, p_supervisor_id, v_reason, (a->>'actor')::uuid, p_request_id from unnest(v_ids) x;
+
+  perform app._pm_audit(a, 'assignment.covered', 'shift', p_shift_id,
+    jsonb_build_object('previous', v_prev),
+    jsonb_build_object('shift', v_shift.name, 'shift_date', p_shift_date, 'machines', to_jsonb(v_codes), 'supervisor_id', p_supervisor_id, 'reason', v_reason),
+    p_request_id, c_src);
+  return jsonb_build_object('ok', true, 'id', p_shift_id, 'machines', cardinality(v_ids));
+end
+$$;
+
 -- 99. Function privileges: no app function is executable by clients (test 004); the public entry points are executable by authenticated only.
 do $$
 declare f record;
