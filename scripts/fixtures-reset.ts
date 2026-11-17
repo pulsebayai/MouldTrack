@@ -129,6 +129,33 @@ export function coverCorrections(rows: CoverRow[], supervisorId: string, yesterd
   return out;
 }
 
+// 07-issue-lifecycle (D12): fixture issues. Org U: a stopped-machine Critical (open), a High awaiting verification on the never-assigned FX-MU3
+// (so a Unit Admin may verify it), and a closed Low. Org A: one open issue for supA. They are READ-ONLY for e2e (history is append-only and
+// service_role has no UPDATE on machine_issue): tests create their own issues. Must match supabase/seed.sql (a Jest test checks it).
+export type IssueFixture = {
+  id: string;
+  tenant: string;
+  machine: string;
+  priority: 'low' | 'medium' | 'high' | 'critical';
+  status: 'open' | 'resolved' | 'closed';
+  stopped: boolean;
+  reporter: string; // USERS key; also the accountable owner (and the resolver when resolved/closed)
+  description: string;
+  reportedAt: string;
+  resolvedAt?: string;
+  resolution?: string;
+};
+export const ISSUES: IssueFixture[] = [
+  { id: '60000000-0000-4000-a000-0000000000e1', tenant: 'e2e org U', machine: 'FX-MU1', priority: 'critical', status: 'open', stopped: true, reporter: 'u3',
+    description: 'Fixture issue: hydraulic pump failed, machine stopped', reportedAt: '2026-01-02T08:00:00Z' },
+  { id: '60000000-0000-4000-a000-0000000000e2', tenant: 'e2e org U', machine: 'FX-MU3', priority: 'high', status: 'resolved', stopped: false, reporter: 'u3',
+    description: 'Fixture issue: mould cooling line leaking', reportedAt: '2026-01-02T08:30:00Z', resolvedAt: '2026-01-02T10:00:00Z', resolution: 'Fixture resolution: line re-sealed' },
+  { id: '60000000-0000-4000-a000-0000000000e3', tenant: 'e2e org U', machine: 'FX-MU2', priority: 'low', status: 'closed', stopped: false, reporter: 'u3',
+    description: 'Fixture issue: guard door sticks', reportedAt: '2026-01-02T09:00:00Z', resolvedAt: '2026-01-02T11:00:00Z', resolution: 'Fixture resolution: hinge oiled' },
+  { id: '60000000-0000-4000-a000-0000000000a1', tenant: 'e2e org A', machine: 'FX-MA1', priority: 'medium', status: 'open', stopped: false, reporter: 'supA',
+    description: 'Fixture issue: oil mist near the nozzle', reportedAt: '2026-01-02T08:00:00Z' },
+];
+
 /** Rows created by e2e tests carry this code/name prefix; fixtures-reset removes (or retires) them. */
 export const isThrowawayPlantName = (name: string): boolean => /^E2E-[A-Za-z0-9]{3,16}$/.test(name);
 const FIXTURE_TARGET_FROM = '2026-01-01';
@@ -260,7 +287,7 @@ async function resetPlant(admin: Admin, tenantIds: Map<string, string>) {
     const stale = must(await admin.from('machine').select('id, code, retired_at').eq('tenant_id', tenantId).like('code', 'E2E-%'));
     for (const m of stale ?? []) {
       if (!isThrowawayPlantName(m.code as string)) continue;
-      const used = await referenced(admin, [['target_version', 'machine_id'], ['assignment_version', 'machine_id'], ['assignment_cover', 'machine_id'], ['target_override_version', 'machine_id']], m.id as string);
+      const used = await referenced(admin, [['target_version', 'machine_id'], ['assignment_version', 'machine_id'], ['assignment_cover', 'machine_id'], ['target_override_version', 'machine_id'], ['machine_issue', 'machine_id']], m.id as string);
       if (used) {
         if (!m.retired_at) must(await admin.from('machine').update({ retired_at: new Date().toISOString() }).eq('id', m.id).select('id'));
       } else must(await admin.from('machine').delete().eq('id', m.id).select('id'));
@@ -334,10 +361,54 @@ async function resetShifts(admin: Admin, tenantIds: Map<string, string>) {
     const stale = must(await admin.from('shift').select('id, name, retired_at').eq('tenant_id', tenantId).like('name', 'E2E-%'));
     for (const sh of stale ?? []) {
       if (!isThrowawayPlantName(sh.name as string)) continue;
-      const used = (await Promise.all(['assignment_version', 'assignment_cover', 'target_override_version'].map(async (t) =>
-        must(await admin.from(t).select('id').eq('shift_id', sh.id).limit(1))))).some((r) => (r ?? []).length > 0);
+      const used = (await Promise.all([['assignment_version', 'shift_id'], ['assignment_cover', 'shift_id'], ['target_override_version', 'shift_id'],
+        ['machine_issue', 'reported_shift_id'], ['machine_issue', 'resolved_shift_id']].map(async ([t, c]) =>
+        must(await admin.from(t).select('id').eq(c, sh.id).limit(1))))).some((r) => (r ?? []).length > 0);
       if (used) { if (!sh.retired_at) must(await admin.from('shift').update({ retired_at: new Date().toISOString() }).eq('id', sh.id).select('id')); }
       else must(await admin.from('shift').delete().eq('id', sh.id).select('id'));
+    }
+  }
+}
+
+/**
+ * Issue fixtures (07, D12). Matched by fixed id and inserted only when missing (with their report/resolve actions and the ownership row): the issue
+ * tables are append-only for service_role, so a reset never changes them. Throwaway categories (E2E-...) are deleted when no issue uses them,
+ * otherwise retired. Throwaway issues created by e2e runs stay (history is append-only): known debt, like 04/05.
+ */
+async function resetIssues(admin: Admin, tenantIds: Map<string, string>) {
+  for (const fx of ISSUES) {
+    const tenantId = tenantIds.get(fx.tenant)!;
+    const found = must(await admin.from('machine_issue').select('id').eq('id', fx.id).maybeSingle());
+    if (found) continue;
+    const user = USERS.find((u) => u.key === fx.reporter)!;
+    const sup = must(await admin.from('membership').select('user_id').eq('tenant_id', tenantId).eq('phone_e164', user.phone).maybeSingle());
+    const machine = must(await admin.from('machine').select('id').eq('tenant_id', tenantId).eq('code', fx.machine).maybeSingle());
+    const cat = must(await admin.from('issue_category').select('id').eq('tenant_id', tenantId).eq('name', 'Mechanical').maybeSingle());
+    if (!sup || !machine || !cat) continue;
+    const by = sup.user_id as string;
+    const closed = fx.status === 'closed';
+    must(await admin.from('machine_issue').insert({
+      id: fx.id, tenant_id: tenantId, machine_id: machine.id, category_id: cat.id, priority: fx.priority, description: fx.description,
+      machine_stopped: fx.stopped, status: fx.status, accountable_owner_id: by, reported_by: by, reported_at: fx.reportedAt,
+      resolved_by: fx.resolvedAt ? by : null, resolved_at: fx.resolvedAt ?? null, resolution_notes: fx.resolution ?? null,
+      closed_at: closed ? fx.resolvedAt : null, closed_by: closed ? by : null,
+    }).select('id'));
+    must(await admin.from('issue_action').insert({ tenant_id: tenantId, issue_id: fx.id, actor_id: by, actor_role: 'supervisor', type: 'report', status_after: 'open', at: fx.reportedAt }).select('id'));
+    if (fx.resolvedAt) {
+      must(await admin.from('issue_action').insert({
+        tenant_id: tenantId, issue_id: fx.id, actor_id: by, actor_role: 'supervisor', type: 'resolve', notes: fx.resolution,
+        status_before: 'open', status_after: fx.status, at: fx.resolvedAt,
+      }).select('id'));
+    }
+    must(await admin.from('issue_ownership_history').insert({ tenant_id: tenantId, issue_id: fx.id, new_owner: by, source: 'report', actor_id: by, at: fx.reportedAt }).select('id'));
+  }
+  for (const tenantId of tenantIds.values()) {
+    const stale = must(await admin.from('issue_category').select('id, name, retired_at').eq('tenant_id', tenantId).like('name', 'E2E-%'));
+    for (const c of stale ?? []) {
+      if (!isThrowawayPlantName(c.name as string)) continue;
+      const used = must(await admin.from('machine_issue').select('id').eq('category_id', c.id).limit(1));
+      if (used && used.length > 0) { if (!c.retired_at) must(await admin.from('issue_category').update({ retired_at: new Date().toISOString() }).eq('id', c.id).select('id')); }
+      else must(await admin.from('issue_category').delete().eq('id', c.id).select('id'));
     }
   }
 }
@@ -430,6 +501,7 @@ async function main() {
   }
   await resetPlant(admin, tenantIds);
   await resetShifts(admin, tenantIds);
+  await resetIssues(admin, tenantIds);
   // Super Admins: reuse the Auth user, reset password + unban, and put the platform_admin row in its canonical state.
   for (const f of SUPER_ADMINS) {
     let id = existing.get(f.email);
