@@ -300,8 +300,9 @@ select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.
               and (has_function_privilege('authenticated', p.oid, 'execute') or has_function_privilege('anon', p.oid, 'execute'))), 0,
   'no 06 function in app is executable by clients');
 select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-            where n.nspname = 'public' and p.proname ~ '^rd_' and has_function_privilege('authenticated', p.oid, 'execute') and not has_function_privilege('anon', p.oid, 'execute')), 3,
-  'the three rd_* RPCs of this step are executable by authenticated and not by anon');
+            where n.nspname = 'public' and p.proname ~ '^rd_' and has_function_privilege('authenticated', p.oid, 'execute') and not has_function_privilege('anon', p.oid, 'execute')),
+          (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname ~ '^rd_'),
+  'every public rd_* RPC is executable by authenticated and not by anon');
 
 select * from finish();
 rollback;
