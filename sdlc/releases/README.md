@@ -4,11 +4,11 @@ Every release Rn follows architecture.md §Release & regression policy. Run on `
 
 ## Procedure (Stage 5b)
 1. Scope: list the features; confirm `main` CI is green. Note the commit SHA and the CI run URL (a **code** commit's full run, never a docs-only skipped run).
-2. Deploy `main` to **staging** (migrations, Edge Functions `user-admin`, `account`, `platform`, `platform-setup`, secret `ALLOWED_ORIGINS`, web alias `staging`, EAS Update `preview`) and run `node scripts/auth-config.mjs --apply --ref staging` (hosted Auth settings; the nightly check only verifies them). Run `regression.yml` with `target=staging`. It must pass.
+2. Deploy `main` to **staging** (migrations, Edge Functions `user-admin`, `account`, `platform`, `platform-setup`, secret `ALLOWED_ORIGINS`, web alias `staging`, EAS Update `preview`) and run `node scripts/auth-config.mjs --apply --ref staging` (hosted Auth settings; the nightly check only verifies them). Run `regression.yml` with `target=staging`. It must pass. The deploy must end with the **setup-token check**: `supabase secrets list --project-ref <ref> -o json | jq -e '[.[] | select(.name=="PLATFORM_SETUP_TOKEN")] | length == 0'` succeeds (no `PLATFORM_SETUP_TOKEN` unless the first-Super-Admin runbook below is in progress; if present and not in progress, unset it and investigate who set it). Never put the token in `config.toml` (the deploy CLI pushes `[edge_runtime.secrets]` to the hosted project; D11).
 3. Manual checklist on staging (below), including one **real Android phone**.
 4. Write `sdlc/releases/<Rn>.md` from the template; copy the regression summary and result files into `sdlc/releases/<Rn>/evidence/`. Commit via PR.
 5. **Owner sign-off in chat (Sidambara Raja).** Only then promote to prod (the production-gate hook blocks it until the owner runs/approves it).
-6. After the prod deploy run `regression.yml` with `target=prod` (**smoke only**, read-only) and append its summary. Pass → mark the release `released` in roadmap.md. Fail → roll back, record the incident, add a roadmap item.
+6. After the prod deploy run the same **setup-token check** against prod (read-only), then run `regression.yml` with `target=prod` (**smoke only**, read-only) and append its summary. Pass → mark the release `released` in roadmap.md. Fail → roll back, record the incident, add a roadmap item.
 
 ## Runbook: first Super Admin on an environment (prod at R1; staging if it has no SA)
 Run from the **owner's own terminal**, never from CI (the repo and its logs are public). Needs the Supabase CLI logged in (`supabase login`). In zsh, `setopt HIST_IGNORE_SPACE` and start the sensitive lines with a space so they stay out of shell history.
