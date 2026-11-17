@@ -23,6 +23,7 @@ Branches from main (01–04). **03 merges first**; 05 rebases on it in step 8 (0
 - `src/lib/plant.ts` (+ tests), `src/app/(app)/plant/_layout.tsx` (tabs), `plant/shifts.tsx`, `plant/assignments.tsx`, `src/components/plant/targets-panel.tsx`, `src/components/plant/*` (shift form, assign/cover dialogs), `src/components/my-shift-card.tsx`, `src/app/(app)/home.tsx` — new/modified; screen tests new
 - `e2e/web/shifts.spec.ts`, `e2e/api/shifts.spec.ts`, `e2e/maestro/my-shift.yaml` — new; `e2e/web/fixtures.ts` — additions
 - Step 8 only: `supabase/tests/022_platform_boundary.test.sql` — fixture-block additions only (architecture extension point)
+- Step 8a (review nit 16, extra files): `e2e/maestro/my-shift.yaml` (15 s waits, indexed ids), `src/test/shift-fixtures.ts`, `src/components/plant/assignment-forms.tsx`, `src/__tests__/screens/{assignments,my-shift}.test.tsx`, `src/lib/__tests__/shifts.test.ts`, `supabase/tests/030–033` (edited), `supabase/tests/022` (fixture rows only, step 8)
 - Step 9 only: temporary dev-only triggers (removed before ready)
 
 ## Steps
@@ -34,7 +35,7 @@ Branches from main (01–04). **03 merges first**; 05 rebases on it in step 8 (0
 - [x] 6. **Client (tests first).** plant.ts calls + error mapping; screen tests for Shifts tab, Assignments board (pickers, grouping, multi-select, assign/cover dialogs naming who loses machines, reason required), override rows in the targets panel, My shift card states (running, next, nothing assigned, no shifts). Then implement D11. — proof: lint/typecheck/test
 - [x] 7. **E2E.** `e2e/web/shifts.spec.ts` (org U: create shift, assign, cover, board, override; SUP Home card; axe), `e2e/api/shifts.spec.ts` (SUP can't read version tables; `my_shift` isolation; SUP writes denied + audited), `e2e/maestro/my-shift.yaml` (proven in step 9's Android run). — proof: CI `e2e-web` green
 - [x] 8. **Rebase on 03 (after 03 merges).** Rebase; switch imports to `src/lib/use-load.ts`; add 05's four tables to 022's fixture block (additions only); confirm 022 discovers 05's RPCs and tables and SAs are denied; full suite green. — proof: CI green
-- [ ] 8a. **Review fixes (Opus decisions, sdlc-reviewer 2026-11-17).** Tests first for each.
+- [x] 8a. **Review fixes (Opus decisions, sdlc-reviewer 2026-11-17).** Tests first for each.
   - **R1 Plan changes never rewrite a started occurrence (I-1).** `sh_assign`, `sh_unassign` and `sh_set_target_override`/`sh_end_target_override`: refuse (guard `occurrence_started`, message "This shift has already started — use Cover for this shift") when `p_at >= lower(app.shift_window(shift, p_from))`. Client defaults `from` to the first occurrence that hasn't started (today or tomorrow). pgTAP: today's occurrence ended; running; not yet started. Fix the e2e/api specs that assign "from today" on a started shift to use the first unstarted date (05's own unmerged tests). Base targets (04, date-only rule) from today on a started shift remain a known gap → flag for 06.
   - **R2 Board defaults to the current/next occurrence (I-2, spec AC-9).** `shift_board(shift, null)` resolves the occurrence via `current_occurrences(p_at)` for that shift, else the next one, and returns its `shift_date`; client sends null on first load.
   - **R3 My shift returns every running occurrence (I-3).** `my_shift` returns an array: all running occurrences where the caller owns ≥ 1 machine; if none is running, the next one within 36 h. Card lists each occurrence. pgTAP: two overlapping running occurrences → both. (Spec AC-10 clarified, dated note.)
@@ -89,3 +90,25 @@ AC-1–13 → tests (spec table); full suite green after rebase on 03; dev regre
 ### 2026-11-17 (Sonnet, step 8)
 - Done: step 8 (rebase on 03, `use-load` imports now `src/lib/use-load.ts`, 022 fixtures + read-RPC Super Admin denial, see Deviations). Local: pgTAP 19 files / 1212 tests (also with seed), jest 628 / 47 suites, lint and typecheck clean.
 - Next step: step 9 (hosted proof on dev) on the owner's go-ahead.
+
+### 2026-11-17 (Sonnet, step 8a)
+- Done: R1-R8 (spec clarifications as in the 8a text). DB: migration edited in place (never applied to hosted dev), pgTAP 030-033 updated/extended. Client: `plant.ts` (`BoardMachine.plan_owner_*`/`later_dates`, `ShiftBoard.plan_date`, `MyShift.occurrences`, `whoLoses(..., basis)`, `supersededChanges`), assign/cover/end forms, assignments tab (null date on first load and on shift change; the field shows the date the server chose), My shift card (occurrence list, refetch on app foreground and every 60 s, keeps showing the last answer while refetching, `accessibilityLiveRegion` on loading, "No machines assigned in the next 36 hours"). e2e: api + web specs updated for R1-R4, Maestro 15 s waits and indexed ids.
+- Local: pgTAP 19 files / 1264 tests (also with seed), jest 634 / 47 suites, lint and typecheck clean. e2e not run locally (no Supabase stack here): proof is CI on PR #13.
+- Deviations / interpretations:
+  - The whole DB side of 8a is one commit, not one per R-item: the migration edits are interleaved (R1/R4 in `sh_assign`/`sh_unassign`, R2/R5/R8-9 in `shift_board`/`my_shift`).
+  - Test edits to 05's own unmerged tests, all forced by R1/R3/R4: 030 (retire/reinstate use a dynamic hour-boundary shift because a running shift can't be retired, R7), 031 (`later_change` tests replaced by supersede tests; plan-state fixtures for CovA/CovB inserted directly), 032 (override offsets >= 1 day), 033 (`my_shift` paths now `occurrences[0]`; default-date test replaced by R2 tests), jest `assignments`/`my-shift`/`shifts` and `shift-fixtures` (occurrences shape, plan owner fields, `later_change` test replaced). No 01-04/006 assertion changed; 022 untouched in 8a.
+  - pgTAP is clock-dependent (writes use `now()`): where the shifts' position relative to now matters, tests build shifts relative to now or `pass()` with a note when the time of day can't make the case (e.g. a not-yet-started shift late in the day).
+  - R5 interpretation: `shift_board` returns `plan_date` (first not-yet-started occurrence >= the board date = where an assignment starts), `plan_owner_*` is the plan owner on that date, and `later_dates` are the plan version dates after it. The forms default From to `plan_date`; Assign "who loses" uses the plan owner, Cover keeps the effective owner. The dialog says covers on the board date are not affected.
+  - R6: the tz-lock message stays 04's ("The site timezone can't change once targets exist"); 04's tests unchanged.
+  - R4: the superseded dates are listed in the confirm dialog (Assign); End assignment has no dialog and supersedes silently per the server rule.
+  - R8-13 uses RN `AppState` + `setInterval`, not an expo-router focus hook (the Home tests render without a navigator).
+  - R8-10: `sh_cover` uses `now()` (comment in the migration); a cover can only be written while the occurrence has not ended.
+  - e2e: the api spec seeds the standing plan on the always-started 00:00-12:00 / 12:00-00:00 shifts directly as service role (like fixtures-reset), then exercises assign from tomorrow; the web spec uses the form's own default From date.
+- Known gap for 06: base targets (04's date-only rule, `target_for`) on a started shift can still change under a running shift; R1 only closes plan/override rewrites.
+- Architecture flags (architecture.md not edited; for the architecture lock holder):
+  - Function prefix `sh_*` (not `pm_*`) for 05's RPCs.
+  - Read-RPC authorisation pattern: `app._sh_read_authorise` for members, plus a Super Admin / non-member branch that delegates to `app._pm_authorise(null, source)` (satisfies 022's static check and audits the denial).
+  - Site timezone lock now covers `target_version`, `shift`, `assignment_version`, `assignment_cover` and `target_override_version`.
+  - Core entities: ShiftAssignment = `assignment_version` (recurring plan) + `assignment_cover` (one occurrence); plan changes never rewrite a started occurrence (use Cover); re-planning supersedes later scheduled versions.
+  - `my_shift` rule: every running occurrence where the caller owns >= 1 machine; if none runs, the next one within 36 h (state running | next | none | no_shifts).
+- Next step: step 9 on the owner's go-ahead (not started).

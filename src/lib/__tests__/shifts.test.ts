@@ -1,6 +1,6 @@
 import {
   PlantError, fetchActiveSupervisors, fetchMyShift, fetchOverrideVersions, fetchShiftBoard, fetchShifts, formatDuration, groupBoard, hhmm, isOvernight, shiftApi, shiftMinutes,
-  summariseOverrides, timeWindow, validateAssignForm, validateCoverForm, validateShiftForm, whoLoses, type BoardMachine, type OverrideVersion,
+  summariseOverrides, supersededChanges, timeWindow, validateAssignForm, validateCoverForm, validateShiftForm, whoLoses, type BoardMachine, type OverrideVersion,
 } from '@/lib/plant';
 import { fakeDb } from '@/test/fake-db';
 
@@ -65,7 +65,10 @@ describe('assign and cover validation', () => {
 });
 
 const bm = (i: number, over: Partial<BoardMachine> = {}): BoardMachine => ({
-  machine_id: `m-${i}`, code: `M-${i}`, name: `Press ${i}`, line: null, status: 'active', owner_id: null, owner_name: null, owner_inactive: false, source: 'none', reason: null, ...over,
+  machine_id: `m-${i}`, code: `M-${i}`, name: `Press ${i}`, line: null, status: 'active', owner_id: null, owner_name: null, owner_inactive: false, source: 'none', reason: null,
+  plan_owner_id: over.source === 'plan' || over.plan_owner_id !== undefined ? (over.plan_owner_id ?? over.owner_id ?? null) : null,
+  plan_owner_name: over.source === 'plan' || over.plan_owner_name !== undefined ? (over.plan_owner_name ?? over.owner_name ?? null) : null,
+  later_dates: [], ...over,
 });
 
 describe('board grouping (AC-9)', () => {
@@ -90,6 +93,18 @@ describe('board grouping (AC-9)', () => {
     expect(whoLoses(machines, ['m-1', 'm-3', 'm-2', 'm-4'], 's2')).toEqual([{ name: 'Sup One', codes: ['M-3'] }]);
     expect(whoLoses(machines, ['m-1', 'm-3', 'm-6'], null)).toEqual([{ name: 'Gone Person', codes: ['M-6'] }, { name: 'Sup One', codes: ['M-3'] }, { name: 'Sup Two', codes: ['M-1'] }]);
     expect(whoLoses(machines, ['m-2'], 's1')).toEqual([]);
+  });
+  it('R5: a plan change looks at the plan owner, so a cover on the board date neither hides nor invents a loser; a cover looks at the effective owner', () => {
+    const covered = bm(7, { owner_id: 's2', owner_name: 'Sup Two', source: 'cover', reason: 'Leave', plan_owner_id: 's1', plan_owner_name: 'Sup One' });
+    expect(whoLoses([covered], ['m-7'], 's3')).toEqual([{ name: 'Sup One', codes: ['M-7'] }]);
+    expect(whoLoses([covered], ['m-7'], 's1')).toEqual([]);
+    expect(whoLoses([covered], ['m-7'], 's3', 'effective')).toEqual([{ name: 'Sup Two', codes: ['M-7'] }]);
+  });
+  it('R4: lists the scheduled plan changes a new assignment replaces, up to the until date', () => {
+    const ms = [bm(1, { later_dates: ['2026-12-01', '2026-12-20'] }), bm(2), bm(3, { later_dates: ['2026-11-25'] })];
+    expect(supersededChanges(ms, ['m-1', 'm-2', 'm-3'])).toEqual([{ code: 'M-1', dates: ['2026-12-01', '2026-12-20'] }, { code: 'M-3', dates: ['2026-11-25'] }]);
+    expect(supersededChanges(ms, ['m-1', 'm-3'], '2026-12-05')).toEqual([{ code: 'M-1', dates: ['2026-12-01'] }, { code: 'M-3', dates: ['2026-11-25'] }]);
+    expect(supersededChanges(ms, ['m-2'])).toEqual([]);
   });
 });
 

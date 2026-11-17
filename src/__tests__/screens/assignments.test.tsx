@@ -12,7 +12,7 @@ const TODAY = '2026-11-18';
 const machines = [
   boardMachine(1, { owner_id: 's-1', owner_name: 'Sup 1', source: 'plan' }),
   boardMachine(2, { owner_id: 's-1', owner_name: 'Sup 1', source: 'plan' }),
-  boardMachine(3, { owner_id: 's-2', owner_name: 'Sup 2', source: 'cover', reason: 'Leave' }),
+  boardMachine(3, { owner_id: 's-2', owner_name: 'Sup 2', source: 'cover', reason: 'Leave', plan_owner_id: 's-2', plan_owner_name: 'Sup 2' }),
   boardMachine(4),
 ];
 
@@ -40,11 +40,12 @@ describe('Assignments board (AC-9)', () => {
     expect(await screen.findByTestId('assignments-no-shifts')).toBeTruthy();
   });
 
-  it('loads the first shift for today and puts Unassigned first, then supervisors', async () => {
+  it('loads the current-or-next occurrence (null date) and puts Unassigned first, then supervisors', async () => {
     const { rpc, ui } = setup();
     await ui;
     expect(await screen.findByTestId('board')).toBeTruthy();
-    expect(rpc).toHaveBeenCalledWith('shift_board', { p_shift_id: 'sh-1', p_date: TODAY });
+    expect(rpc).toHaveBeenCalledWith('shift_board', { p_shift_id: 'sh-1', p_date: null });
+    expect(screen.getByTestId('board-date')).toHaveProp('value', TODAY);
     expect(screen.getByTestId('board-unassigned-title')).toHaveTextContent('Unassigned this shift (1)');
     expect(screen.getByTestId('board-group-s-1')).toBeTruthy();
     expect(screen.getByTestId('board-source-m-1')).toHaveTextContent('Plan');
@@ -58,7 +59,7 @@ describe('Assignments board (AC-9)', () => {
     await ui;
     await screen.findByTestId('board');
     await fireEvent.press(screen.getByTestId('board-shift-sh-2'));
-    await waitFor(() => expect(rpc).toHaveBeenCalledWith('shift_board', { p_shift_id: 'sh-2', p_date: TODAY }));
+    await waitFor(() => expect(rpc).toHaveBeenCalledWith('shift_board', { p_shift_id: 'sh-2', p_date: null }));
     await fireEvent.changeText(screen.getByTestId('board-date'), '2026-11-20');
     await waitFor(() => expect(rpc).toHaveBeenCalledWith('shift_board', { p_shift_id: 'sh-2', p_date: '2026-11-20' }));
     const n = rpc.mock.calls.length;
@@ -118,14 +119,43 @@ describe('Assignments board (AC-9)', () => {
     expect(rpc).not.toHaveBeenCalledWith('sh_assign', expect.anything());
   });
 
-  it('names the machines and dates of a later_change refusal', async () => {
-    const later = { data: null, status: 400, error: { code: 'P0001', message: 'A later change exists', details: '{"code":"guard","field":"later_change","machines":["M-4"],"dates":["2026-12-01"]}' } };
-    await setup({ sh_assign: later }).ui;
+  it('R4: the confirm dialog lists the scheduled changes a new assignment replaces', async () => {
+    const rows = [boardMachine(4, { later_dates: ['2026-12-01', '2026-12-20'] })];
+    const { rpc, ui } = setup({}, rows);
+    await ui;
     await pick('m-4');
     await fireEvent.press(screen.getByTestId('board-assign'));
     await fireEvent.press(screen.getByTestId('assign-sup-s-3'));
     await fireEvent.press(screen.getByTestId('assign-submit'));
-    expect(await screen.findByTestId('assign-form-error')).toHaveTextContent(/A later change exists: M-4 \(1 Dec 2026\)/);
+    expect(screen.getByTestId('confirm-message')).toHaveTextContent(/replaces changes already scheduled for: M-4 \(1 Dec 2026, 20 Dec 2026\)/);
+    expect(screen.getByTestId('confirm-message')).toHaveTextContent(/Covers on 18 Nov 2026 aren't affected/);
+    await fireEvent.press(screen.getByTestId('confirm-ok'));
+    await waitFor(() => expect(rpc).toHaveBeenCalledWith('sh_assign', expect.objectContaining({ p_machine_ids: ['m-4'] })));
+  });
+
+  it('R5: who loses comes from the plan owner, not a cover on the board date', async () => {
+    const rows = [boardMachine(5, { owner_id: 's-2', owner_name: 'Sup 2', source: 'cover', reason: 'Leave', plan_owner_id: 's-1', plan_owner_name: 'Sup 1' })];
+    await setup({}, rows).ui;
+    await pick('m-5');
+    await fireEvent.press(screen.getByTestId('board-assign'));
+    await fireEvent.press(screen.getByTestId('assign-sup-s-3'));
+    await fireEvent.press(screen.getByTestId('assign-submit'));
+    expect(screen.getByTestId('confirm-message')).toHaveTextContent(/Sup 1 loses M-5\./);
+    expect(screen.getByTestId('confirm-message')).not.toHaveTextContent(/Sup 2 loses/);
+  });
+
+  it('R1: the From date starts at the first occurrence that has not started, and a refusal for a started shift is shown as is', async () => {
+    const started = { data: null, status: 400, error: { code: 'P0001', message: 'This shift has already started — use Cover for this shift', details: '{"code":"guard","field":"occurrence_started"}' } };
+    const t = setup({ sh_assign: started }, machines);
+    t.rpc.mockImplementation(async (fn: string) => (fn === 'shift_board' ? rpcOk(board(machines, { shift_date: TODAY, plan_date: '2026-11-19' })) : fn === 'sh_assign' ? started : rpcOk({ ok: true })));
+    await t.ui;
+    await pick('m-4');
+    await fireEvent.press(screen.getByTestId('board-assign'));
+    expect(screen.getByTestId('assign-from')).toHaveProp('value', '2026-11-19');
+    expect(screen.getByTestId('assign-until-help')).toHaveTextContent('After this date the machine has no supervisor');
+    await fireEvent.press(screen.getByTestId('assign-sup-s-3'));
+    await fireEvent.press(screen.getByTestId('assign-submit'));
+    expect(await screen.findByTestId('assign-form-error')).toHaveTextContent('This shift has already started — use Cover for this shift');
   });
 
   it('covers one occurrence: reason is required, unassigned is allowed', async () => {

@@ -10,7 +10,7 @@ name: my-shift
 - inputText: ${PASSWORD}
 - hideKeyboard
 - tapOn: { id: "sign-in-submit" }
-- assertVisible: { id: "home-tenant", text: "e2e org A" }
-- assertVisible: { id: "my-shift" }
-- assertVisible: { id: "my-shift-state", text: "Running now" }
+- extendedWaitUntil: { visible: { id: "home-tenant", text: "e2e org A" }, timeout: 15000 }
+- extendedWaitUntil: { visible: { id: "my-shift" }, timeout: 15000 }
+- extendedWaitUntil: { visible: { id: "my-shift-state-0", text: "Running now" }, timeout: 15000 }
 - assertVisible: "FX-MA1.*"

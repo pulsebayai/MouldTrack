@@ -83,18 +83,24 @@ test.describe('Unit Admin plans shifts and assignments (AC-1, AC-5..9)', () => {
     await expect(tid(page, `board-source-${machineId}`)).toHaveText('No plan');
     await tid(page, `board-machine-${machineId}`).click();
     await tid(page, 'board-assign').click();
+    // R1/R2: the board opens on the current (else next) occurrence and the From date defaults to the first one that hasn't started.
+    const planFrom = await tid(page, 'assign-from').inputValue();
+    expect(planFrom).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(planFrom >= today).toBe(true);
+    await expect(tid(page, 'assign-until-help')).toHaveText('After this date the machine has no supervisor');
     await tid(page, 'assign-submit').click();
     await expect(tid(page, 'assign-sup-error')).toHaveText('Choose a supervisor');
     await prefix(page, 'assign-sup-').filter({ hasText: SHIFT_FIXTURE.orgU.supervisor }).click();
     await expectNoSeriousViolations(page);
     await tid(page, 'assign-submit').click();
+    await tid(page, 'board-date').fill(planFrom); // the plan starts here (the board date itself only when its shift hasn't started)
     const group = prefix(page, 'board-group-').filter({ hasText: SHIFT_FIXTURE.orgU.supervisor });
     await expect(group).toContainText(machineCode);
     await expect(tid(page, `board-source-${machineId}`)).toHaveText('Plan');
     await expect(tid(page, 'board-actions')).toHaveCount(0); // selection cleared after the write
 
     // Cover tomorrow only: the reason is required; today's plan stays.
-    await tid(page, 'board-date').fill(addDays(today, 1));
+    await tid(page, 'board-date').fill(addDays(planFrom, 1));
     await tid(page, `board-machine-${machineId}`).click();
     await tid(page, 'board-cover').click();
     await tid(page, 'cover-sup-none').click();
@@ -105,7 +111,7 @@ test.describe('Unit Admin plans shifts and assignments (AC-1, AC-5..9)', () => {
     await expect(tid(page, `board-source-${machineId}`)).toHaveText('Cover: E2E leave');
     await expect(tid(page, 'board-group-unassigned')).toContainText(machineCode);
     await expectNoSeriousViolations(page);
-    await tid(page, 'board-date').fill(today);
+    await tid(page, 'board-date').fill(planFrom);
     await expect(tid(page, `board-source-${machineId}`)).toHaveText('Plan');
 
     // A shift target on the machine page.
@@ -132,8 +138,8 @@ test.describe('Supervisor home shows My shift (AC-9)', () => {
   test('the card names the shift and lists assigned machines; a Unit Admin has no card', async ({ page }) => {
     await signIn(page, USERS.u3, API_PASSWORD);
     await expect(tid(page, 'my-shift')).toBeVisible();
-    await expect(tid(page, 'my-shift-state')).toHaveText(/^(Running now|Starts \d{1,2} \w{3} \d{4})$/);
-    await expect(tid(page, 'my-shift-name')).toBeVisible();
+    await expect(tid(page, 'my-shift-state-0')).toHaveText(/^(Running now|Starts \d{1,2} \w{3} \d{4})$/);
+    await expect(tid(page, 'my-shift-name-0')).toBeVisible();
     await expect(prefix(page, 'my-shift-machine-').first()).toBeVisible();
     await expect(tid(page, 'plant-link')).toHaveCount(0);
     await expectNoSeriousViolations(page);

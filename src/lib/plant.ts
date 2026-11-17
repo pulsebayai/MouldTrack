@@ -382,28 +382,33 @@ export type BoardMachine = {
   owner_inactive: boolean;
   source: OwnerSource;
   reason: string | null;
+  /** The owner by the plan alone (covers ignored) where an assignment made now would start, and the plan changes scheduled after it. */
+  plan_owner_id: string | null;
+  plan_owner_name: string | null;
+  later_dates: string[];
 };
 export type ShiftBoard = {
   ok: true;
   shift: { id: string; name: string; start_time: string; end_time: string; retired: boolean };
   shift_date: string;
+  /** The first occurrence that has not started and is not before the board date: where an assignment made now starts. */
+  plan_date: string;
   starts_at: string;
   ends_at: string;
   machines: BoardMachine[];
   unassigned_count: number;
 };
 export type MyShiftMachine = { machine_id: string; code: string; name: string; line: string | null };
-export type MyShift =
-  | { ok: true; state: 'no_shifts' | 'none' }
-  | {
-      ok: true;
-      state: 'running' | 'next';
-      shift: { id: string; name: string; start_time: string; end_time: string };
-      shift_date: string;
-      starts_at: string;
-      ends_at: string;
-      machines: MyShiftMachine[];
-    };
+export type MyShiftOccurrence = {
+  shift: { id: string; name: string; start_time: string; end_time: string };
+  shift_date: string;
+  starts_at: string;
+  ends_at: string;
+  running: boolean;
+  machines: MyShiftMachine[];
+};
+/** Every running occurrence the caller owns machines in; with none running, the next one within 36 hours. */
+export type MyShift = { ok: true; state: 'running' | 'next' | 'none' | 'no_shifts'; occurrences: MyShiftOccurrence[] };
 export type OverrideVersion = TargetVersion & { shift_id: string };
 
 // ---- Times (HH:MM, site time zone; the server owns the occurrence maths) --------------------------------------------------------
@@ -496,19 +501,35 @@ export function groupBoard(machines: BoardMachine[]): { unassigned: BoardMachine
   return { unassigned, groups: list };
 }
 
-/** Who loses machines when the selected ones move to `newOwnerId` (null = unassigned): the current owners of the other supervisors' machines. */
-export function whoLoses(machines: BoardMachine[], selectedIds: string[], newOwnerId: string | null): { name: string; codes: string[] }[] {
+/**
+ * Who loses machines when the selected ones move to `newOwnerId` (null = unassigned). basis 'plan' (Assign: a plan change) looks at the plan owner
+ * where the assignment would start, so a cover on the board date doesn't hide or invent a loser; basis 'effective' (Cover: one occurrence) looks at
+ * who owns the occurrence now.
+ */
+export function whoLoses(machines: BoardMachine[], selectedIds: string[], newOwnerId: string | null, basis: 'plan' | 'effective' = 'plan'): { name: string; codes: string[] }[] {
   const chosen = new Set(selectedIds);
   const out = new Map<string, { name: string; codes: string[] }>();
   for (const m of machines) {
-    if (!chosen.has(m.machine_id) || m.owner_id === null || m.owner_id === newOwnerId) continue;
-    const g = out.get(m.owner_id) ?? { name: m.owner_name ?? 'Unknown', codes: [] };
+    const id = basis === 'plan' ? m.plan_owner_id : m.owner_id;
+    const name = basis === 'plan' ? m.plan_owner_name : m.owner_name;
+    if (!chosen.has(m.machine_id) || id === null || id === newOwnerId) continue;
+    const g = out.get(id) ?? { name: name ?? 'Unknown', codes: [] };
     g.codes.push(m.code);
-    out.set(m.owner_id, g);
+    out.set(id, g);
   }
   const list = [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
   for (const g of list) g.codes.sort();
   return list;
+}
+
+/** Plan changes already scheduled after the start date for the selected machines: a new assignment replaces them (R4), so the dialog lists them. */
+export function supersededChanges(machines: BoardMachine[], selectedIds: string[], until: string | null = null): { code: string; dates: string[] }[] {
+  const chosen = new Set(selectedIds);
+  return machines
+    .filter((m) => chosen.has(m.machine_id))
+    .map((m) => ({ code: m.code, dates: m.later_dates.filter((d) => !until || d <= until) }))
+    .filter((m) => m.dates.length > 0)
+    .sort((a, b) => (a.code < b.code ? -1 : 1));
 }
 
 // ---- Per-shift target overrides (display) -------------------------------------------------------------------------------------------

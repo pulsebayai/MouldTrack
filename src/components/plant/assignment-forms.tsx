@@ -3,7 +3,7 @@ import { Text, View } from 'react-native';
 import { Button, Chip, ConfirmDialog, ErrorText, Field, colors } from '@/components/ui';
 import { toUserMessage } from '@/lib/errors';
 import {
-  PlantError, RequestIds, SHIFT_MSG, formatPlantDate, isValidDate, shiftApi, validateAssignForm, validateCoverForm, whoLoses, type FieldErrors, type ShiftBoard, type Supervisor,
+  PlantError, RequestIds, SHIFT_MSG, formatPlantDate, isValidDate, shiftApi, validateAssignForm, supersededChanges, validateCoverForm, whoLoses, type FieldErrors, type ShiftBoard, type Supervisor,
 } from '@/lib/plant';
 import { useSession } from '@/lib/session-provider';
 import { Label } from './common';
@@ -17,19 +17,17 @@ type Common = {
   onCancel: () => void;
 };
 
-/** A server refusal as one sentence; the later_change guard names the machines and the dates it found. */
+/** A server refusal as one sentence, with the machines it names. */
 export function describeError(err: unknown): string {
   if (!(err instanceof PlantError)) return toUserMessage(err);
-  if (err.field === 'later_change' && err.machines?.length) {
-    const dates = (err.dates ?? []).map(formatPlantDate).join(', ');
-    return `${err.message}: ${err.machines.join(', ')}${dates ? ` (${dates})` : ''}. Unassign them from that date first.`;
-  }
   return err.machines?.length ? `${err.message}: ${err.machines.join(', ')}` : err.message;
 }
 
 const box = { gap: 12, borderWidth: 2, borderColor: colors.primary, borderRadius: 12, padding: 16 } as const;
 const codesOf = (board: ShiftBoard, selected: string[]) => board.machines.filter((m) => selected.includes(m.machine_id)).map((m) => m.code).join(', ');
-const startDate = (board: ShiftBoard, today: string | null) => (today && board.shift_date < today ? today : board.shift_date);
+/** A plan change starts at the first occurrence that hasn't started (the server refuses a started one: use Cover). */
+const startDate = (board: ShiftBoard, today: string | null) => (today && board.plan_date < today ? today : board.plan_date);
+const superseded = (list: { code: string; dates: string[] }[]) => list.map((c) => `${c.code} (${c.dates.map(formatPlantDate).join(', ')})`).join('; ');
 
 /** "Assign to…": a supervisor takes the selected machines on this shift from a date (until a date, or until changed). */
 export function AssignForm({ board, selected, supervisors, today, onDone, onCancel }: Common) {
@@ -41,7 +39,8 @@ export function AssignForm({ board, selected, supervisors, today, onDone, onCanc
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const ids = useRef(new RequestIds());
-  const losers = whoLoses(board.machines, selected, supervisorId || null);
+  const losers = whoLoses(board.machines, selected, supervisorId || null, 'plan');
+  const replaced = supersededChanges(board.machines, selected, isValidDate(until.trim()) ? until.trim() : null);
   const target = supervisors.find((s) => s.user_id === supervisorId);
 
   function submit() {
@@ -51,7 +50,7 @@ export function AssignForm({ board, selected, supervisors, today, onDone, onCanc
       return;
     }
     setErrors({});
-    if (losers.length > 0) setConfirming(true);
+    if (losers.length > 0 || replaced.length > 0) setConfirming(true);
     else void go();
   }
 
@@ -86,6 +85,7 @@ export function AssignForm({ board, selected, supervisors, today, onDone, onCanc
       {errors.supervisor ? <ErrorText testID="assign-sup-error">{errors.supervisor}</ErrorText> : null}
       <Field label="From (YYYY-MM-DD)" testID="assign-from" value={from} onChangeText={setFrom} error={errors.from} placeholder="YYYY-MM-DD" autoCapitalize="none" autoComplete="off" />
       <Field label="Until (optional, YYYY-MM-DD)" testID="assign-until" value={until} onChangeText={setUntil} error={errors.until} placeholder="Until changed" autoCapitalize="none" autoComplete="off" />
+      <Text testID="assign-until-help" style={{ fontSize: 14, color: colors.text }}>After this date the machine has no supervisor</Text>
       {errors.machine_ids ? <ErrorText testID="assign-machines-error">{errors.machine_ids}</ErrorText> : null}
       {errors.form ? <ErrorText testID="assign-form-error">{errors.form}</ErrorText> : null}
       <View style={{ flexDirection: 'row', gap: 12, flexWrap: 'wrap' }}>
@@ -96,7 +96,11 @@ export function AssignForm({ board, selected, supervisors, today, onDone, onCanc
         visible={confirming}
         busy={busy}
         title={`Move machines to ${target?.full_name ?? 'this supervisor'}?`}
-        message={`${losers.map((l) => `${l.name} loses ${l.codes.join(', ')}`).join('. ')}. The change applies from ${isValidDate(from) ? formatPlantDate(from.trim()) : from}.`}
+        message={[
+          losers.length ? `${losers.map((l) => `${l.name} loses ${l.codes.join(', ')}`).join('. ')}.` : '',
+          replaced.length ? `This replaces changes already scheduled for: ${superseded(replaced)}.` : '',
+          `The change applies from ${isValidDate(from.trim()) ? formatPlantDate(from.trim()) : from}. Covers on ${formatPlantDate(board.shift_date)} aren't affected.`,
+        ].filter(Boolean).join(' ')}
         confirmLabel="Move machines"
         onConfirm={() => void go()}
         onCancel={() => setConfirming(false)}
@@ -113,7 +117,7 @@ export function CoverForm({ board, selected, supervisors, today, onDone, onCance
   const [errors, setErrors] = useState<FieldErrors>({});
   const [busy, setBusy] = useState(false);
   const ids = useRef(new RequestIds());
-  const losers = whoLoses(board.machines, selected, choice && choice !== 'none' ? choice : null);
+  const losers = whoLoses(board.machines, selected, choice && choice !== 'none' ? choice : null, 'effective');
   void today;
 
   async function submit() {

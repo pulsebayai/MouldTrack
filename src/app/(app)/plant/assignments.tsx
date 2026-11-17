@@ -19,15 +19,16 @@ export default function AssignmentsTab() {
   const { client } = useSession();
   const { today } = usePlant();
   const [shiftId, setShiftId] = useState<string | null>(null);
-  const [date, setDate] = useState(today ?? '');
+  // null = let the server pick the current (else next) occurrence; the field then shows the date it chose.
+  const [date, setDate] = useState<string | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [action, setAction] = useState<Action>(null);
 
   const base = useLoad(async () => ({ shifts: await fetchShifts(client), supervisors: await fetchActiveSupervisors(client) }), []);
   const shifts = base.data?.shifts ?? [];
   const activeShiftId = shiftId ?? shifts[0]?.id ?? null;
-  const dateOk = isValidDate(date.trim());
-  const board = useLoad(() => fetchShiftBoard(client, activeShiftId!, date.trim()), [activeShiftId, date.trim()], !!activeShiftId && dateOk);
+  const dateOk = date === null || isValidDate(date.trim());
+  const board = useLoad(() => fetchShiftBoard(client, activeShiftId!, date === null ? null : date.trim()), [activeShiftId, date === null ? null : date.trim()], !!activeShiftId && dateOk);
   const data = board.data;
   const grouped = data ? groupBoard(data.machines) : null;
 
@@ -77,7 +78,7 @@ export default function AssignmentsTab() {
                   testID={`board-shift-${s.id}`}
                   label={`${s.name} · ${timeWindow(s.start_time, s.end_time)}`}
                   selected={activeShiftId === s.id}
-                  onPress={() => { setShiftId(s.id); setSelected([]); setAction(null); }}
+                  onPress={() => { setShiftId(s.id); setDate(null); setSelected([]); setAction(null); }}
                 />
               ))}
             </View>
@@ -85,7 +86,7 @@ export default function AssignmentsTab() {
           <Field
             label="Shift date (YYYY-MM-DD)"
             testID="board-date"
-            value={date}
+            value={date ?? board.data?.shift_date ?? ''}
             onChangeText={(v) => { setDate(v); setSelected([]); setAction(null); }}
             error={dateOk ? null : 'Enter a date as YYYY-MM-DD'}
             placeholder="YYYY-MM-DD"

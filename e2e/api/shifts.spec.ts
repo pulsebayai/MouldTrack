@@ -48,7 +48,16 @@ async function newMachine(): Promise<{ id: string; code: string }> {
 }
 const assign = (shift: string, machines: string[], from: string, requestId = uuid(), supervisor = sup.userId) =>
   rpc(ua, 'sh_assign', { p_request_id: requestId, p_shift_id: shift, p_supervisor_id: supervisor, p_machine_ids: machines, p_from: from, p_until: null });
-const codesOf = (data: { machines: { code: string }[] }) => data.machines.map((m) => m.code).sort();
+/** Codes of every machine across the occurrences my_shift returned (R3), each once. */
+const codesOf = (data: { occurrences: { machines: { code: string }[] }[] }) => [...new Set(data.occurrences.flatMap((o) => o.machines.map((m) => m.code)))].sort();
+/**
+ * R1: a plan change can't start on an occurrence that has already started, and these shifts (00:00-12:00, 12:00-00:00) always have one started today.
+ * So the standing plan is seeded directly as service role (like fixtures-reset does), dated today; the RPC is then exercised from tomorrow.
+ */
+async function seedPlan(shift: string, machine: string, from: string) {
+  const r = await service().from('assignment_version').insert({ tenant_id: S.id, shift_id: shift, machine_id: machine, supervisor_id: sup.userId, effective_from: from, recorded_by: ua.userId }).select('id');
+  expect(r.error).toBeNull();
+}
 
 test.beforeAll(async () => {
   requireApi();
@@ -73,7 +82,7 @@ test.beforeAll(async () => {
   const prod = await rpc(ua, 'pm_save_product', { p_request_id: uuid(), p_code: name(), p_id: null, p_description: 'E2E product', p_uom: 'pcs' });
   expect(prod.data).toMatchObject({ ok: true });
   productId = prod.data.id;
-  for (const s of [shiftAm, shiftPm]) expect((await assign(s, [m1.id], today)).data).toMatchObject({ ok: true });
+  for (const s of [shiftAm, shiftPm]) await seedPlan(s, m1.id, today);
 });
 
 test.afterAll(async () => {
@@ -88,7 +97,9 @@ test.describe('Supervisor sees only their own work (AC-9, AC-11)', () => {
     const mine = await rpc(sup, 'my_shift', {});
     expect(mine.error).toBeNull();
     expect(mine.data).toMatchObject({ ok: true, state: 'running' });
-    expect([shiftAm, shiftPm]).toContain(mine.data.shift.id);
+    expect(mine.data.occurrences).toHaveLength(1); // only one of the two shifts runs at a time
+    expect([shiftAm, shiftPm]).toContain(mine.data.occurrences[0].shift.id);
+    expect(mine.data.occurrences[0].running).toBe(true);
     expect(codesOf(mine.data)).toEqual([m1.code]); // m2 has no plan
 
     const a = await rpc(supA, 'my_shift', {});
@@ -142,27 +153,45 @@ test.describe('Supervisor sees only their own work (AC-9, AC-11)', () => {
 
 test.describe('Unit Admin plans their own tenant only (AC-5..10)', () => {
   test('assign is idempotent per request id and the board shows plan, cover and unassigned', async () => {
+    // R1: today's occurrence of this shift has started, so a plan change from today is refused and nothing is written.
+    const late = await assign(shiftAm, [m2.id], today);
+    expect(late.error?.message ?? JSON.stringify(late.data)).toContain('already started');
+    expect((await service().from('assignment_version').select('id').eq('machine_id', m2.id)).data).toEqual([]);
+
     const rid = uuid();
-    const first = await assign(shiftAm, [m2.id], today, rid);
+    const first = await assign(shiftAm, [m2.id], tomorrow, rid);
     expect(first.data).toMatchObject({ ok: true });
-    const again = await assign(shiftAm, [m2.id], today, rid);
+    const again = await assign(shiftAm, [m2.id], tomorrow, rid);
     expect(again.data).toMatchObject({ ok: true });
     expect((await service().from('assignment_version').select('id').eq('machine_id', m2.id)).data).toHaveLength(1);
 
-    const board = await rpc(ua, 'shift_board', { p_shift_id: shiftAm, p_date: today });
-    expect(board.data).toMatchObject({ ok: true });
+    const board = await rpc(ua, 'shift_board', { p_shift_id: shiftAm, p_date: tomorrow });
+    expect(board.data).toMatchObject({ ok: true, shift_date: tomorrow });
     const row = (code: string) => board.data.machines.find((m: { code: string }) => m.code === code);
-    expect(row(m1.code)).toMatchObject({ owner_id: sup.userId, source: 'plan' });
+    expect(row(m1.code)).toMatchObject({ owner_id: sup.userId, source: 'plan', plan_owner_id: sup.userId });
     expect(row(m2.code)).toMatchObject({ owner_id: sup.userId, source: 'plan' });
 
-    // Cover tomorrow only: m1 goes to nobody; today's plan is untouched.
+    // R2: no date = the current occurrence of a running shift (today's, for 00:00-12:00 and 12:00-00:00).
+    const dflt = await rpc(ua, 'shift_board', { p_shift_id: shiftAm, p_date: null });
+    expect(dflt.data).toMatchObject({ ok: true, shift_date: today });
+
+    // Cover tomorrow only: m1 goes to nobody; the plan is untouched (R5: the board still names the plan owner).
     const cover = await rpc(ua, 'sh_cover', { p_request_id: uuid(), p_shift_id: shiftAm, p_shift_date: tomorrow, p_machine_ids: [m1.id], p_supervisor_id: null, p_reason: 'E2E leave' });
     expect(cover.data).toMatchObject({ ok: true });
     const next = await rpc(ua, 'shift_board', { p_shift_id: shiftAm, p_date: tomorrow });
-    expect(next.data.machines.find((m: { code: string }) => m.code === m1.code)).toMatchObject({ owner_id: null, source: 'cover', reason: 'E2E leave' });
+    expect(next.data.machines.find((m: { code: string }) => m.code === m1.code)).toMatchObject({ owner_id: null, source: 'cover', reason: 'E2E leave', plan_owner_id: sup.userId });
     expect(next.data.unassigned_count).toBeGreaterThanOrEqual(1);
     const now = await rpc(ua, 'shift_board', { p_shift_id: shiftAm, p_date: today });
     expect(now.data.machines.find((m: { code: string }) => m.code === m1.code)).toMatchObject({ owner_id: sup.userId, source: 'plan' });
+  });
+
+  test('R4: re-planning supersedes a scheduled change instead of being refused', async () => {
+    const later = addDays(tomorrow, 10);
+    expect((await assign(shiftPm, [m2.id], later, uuid(), sup.userId)).data).toMatchObject({ ok: true });
+    const other = await assign(shiftPm, [m2.id], tomorrow, uuid(), sup.userId);
+    expect(other.data).toMatchObject({ ok: true });
+    const rows = await service().from('assignment_version').select('effective_from, supervisor_id').eq('machine_id', m2.id).eq('shift_id', shiftPm).order('effective_from');
+    expect((rows.data ?? []).map((r) => r.effective_from)).toEqual([tomorrow, later, later]); // the later version is re-appended, so it still resolves to the new supervisor
   });
 
   test('a shift target override is stored per shift, and ending it is a new row (append-only)', async () => {
