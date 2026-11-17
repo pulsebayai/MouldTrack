@@ -57,7 +57,7 @@ Locks: **architecture: 07** (attachments/Storage model). Schema: 07's tables + S
   - Spec wording fixed by Opus: AC-13 reporter visibility (read access stays; notes/photos allowed as AC-4 says).
   - Proof: CI green on PR #16.
 - [x] 8. **Hosted proof (dev).** temporary dev-only triggers; deploy-dev (migration incl. bucket) + regression (web incl. api, Android incl. `report-issue.yaml`, hosted-checks + new bucket check, drift); remove triggers; green PR CI. — proof: run URLs
-- [ ] 9. **Docs (lock).** architecture.md per D13; releases README: real-phone photo check on the R1 checklist. — proof: docs diff
+- [x] 9. **Docs (lock).** architecture.md per D13; releases README: real-phone photo check on the R1 checklist. — proof: docs diff
 - [ ] 10. **Review + PR.** sdlc-reviewer (focus Storage policies, verify eligibility, visibility matrix), fixes, AC table. — proof: PR CI green
 
 ## Risks
