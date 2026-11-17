@@ -1104,3 +1104,102 @@ begin
   return jsonb_build_object('ok', true, 'tenant_id', a.tenant_id, 'actor', v_actor, 'role', a.role, 'done', v_done);
 end
 $$;
+
+-- 13. One time zone rule everywhere (F4). app.timezone_ok is the single rule: the shape and prefix check (no posix/ or right/ aliases, which are not IANA
+-- identifiers a user or browser would recognise), then a real name in pg_timezone_names that Postgres accepts for `at time zone`. The shape part is its own
+-- pure function so it can be tested on a server whose zone table lacks the posix/ and right/ names. Used by the tenant rule (_pa_timezone_ok), by 04's
+-- site trigger and pm_save_site (which then answers validation/timezone instead of failing with a 500) and by a new trigger on tenant.timezone.
+create function app.timezone_shape_ok(p_tz text)
+returns boolean
+language sql
+immutable
+set search_path = ''
+as $$ select p_tz is not null and p_tz ~ '^([A-Za-z_]+(/[A-Za-z0-9_+-]+)+|UTC)$' and p_tz !~* '^(posix|right)/' $$;
+
+create function app.timezone_ok(p_tz text)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+begin
+  if not app.timezone_shape_ok(p_tz) then
+    return false;
+  end if;
+  if not exists (select 1 from pg_catalog.pg_timezone_names n where n.name = p_tz) then
+    return false;
+  end if;
+  begin
+    perform now() at time zone p_tz;
+  exception when others then
+    return false;
+  end;
+  return true;
+end
+$$;
+
+create or replace function app._pa_timezone_ok(p_tz text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$ select app.timezone_ok(p_tz) $$;
+
+-- Existing rows must already satisfy the rule (the new triggers would otherwise refuse their next update). Fixtures and the pilot data never use these aliases.
+do $$
+begin
+  if exists (select 1 from public.site s where s.timezone ~* '^(posix|right)/') or exists (select 1 from public.tenant t where t.timezone ~* '^(posix|right)/') then
+    raise exception 'a site or tenant already uses a posix/ or right/ time zone; fix the data before applying this migration';
+  end if;
+end $$;
+
+create or replace function app.site_timezone_valid()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if not app.timezone_ok(new.timezone) then
+    raise exception 'Unknown time zone %', new.timezone using errcode = '23514';
+  end if;
+  return new;
+end
+$$;
+
+create function app.tenant_timezone_valid()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if not app.timezone_ok(new.timezone) then
+    raise exception 'Unknown time zone %', new.timezone using errcode = '23514';
+  end if;
+  return new;
+end
+$$;
+create trigger tenant_timezone_valid before insert or update of timezone on public.tenant
+  for each row execute function app.tenant_timezone_valid();
+
+-- pm_save_site (04) validates with its own two checks; patch them in place to the shared rule so 04's source stays the single copy of the function.
+do $$
+declare
+  def text;
+  old_block constant text := E'  begin\n    perform now() at time zone v_tz;\n  exception when others then\n    perform app._pm_fail(''validation'', ''Choose a valid time zone'', ''timezone'');\n  end;\n  if not exists (select 1 from pg_catalog.pg_timezone_names z where z.name = v_tz) then\n    perform app._pm_fail(''validation'', ''Choose a valid time zone'', ''timezone'');\n  end if;\n';
+  new_block constant text := E'  if not app.timezone_ok(v_tz) then\n    perform app._pm_fail(''validation'', ''Choose a valid time zone'', ''timezone'');\n  end if;\n';
+begin
+  select pg_get_functiondef(p.oid) into def
+  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+  where n.nspname = 'public' and p.proname = 'pm_save_site';
+  if position(old_block in def) = 0 then
+    raise exception 'expected time zone checks not found in public.pm_save_site';
+  end if;
+  execute replace(def, old_block, new_block);
+end $$;
+
+revoke all on function app.timezone_shape_ok(text), app.timezone_ok(text), app.tenant_timezone_valid() from public, anon, authenticated;
+grant execute on function app.timezone_shape_ok(text), app.timezone_ok(text), app.tenant_timezone_valid() to service_role;
