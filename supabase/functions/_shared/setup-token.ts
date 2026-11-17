@@ -1,8 +1,8 @@
 // One-time setup token check (03, D4). Pure TS, no Deno APIs, so Jest tests it with the app's toolchain.
 // The token is never logged. The comparison does not exit early on the first differing character.
 
-/** A configured token must be at least this long (the owner generates one with `openssl rand -hex 32`). */
-export const MIN_SETUP_TOKEN_LENGTH = 16;
+/** A configured token must be at least this long (32 characters of any kind; the owner generates one with `openssl rand -hex 32`). */
+export const MIN_SETUP_TOKEN_LENGTH = 32;
 
 export function setupTokenConfigured(expected: string | undefined | null): expected is string {
   return typeof expected === 'string' && expected.length >= MIN_SETUP_TOKEN_LENGTH;

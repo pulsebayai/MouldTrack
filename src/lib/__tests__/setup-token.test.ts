@@ -5,10 +5,13 @@ import {
 const TOKEN = 'a-long-enough-setup-token-123456';
 
 describe('setup token (03, AC-2)', () => {
-  it('a token is configured only when it has at least 16 characters', () => {
+  it('a token is configured only when it has at least 32 characters', () => {
     expect(setupTokenConfigured(undefined)).toBe(false);
     expect(setupTokenConfigured(null)).toBe(false);
     expect(setupTokenConfigured('')).toBe(false);
+    expect(MIN_SETUP_TOKEN_LENGTH).toBe(32);
+    expect(setupTokenConfigured('x'.repeat(15))).toBe(false);
+    expect(setupTokenConfigured('x'.repeat(31))).toBe(false);
     expect(setupTokenConfigured('x'.repeat(MIN_SETUP_TOKEN_LENGTH - 1))).toBe(false);
     expect(setupTokenConfigured('x'.repeat(MIN_SETUP_TOKEN_LENGTH))).toBe(true);
   });
@@ -31,9 +34,9 @@ describe('setup token (03, AC-2)', () => {
   });
 
   it('compares multi-byte characters by their bytes', () => {
-    const t = 'tokén-with-accents-1234567890';
+    const t = 'tokén-with-accents-1234567890-abcdefgh';
     expect(setupTokenMatches(t, t)).toBe(true);
-    expect(setupTokenMatches(t, 'token-with-accents-1234567890')).toBe(false);
+    expect(setupTokenMatches(t, 'token-with-accents-1234567890-abcdefgh')).toBe(false);
   });
 });
 
