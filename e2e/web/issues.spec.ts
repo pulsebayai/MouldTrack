@@ -124,10 +124,15 @@ test('the new owner resolves it; a High issue then awaits verification and the r
 
 test('the supervisor of the shift that started since verifies: not fixed with a reason, then confirm fixed (AC-6, AC-8)', async ({ page }) => {
   test.setTimeout(180_000);
-  const rejected = await seedResolvedIssue(w, 'high', 'E2E fix to be sent back');
-  const confirmed = await seedResolvedIssue(w, 'critical', 'E2E fix to be confirmed');
+  await seedResolvedIssue(w, 'high', 'E2E fix to be sent back');
+  await seedResolvedIssue(w, 'critical', 'E2E fix to be confirmed');
   await signIn(page, w.running.user.phone, FIXTURE_PASSWORD);
-  await page.goto(`/issues/${rejected}`);
+  // Navigate through the app (a full page load on a deep link would first restore the session and land on Home).
+  const open = async (text: string) => {
+    await tid(page, 'issues-link').click();
+    await prefix(page, 'issue-row-').filter({ hasText: text }).click();
+  };
+  await open('E2E fix to be sent back');
   await expect(tid(page, 'verify-panel')).toBeVisible();
   await expect(tid(page, 'issue-status')).toHaveText('Awaiting verification');
   await expectNoSeriousViolations(page);
@@ -140,7 +145,9 @@ test('the supervisor of the shift that started since verifies: not fixed with a 
   await expect(tid(page, 'issue-owner')).toContainText('Fixture');
   await expect(timeline(page).filter({ hasText: 'Fix rejected' })).toHaveCount(1);
 
-  await page.goto(`/issues/${confirmed}`);
+  await tid(page, 'issue-back').click();
+  await tid(page, 'issues-home').click();
+  await open('E2E fix to be confirmed');
   await expect(tid(page, 'verify-panel')).toBeVisible();
   await tid(page, 'verify-confirm').click();
   await expect(tid(page, 'issue-status')).toHaveText('Closed');
