@@ -1,3 +1,4 @@
+import { router } from 'expo-router';
 import { useEffect } from 'react';
 import { AppState, Text, View } from 'react-native';
 import { Button, colors } from '@/components/ui';
@@ -45,9 +46,17 @@ export function MyShiftCard() {
               </Text>
               <Text testID={`my-shift-name-${i}`} style={text}>{o.shift.name} · {timeWindow(o.shift.start_time, o.shift.end_time)}</Text>
               {o.machines.map((m) => (
-                <Text key={m.machine_id} testID={`my-shift-machine-${o.shift.id}-${m.machine_id}`} style={text}>
-                  {m.code} · {m.name}{m.line ? ` · ${m.line}` : ''}
-                </Text>
+                <View key={m.machine_id} style={{ gap: 6 }}>
+                  <Text testID={`my-shift-machine-${o.shift.id}-${m.machine_id}`} style={text}>
+                    {m.code} · {m.name}{m.line ? ` · ${m.line}` : ''}
+                  </Text>
+                  <Button
+                    title={`Report issue on ${m.code}`}
+                    variant="secondary"
+                    testID={`report-issue-${o.shift.id}-${m.machine_id}`}
+                    onPress={() => router.push({ pathname: '/issues/new', params: { machineId: m.machine_id } })}
+                  />
+                </View>
               ))}
             </View>
           ))

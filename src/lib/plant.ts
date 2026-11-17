@@ -31,7 +31,7 @@ export type TargetVersion = {
 };
 
 type Db = Pick<SupabaseClient, 'from'>;
-type RpcClient = Pick<SupabaseClient, 'rpc'>;
+export type RpcClient = Pick<SupabaseClient, 'rpc'>;
 
 /** Escapes the LIKE wildcard `_` so a search for "M_1" matches literally (`%` is already removed by sanitiseSearch). */
 function likeTerm(q: string): string {
@@ -328,7 +328,7 @@ function mapRpcError(error: NonNullable<RpcError> & Record<string, unknown>, sta
 
 export type RpcOk = { ok: true; id?: string; already?: boolean; changed?: boolean };
 
-async function call(client: RpcClient, fn: string, args: Record<string, unknown>): Promise<RpcOk> {
+export async function call(client: RpcClient, fn: string, args: Record<string, unknown>): Promise<RpcOk> {
   const res = await client.rpc(fn, args);
   if (res.error) mapRpcError(res.error as never, res.status);
   const data = res.data as { ok?: boolean; code?: string } | null;
@@ -582,7 +582,7 @@ export async function fetchOverrideVersions(client: Db, machineId: string): Prom
 }
 
 /** Read RPCs return {ok:true,...} or the generic denial; planning data is never read from the tables by a supervisor. */
-async function readRpc<T>(client: RpcClient, fn: string, args?: Record<string, unknown>): Promise<T> {
+export async function readRpc<T>(client: RpcClient, fn: string, args?: Record<string, unknown>): Promise<T> {
   const res = args === undefined ? await client.rpc(fn) : await client.rpc(fn, args);
   if (res.error) mapRpcError(res.error as never, res.status);
   const data = res.data as { ok?: boolean; code?: string } | null;

@@ -2,6 +2,7 @@ import Constants from 'expo-constants';
 import { router } from 'expo-router';
 import { useState } from 'react';
 import { Platform, Text, View } from 'react-native';
+import { IssueAlertsCard } from '@/components/issue-alerts-card';
 import { MyShiftCard } from '@/components/my-shift-card';
 import { SignOutButton } from '@/components/sign-out-button';
 import { Button, Screen, colors } from '@/components/ui';
@@ -41,6 +42,8 @@ export default function Home() {
       </Text>
       <Text style={{ fontSize: 15, color: colors.muted }}>{phone ? formatPhone(phone) : ctx.user.email}</Text>
       {ctx.role === 'supervisor' ? <MyShiftCard /> : null}
+      {ctx.role === 'supervisor' ? <Button title="My issues" testID="issues-link" variant="secondary" onPress={() => router.push('/issues')} /> : null}
+      {ctx.role === 'unit_admin' && Platform.OS === 'web' ? <IssueAlertsCard /> : null}
       {ctx.role === 'unit_admin' && Platform.OS === 'web' ? (
         <Button title="Users" testID="users-link" onPress={() => router.push('/users')} />
       ) : null}

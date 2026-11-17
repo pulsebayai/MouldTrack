@@ -7,6 +7,7 @@ const TABS = [
   { key: 'products', label: 'Products', href: '/plant/products' },
   { key: 'shifts', label: 'Shifts', href: '/plant/shifts' },
   { key: 'assignments', label: 'Assignments', href: '/plant/assignments' },
+  { key: 'categories', label: 'Issue categories', href: '/plant/categories' },
   { key: 'site', label: 'Site & lines', href: '/plant/site' },
 ] as const;
 
@@ -16,6 +17,7 @@ export function tabFor(pathname: string): PlantTab {
   if (pathname.startsWith('/plant/products')) return 'products';
   if (pathname.startsWith('/plant/shifts')) return 'shifts';
   if (pathname.startsWith('/plant/assignments')) return 'assignments';
+  if (pathname.startsWith('/plant/categories')) return 'categories';
   if (pathname.startsWith('/plant/site')) return 'site';
   return 'machines';
 }
