@@ -46,7 +46,7 @@ Batch A with 04 (03 merges **after** 04). Locks: **architecture: 03**; schema sp
   - Proof: CI green on PR #9.
 - [x] 8. **Rebase on 04 (after 04 merges).** Rebase, resolve shared files (seed, fixtures-reset, fixtures.ts, home/_layout), confirm `022` now covers 04's tables, full suite green. — proof: CI green
 - [ ] 9. **Hosted proof (dev), after step 8.** deploy-dev deploys `platform` + `platform-setup`; hosted-checks: functions present, `platform-setup` refuses on dev; regression green (web incl. api, Android 5/5, hosted-checks, drift); temporary triggers removed; green PR CI on the last commit. — proof: run URLs
-- [ ] 10. **Docs.** architecture.md (spec "Proposed architecture changes" 1–4 + 04's flagged items if not yet applied), decision log rows; releases README runbook (D10). — proof: docs diff
+- [x] 10. **Docs.** architecture.md (spec "Proposed architecture changes" 1–4 + 04's flagged items if not yet applied), decision log rows; releases README runbook (D10). — proof: docs diff
 - [ ] 11. **Review + PR.** sdlc-reviewer (focus: setup endpoint, SA boundary, account change), fix Important, AC table, session log. — proof: PR CI green
 
 ## Risks
