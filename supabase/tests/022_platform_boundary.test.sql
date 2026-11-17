@@ -27,6 +27,15 @@ insert into public.machine (id, tenant_id, site_id, line_id, code, name) values
 insert into public.product (id, tenant_id, code, description) values ('5e000000-0000-4000-ba00-000000000004', '1f000000-0000-4000-ba00-00000000000a', 'T22-P1', 'tap22 product');
 insert into public.target_version (tenant_id, machine_id, product_id, effective_from, pieces_per_shift, recorded_by) values
   ('1f000000-0000-4000-ba00-00000000000a', '5e000000-0000-4000-ba00-000000000003', '5e000000-0000-4000-ba00-000000000004', current_date - 2, 100, '00000000-0000-4000-ba00-0000000000b1');
+-- 05's shift tables: one row each (rows inserted as the table owner; the RPCs are covered by the discovery below).
+insert into public.shift (id, tenant_id, site_id, name, start_time, end_time) values
+  ('5e000000-0000-4000-ba00-000000000005', '1f000000-0000-4000-ba00-00000000000a', '5e000000-0000-4000-ba00-000000000001', 'tap22 shift', '06:00', '14:00');
+insert into public.assignment_version (tenant_id, shift_id, machine_id, supervisor_id, effective_from, recorded_by) values
+  ('1f000000-0000-4000-ba00-00000000000a', '5e000000-0000-4000-ba00-000000000005', '5e000000-0000-4000-ba00-000000000003', '00000000-0000-4000-ba00-0000000000b2', current_date - 2, '00000000-0000-4000-ba00-0000000000b1');
+insert into public.assignment_cover (tenant_id, shift_id, shift_date, machine_id, supervisor_id, reason, recorded_by) values
+  ('1f000000-0000-4000-ba00-00000000000a', '5e000000-0000-4000-ba00-000000000005', current_date, '5e000000-0000-4000-ba00-000000000003', null, 'tap22 cover', '00000000-0000-4000-ba00-0000000000b1');
+insert into public.target_override_version (tenant_id, machine_id, product_id, shift_id, effective_from, pieces_per_shift, recorded_by) values
+  ('1f000000-0000-4000-ba00-00000000000a', '5e000000-0000-4000-ba00-000000000003', '5e000000-0000-4000-ba00-000000000004', '5e000000-0000-4000-ba00-000000000005', current_date - 2, 90, '00000000-0000-4000-ba00-0000000000b1');
 -- tenant events, an SA event, and a denial exist, so "0 rows" is meaningful
 select app.ua_set_status('00000000-0000-4000-ba00-0000000000b1', gen_random_uuid(), '00000000-0000-4000-ba00-0000000000b2', 'inactive');
 select app.ua_set_status('00000000-0000-4000-ba00-0000000000b1', gen_random_uuid(), '00000000-0000-4000-ba00-0000000000b2', 'active');

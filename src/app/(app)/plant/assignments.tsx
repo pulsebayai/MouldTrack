@@ -3,7 +3,7 @@ import { Pressable, Text, View } from 'react-native';
 import { AssignForm, CoverForm, EndForm } from '@/components/plant/assignment-forms';
 import { Label, Loading, LoadError, rowStyle } from '@/components/plant/common';
 import { usePlant } from '@/components/plant/plant-context';
-import { useLoad } from '@/components/plant/use-load';
+import { useLoad } from '@/lib/use-load';
 import { Button, Chip, Field, StatusLabel, colors } from '@/components/ui';
 import {
   fetchActiveSupervisors, fetchShiftBoard, fetchShifts, formatPlantDate, groupBoard, isValidDate, timeWindow, type BoardMachine,

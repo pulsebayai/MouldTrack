@@ -843,6 +843,10 @@ declare
   v_window tstzrange;
   v_machines jsonb;
 begin
+  -- Callers without a membership (a Super Admin, a stranger) are denied and audited by the shared helper, so that rule lives in one place (022).
+  if not exists (select 1 from public.membership m where m.user_id = auth.uid()) then
+    return app._pm_authorise(null, c_src);
+  end if;
   a := app._sh_read_authorise(c_src, true);
   if not (a->>'ok')::boolean then return a; end if;
   v_tenant := (a->>'tenant_id')::uuid;
@@ -893,6 +897,10 @@ declare
   v_pick record;
   v_machines jsonb;
 begin
+  -- Callers without a membership (a Super Admin, a stranger) are denied and audited by the shared helper, so that rule lives in one place (022).
+  if not exists (select 1 from public.membership m where m.user_id = auth.uid()) then
+    return app._pm_authorise(null, c_src);
+  end if;
   a := app._sh_read_authorise(c_src, false);
   if not (a->>'ok')::boolean then return a; end if;
   v_tenant := (a->>'tenant_id')::uuid;

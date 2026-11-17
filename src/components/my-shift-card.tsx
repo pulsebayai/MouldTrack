@@ -3,7 +3,7 @@ import { Button, colors } from '@/components/ui';
 import { toUserMessage } from '@/lib/errors';
 import { fetchMyShift, formatPlantDate, timeWindow, type MyShift } from '@/lib/plant';
 import { useSession } from '@/lib/session-provider';
-import { useLoad } from './plant/use-load';
+import { useLoad } from '@/lib/use-load';
 
 /** Supervisor home: the shift running now (or the next one) and the machines the server says are mine (AC-9, D11). */
 export function MyShiftCard() {

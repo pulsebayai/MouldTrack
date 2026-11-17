@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { Text, View } from 'react-native';
 import { Loading, LoadError, rowStyle } from '@/components/plant/common';
 import { ShiftForm } from '@/components/plant/shift-form';
-import { useLoad } from '@/components/plant/use-load';
+import { useLoad } from '@/lib/use-load';
 import { Button, Chip, ConfirmDialog, ErrorText, StatusLabel, colors } from '@/components/ui';
 import { toUserMessage } from '@/lib/errors';
 import { PlantError, RequestIds, fetchShifts, formatDuration, isOvernight, shiftApi, shiftMinutes, timeWindow, type Shift } from '@/lib/plant';
