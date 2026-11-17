@@ -636,6 +636,160 @@ begin
 end
 $$;
 
+-- 9. Per-shift target overrides (D9) -----------------------------------------------------------------------------------
+-- The override in force for machine x product x shift on a plant date: pieces per shift, or null when there is none or it was ended.
+-- Same caller rule as app.target_for: only the service role skips the tenant check.
+create function app.override_for(p_machine uuid, p_product uuid, p_shift uuid, p_date date)
+returns integer
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select v.pieces_per_shift
+  from public.target_override_version v
+  where v.machine_id = p_machine
+    and v.product_id = p_product
+    and v.shift_id = p_shift
+    and v.effective_from <= p_date
+    and (auth.role() = 'service_role' or v.tenant_id = app.current_tenant_id())
+  order by v.effective_from desc, v.recorded_at desc, v.id desc
+  limit 1
+$$;
+
+-- AC-8: the target that applies to a machine-shift = the shift override in force, else 04's base target, else null.
+-- The contract for features 06-09.
+create function app.effective_target(p_machine uuid, p_product uuid, p_shift uuid, p_date date)
+returns integer
+language sql
+stable
+security definer
+set search_path = ''
+as $$ select coalesce(app.override_for(p_machine, p_product, p_shift, p_date), app.target_for(p_machine, p_product, p_date)) $$;
+
+create function public.sh_set_target_override(
+  p_request_id uuid, p_machine_id uuid, p_product_id uuid, p_shift_id uuid, p_pieces integer, p_effective_from date
+) returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:sh_set_target_override';
+  a jsonb;
+  v_tenant uuid;
+  v_own text;
+  m public.machine;
+  p public.product;
+  s public.shift;
+  v_before integer;
+  v_id uuid;
+begin
+  a := app._pm_authorise(p_request_id, c_src);
+  if not (a->>'ok')::boolean then return a; end if;
+  if a->>'done' is not null then return jsonb_build_object('ok', true, 'id', (a->>'done')::uuid, 'already', true); end if;
+  v_tenant := (a->>'tenant_id')::uuid;
+
+  v_own := app._pm_owned('machine', p_machine_id, v_tenant);
+  if v_own <> 'ok' then return app._pm_deny(a, v_own, 'machine', p_machine_id, c_src); end if;
+  v_own := app._pm_owned('product', p_product_id, v_tenant);
+  if v_own <> 'ok' then return app._pm_deny(a, v_own, 'product', p_product_id, c_src); end if;
+  v_own := app._sh_owned('shift', p_shift_id, v_tenant);
+  if v_own <> 'ok' then return app._pm_deny(a, v_own, 'shift', p_shift_id, c_src); end if;
+
+  if p_pieces is null or p_pieces < 1 or p_pieces > 1000000 then
+    perform app._pm_fail('validation', 'Enter a whole number from 1 to 1,000,000', 'pieces');
+  end if;
+  if p_effective_from is null then perform app._pm_fail('validation', 'Choose a start date', 'effective_from'); end if;
+  if p_effective_from < app.plant_date(v_tenant) then
+    perform app._pm_fail('validation', 'Targets can''t start in the past', 'effective_from');
+  end if;
+  select * into m from public.machine x where x.id = p_machine_id;
+  select * into p from public.product x where x.id = p_product_id;
+  select * into s from public.shift x where x.id = p_shift_id;
+  if m.retired_at is not null then perform app._pm_fail('guard', 'This machine is retired', 'machine_id'); end if;
+  if p.retired_at is not null then perform app._pm_fail('guard', 'This product is retired', 'product_id'); end if;
+  if s.retired_at is not null then perform app._pm_fail('guard', 'This shift is retired', 'shift_id'); end if;
+
+  v_before := app.override_for(p_machine_id, p_product_id, p_shift_id, p_effective_from);
+  insert into public.target_override_version (tenant_id, machine_id, product_id, shift_id, effective_from, pieces_per_shift, recorded_by, request_id)
+  values (v_tenant, p_machine_id, p_product_id, p_shift_id, p_effective_from, p_pieces, (a->>'actor')::uuid, p_request_id)
+  returning id into v_id;
+  perform app._pm_audit(a, 'target_override.set', 'target_override_version', v_id,
+    jsonb_build_object('pieces_per_shift', v_before),
+    jsonb_build_object('machine_code', m.code, 'product_code', p.code, 'shift', s.name, 'pieces_per_shift', p_pieces, 'effective_from', p_effective_from),
+    p_request_id, c_src);
+  return jsonb_build_object('ok', true, 'id', v_id);
+end
+$$;
+
+-- "End" means the base target applies again from the end date: besides the null at the end date, every later scheduled override whose
+-- winning version is a target is cancelled with its own null, in this transaction (04's R1 rule).
+create function public.sh_end_target_override(p_request_id uuid, p_machine_id uuid, p_product_id uuid, p_shift_id uuid, p_effective_from date)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:sh_end_target_override';
+  a jsonb;
+  v_tenant uuid;
+  v_own text;
+  m public.machine;
+  p public.product;
+  s public.shift;
+  v_before integer;
+  v_id uuid;
+  v_cancel date[];
+  v_d date;
+begin
+  a := app._pm_authorise(p_request_id, c_src);
+  if not (a->>'ok')::boolean then return a; end if;
+  if a->>'done' is not null then return jsonb_build_object('ok', true, 'id', (a->>'done')::uuid, 'already', true); end if;
+  v_tenant := (a->>'tenant_id')::uuid;
+
+  v_own := app._pm_owned('machine', p_machine_id, v_tenant);
+  if v_own <> 'ok' then return app._pm_deny(a, v_own, 'machine', p_machine_id, c_src); end if;
+  v_own := app._pm_owned('product', p_product_id, v_tenant);
+  if v_own <> 'ok' then return app._pm_deny(a, v_own, 'product', p_product_id, c_src); end if;
+  v_own := app._sh_owned('shift', p_shift_id, v_tenant);
+  if v_own <> 'ok' then return app._pm_deny(a, v_own, 'shift', p_shift_id, c_src); end if;
+
+  if p_effective_from is null then perform app._pm_fail('validation', 'Choose an end date', 'effective_from'); end if;
+  if p_effective_from < app.plant_date(v_tenant) then
+    perform app._pm_fail('validation', 'Targets can''t end in the past', 'effective_from');
+  end if;
+  -- Ending works for retired machines, products and shifts too: that is how their overrides get cleaned up.
+  v_before := app.override_for(p_machine_id, p_product_id, p_shift_id, p_effective_from);
+  select coalesce(array_agg(f.d order by f.d), '{}') into v_cancel
+    from (select distinct t.effective_from as d
+            from public.target_override_version t
+           where t.machine_id = p_machine_id and t.product_id = p_product_id and t.shift_id = p_shift_id and t.effective_from > p_effective_from
+             and app.override_for(p_machine_id, p_product_id, p_shift_id, t.effective_from) is not null) f;
+  if v_before is null and cardinality(v_cancel) = 0 then
+    perform app._pm_fail('guard', 'There is no shift target to end on that date', 'no_override');
+  end if;
+  select * into m from public.machine x where x.id = p_machine_id;
+  select * into p from public.product x where x.id = p_product_id;
+  select * into s from public.shift x where x.id = p_shift_id;
+
+  insert into public.target_override_version (tenant_id, machine_id, product_id, shift_id, effective_from, pieces_per_shift, recorded_by, request_id)
+  values (v_tenant, p_machine_id, p_product_id, p_shift_id, p_effective_from, null, (a->>'actor')::uuid, p_request_id)
+  returning id into v_id;
+  foreach v_d in array v_cancel loop
+    insert into public.target_override_version (tenant_id, machine_id, product_id, shift_id, effective_from, pieces_per_shift, recorded_by, request_id)
+    values (v_tenant, p_machine_id, p_product_id, p_shift_id, v_d, null, (a->>'actor')::uuid, p_request_id);
+  end loop;
+  perform app._pm_audit(a, 'target_override.ended', 'target_override_version', v_id,
+    jsonb_build_object('pieces_per_shift', v_before),
+    jsonb_build_object('machine_code', m.code, 'product_code', p.code, 'shift', s.name, 'pieces_per_shift', null, 'effective_from', p_effective_from,
+                       'cancelled_dates', to_jsonb(v_cancel)),
+    p_request_id, c_src);
+  return jsonb_build_object('ok', true, 'id', v_id, 'cancelled', to_jsonb(v_cancel));
+end
+$$;
+
 -- 99. Function privileges: no app function is executable by clients (test 004); the public entry points are executable by authenticated only.
 do $$
 declare f record;
