@@ -1,4 +1,4 @@
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { IssueAlertsCard } from '@/components/issue-alerts-card';
@@ -11,12 +11,16 @@ import { useSession } from '@/lib/session-provider';
 import { useLoad } from '@/lib/use-load';
 import { useRefreshOnFocus } from '@/lib/use-refresh';
 
-type Tab = 'open' | 'closed' | 'escalated' | 'stopped' | 'needs_owner';
+// Home links here with ?tab=...; where there is no router (a test stub) there is no parameter.
+const useTabParam: () => { tab?: string } = typeof useLocalSearchParams === 'function' ? () => useLocalSearchParams<{ tab?: string }>() : () => ({});
+
+type Tab = 'open' | 'closed' | 'escalated' | 'stopped' | 'needs_owner' | 'alerts';
 const TABS: { key: Tab; label: string; filters: IssueFilters; ua?: boolean }[] = [
   { key: 'open', label: 'Open', filters: { status: 'not_closed' } },
   { key: 'closed', label: 'Closed', filters: { status: 'closed' } },
   { key: 'escalated', label: 'Escalated', filters: { status: 'not_closed', escalated: true } },
   { key: 'stopped', label: 'Machine stopped', filters: { status: 'not_closed', stopped: true } },
+  { key: 'alerts', label: 'Alerts', filters: { alerts: true }, ua: true },
   { key: 'needs_owner', label: 'Needs owner', filters: { status: 'not_closed', needs_owner: true }, ua: true },
 ];
 
@@ -36,11 +40,20 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 export function IssueList({ role }: { role: 'supervisor' | 'unit_admin' }) {
   const { client } = useSession();
   const ua = role === 'unit_admin';
-  const [tab, setTab] = useState<Tab>('open');
+  // D16: Home links here with ?tab=alerts or ?tab=closed.
+  const params = useTabParam();
+  const wanted = TABS.find((t) => t.key === params.tab && (!t.ua || ua));
+  const [tab, setTab] = useState<Tab>(wanted?.key ?? 'open');
   const [page, setPage] = useState(1);
   const [priority, setPriority] = useState<Priority | null>(null);
   const [categoryId, setCategoryId] = useState<string | null>(null);
   const [machineId, setMachineId] = useState<string | null>(null);
+  // The embedded alerts card links to this same screen with another tab: follow the parameter when it changes (adjusted during render, not in an effect).
+  const [seenTab, setSeenTab] = useState(wanted?.key);
+  if (wanted?.key !== seenTab) {
+    setSeenTab(wanted?.key);
+    if (wanted) { setTab(wanted.key); setPage(1); }
+  }
   const tabs = TABS.filter((t) => !t.ua || ua);
   const filters: IssueFilters = {
     ...TABS.find((t) => t.key === tab)!.filters,

@@ -5,7 +5,7 @@
 -- (R1: clients cannot choose the clock); the tests reach explicit moments through the app.issue_*_at bodies (owner-only; this file runs as the owner with JWT claims).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(103);
+select plan(106);
 
 create temp table ids (k text primary key, v uuid);
 create function pg_temp.id(k text) returns uuid language sql as $$ select v from ids where k = $1 $$;
@@ -265,6 +265,13 @@ select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.
   'R1: the explicit-moment bodies are executable by nobody but the owner');
 select is(pg_temp.rpc('uax', 'select public.issue_alerts()')->>'ok', 'true', 'R1: the wrapper works as a Unit Admin (now)');
 select is(pg_temp.rpc('sa', 'select public.issue_detail(gen_random_uuid())')->>'code', 'not_allowed', 'R1: a Super Admin is still denied through the wrapper');
+
+-- D16: the Issues screen's Alerts section is the same set and order as the alerts card, paginated by issue_list --------------------------------------------
+create function pg_temp.ordered(r jsonb) returns text language sql as $$
+  select coalesce(string_agg(coalesce((select k from ids where v = (e.x->>'id')::uuid), '?'), ',' order by e.n), '') from jsonb_array_elements(r->'items') with ordinality e(x, n) $$;
+select is(pg_temp.ordered(pg_temp.lst('uaw', '{"alerts":true}')), pg_temp.order_of(pg_temp.alerts('uaw'), 'alerts'), 'D16: filter alerts = the alerts card set in the same order (stopped, Critical, High, newest first)');
+select is((pg_temp.lst('uaw', '{"alerts":true}')->>'total')::int, 5, 'D16: and its total equals alert_count');
+select is(pg_temp.lst('uaw', '{"alerts":true}', 2)->'items', '[]'::jsonb, 'D16: page 2 of 5 alerts is empty (page size 25)');
 
 select * from finish();
 rollback;

@@ -27,7 +27,7 @@ export type IssueList = { ok: true; page: number; page_size: number; total: numb
 export type IssueAlerts = { ok: true; alert_count: number; alerts: IssueRow[]; recently_closed: IssueRow[] };
 export type IssueCategory = { id: string; name: string; retired_at: string | null };
 export type IssueFilters = {
-  status?: IssueStatus | 'not_closed'; priority?: Priority; category_id?: string; machine_id?: string; escalated?: boolean; stopped?: boolean; needs_owner?: boolean;
+  status?: IssueStatus | 'not_closed'; priority?: Priority; category_id?: string; machine_id?: string; escalated?: boolean; stopped?: boolean; needs_owner?: boolean; alerts?: boolean;
 };
 
 // ---- Labels (status is always text, never colour alone) -----------------------------------------------------------------------------------

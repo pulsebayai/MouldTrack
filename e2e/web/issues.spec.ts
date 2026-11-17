@@ -84,7 +84,13 @@ test('the Unit Admin sees the alert, acknowledges the escalation and reassigns t
   test.setTimeout(180_000);
   await signIn(page, w.org.users.ua1.phone, FIXTURE_PASSWORD);
   await expect(tid(page, 'issue-alerts')).toBeVisible();
-  const alert = prefix(page, 'alert-').filter({ hasText: description });
+  await expect(tid(page, 'issue-alerts-loading')).toHaveCount(0);
+  // D16: Home shows five alerts at most; on a persistent dev org the new one may be on the Alerts tab ("View all alerts").
+  let alert = prefix(page, 'alert-').filter({ hasText: description });
+  if ((await alert.count()) === 0) {
+    await tid(page, 'issue-alerts-more').click();
+    alert = prefix(page, 'issue-row-').filter({ hasText: description });
+  }
   await expect(alert.first()).toBeVisible();
   await expect(alert.first()).toContainText('Escalated');
   await expect(alert.first()).toContainText('High');

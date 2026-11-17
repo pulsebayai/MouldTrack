@@ -61,4 +61,35 @@ describe('UA issue alerts card', () => {
     await setup(rpcOk({ ok: false, code: 'not_allowed' })).ui;
     expect(await screen.findByTestId('issue-alerts-error')).toBeTruthy();
   });
+
+  describe('D16: the card is bounded', () => {
+    const many = (n: number) => Array.from({ length: n }, (_, k) => issue(k + 1, { priority: 'high' }));
+    it('0 alerts: the empty state and no link', async () => {
+      await setup(alerts([])).ui;
+      expect(await screen.findByTestId('issue-alerts-empty')).toBeTruthy();
+      expect(screen.queryByTestId('issue-alerts-more')).toBeNull();
+    });
+    it('5 alerts: all five, no "more" link', async () => {
+      await setup(alerts(many(5))).ui;
+      expect(await screen.findByText('Issue alerts (5)')).toBeTruthy();
+      expect(screen.getAllByTestId(/^alert-i-\d+$/)).toHaveLength(5);
+      expect(screen.queryByTestId('issue-alerts-more')).toBeNull();
+    });
+    it('12 alerts: the first five in server order, the true count, and a link to all alerts', async () => {
+      await setup(alerts(many(12))).ui;
+      expect(await screen.findByText('Issue alerts (12)')).toBeTruthy();
+      expect(screen.getAllByTestId(/^alert-i-\d+$/).map((r) => r.props.testID)).toEqual(['alert-i-1', 'alert-i-2', 'alert-i-3', 'alert-i-4', 'alert-i-5']);
+      expect(screen.getByTestId('issue-alerts-more')).toHaveTextContent(/7 more/);
+      await fireEvent.press(screen.getByTestId('issue-alerts-more'));
+      expect(router.push).toHaveBeenCalledWith({ pathname: '/issues', params: { tab: 'alerts' } });
+    });
+    it('recently closed shows at most five and links to the Closed list', async () => {
+      const closed = Array.from({ length: 8 }, (_, k) => issue(k + 20, { status: 'closed', closed_at: '2026-11-16T10:00:00Z' }));
+      await setup(alerts([], closed)).ui;
+      expect(await screen.findByTestId('issue-recently-closed')).toBeTruthy();
+      expect(screen.getAllByTestId(/^closed-i-\d+$/)).toHaveLength(5);
+      await fireEvent.press(screen.getByTestId('issue-closed-more'));
+      expect(router.push).toHaveBeenCalledWith({ pathname: '/issues', params: { tab: 'closed' } });
+    });
+  });
 });

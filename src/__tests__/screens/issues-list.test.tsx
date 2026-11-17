@@ -6,7 +6,8 @@ import { admin, sup } from '@/test/plant-fixtures';
 import { renderWithSession } from '@/test/render-with-session';
 import { ok, rpcOk, shiftClient } from '@/test/shift-fixtures';
 
-jest.mock('expo-router', () => ({ router: { push: jest.fn(), replace: jest.fn() } }));
+const mockParams: { tab?: string } = {};
+jest.mock('expo-router', () => ({ router: { push: jest.fn(), replace: jest.fn() }, useLocalSearchParams: () => mockParams }));
 jest.setTimeout(20_000);
 
 const page = (items: unknown[], total = items.length) => rpcOk({ ok: true, page: 1, page_size: 25, total, items });
@@ -17,7 +18,7 @@ const setup = (role: 'supervisor' | 'unit_admin', list: unknown) => {
 };
 
 describe('Issue list', () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => { jest.clearAllMocks(); delete mockParams.tab; });
 
   it('a supervisor sees My issues with words for every state and no Report/No-owner controls', async () => {
     await setup('supervisor', page([issue(1, { machine_stopped: true, escalated: true, status: 'in_progress', priority: 'critical' })])).ui;
@@ -97,5 +98,21 @@ describe('Issue list', () => {
     await fireEvent.press(await screen.findByTestId('filter-priority-critical'));
     await fireEvent.press(screen.getByTestId('issues-tab-closed'));
     await waitFor(() => expect(rpc).toHaveBeenLastCalledWith('issue_list', { p_filters: { status: 'closed', priority: 'critical' }, p_page: 1 }));
+  });
+
+  it('D16: the Alerts tab asks the server for alerts (paginated) and opens first when linked from Home', async () => {
+    mockParams.tab = 'alerts';
+    const { rpc, ui } = setup('unit_admin', page([issue(1, { priority: 'high' })], 60));
+    await ui;
+    await screen.findByTestId('issue-row-i-1');
+    expect(rpc).toHaveBeenCalledWith('issue_list', { p_filters: { alerts: true }, p_page: 1 });
+    await fireEvent.press(screen.getByTestId('issues-next'));
+    expect(rpc).toHaveBeenLastCalledWith('issue_list', { p_filters: { alerts: true }, p_page: 2 });
+  });
+
+  it('D16: a supervisor has no Alerts tab', async () => {
+    await setup('supervisor', page([issue(1)])).ui;
+    await screen.findByText('My issues');
+    expect(screen.queryByTestId('issues-tab-alerts')).toBeNull();
   });
 });

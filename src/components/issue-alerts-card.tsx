@@ -11,6 +11,8 @@ import { useSession } from '@/lib/session-provider';
 import { useLoad } from '@/lib/use-load';
 
 const REFRESH_MS = 60_000;
+/** D16: Home shows at most this many of each list; the Issues screen has the rest, paginated. */
+const SHOWN = 5;
 
 /** Unit Admin Home: open High/Critical issues (the server orders them, stopped machines first) and what closed in the last 7 days (D11). */
 export function IssueAlertsCard({ showAll = true }: { showAll?: boolean }) {
@@ -39,11 +41,14 @@ export function IssueAlertsCard({ showAll = true }: { showAll?: boolean }) {
       {alerts.state === 'loading' && !d ? <Text testID="issue-alerts-loading" accessibilityLiveRegion="polite" style={text}>Loading alerts</Text> : null}
       {alerts.state === 'error' ? <Text testID="issue-alerts-error" accessibilityRole="alert" style={{ fontSize: 16, color: colors.error }}>{toUserMessage(alerts.error)}</Text> : null}
       {d && d.alerts.length === 0 ? <Text testID="issue-alerts-empty" style={text}>No open High or Critical issues</Text> : null}
-      {d?.alerts.map((i) => <IssueRowView key={i.id} issue={i} prefix="alert" />)}
+      {d?.alerts.slice(0, SHOWN).map((i) => <IssueRowView key={i.id} issue={i} prefix="alert" />)}
+      {d && d.alerts.length > SHOWN ? (
+        <Button title={`${d.alerts.length - SHOWN} more - View all alerts`} variant="secondary" testID="issue-alerts-more" onPress={() => router.push({ pathname: '/issues', params: { tab: 'alerts' } })} />
+      ) : null}
       {d && d.recently_closed.length > 0 ? (
         <View testID="issue-recently-closed" style={{ gap: 8 }}>
           <Text accessibilityRole="header" style={{ fontSize: 17, fontWeight: '700', color: colors.text }}>Recently closed</Text>
-          {d.recently_closed.map((i) => (
+          {d.recently_closed.slice(0, SHOWN).map((i) => (
             <View key={i.id} testID={`closed-${i.id}`} style={{ gap: 2 }}>
               <Text style={text}>{i.machine_code} · {i.category}</Text>
               <Text style={{ fontSize: 14, color: colors.muted }}>
@@ -51,6 +56,9 @@ export function IssueAlertsCard({ showAll = true }: { showAll?: boolean }) {
               </Text>
             </View>
           ))}
+          {d.recently_closed.length > SHOWN ? (
+            <Button title={`${d.recently_closed.length - SHOWN} more - View closed issues`} variant="secondary" testID="issue-closed-more" onPress={() => router.push({ pathname: '/issues', params: { tab: 'closed' } })} />
+          ) : null}
         </View>
       ) : null}
       {showAll ? <Button title="All issues" variant="secondary" testID="issue-alerts-all" onPress={() => router.push('/issues')} /> : null}

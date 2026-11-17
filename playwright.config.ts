@@ -21,7 +21,8 @@ export default defineConfig({
   use: { baseURL, ...evidenceSettings(baseURL) },
   projects: [
     // API tests: Edge Functions + RLS through HTTP, no browser (02, D10).
-    { name: 'api', testDir: './e2e/api', fullyParallel: false, testIgnore: /platform-setup\.spec\.ts/ },
+    // D16: hosted dev is slower (Edge Function cold starts, cleanup RPCs): 60 s per API test on a non-local target, config only.
+    { name: 'api', testDir: './e2e/api', fullyParallel: false, testIgnore: /platform-setup\.spec\.ts/, ...(isLocal ? {} : { timeout: 60_000 }) },
     // One-time setup endpoint (03): empties platform_admin, so it runs alone after every project that uses Super Admins. Local stack only.
     { name: 'api-setup', testDir: './e2e/api', testMatch: /platform-setup\.spec\.ts/, fullyParallel: false, dependencies: ['api', 'e2e'] },
     { name: 'e2e', testDir: './e2e/web', testIgnore: /smoke\.spec\.ts/, use: { ...devices['Pixel 7'] } },

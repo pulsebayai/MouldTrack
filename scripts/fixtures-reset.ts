@@ -11,6 +11,7 @@
  *      DEV_SUPABASE_PROJECT_REF (required for hosted).
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { closeAsUnitAdmin } from './close-throwaway-issues';
 
 export type Fixture = {
   key: string;
@@ -466,6 +467,20 @@ async function main() {
     if (error) throw error;
     for (const u of data.users) if (u.email) existing.set(u.email, u.id);
     if (data.users.length < 200) break;
+  }
+
+  // D16: close the throwaway issues earlier runs left open in the e2e orgs (through the RPCs, as a Unit Admin of each org), before their users are removed below.
+  // Best effort: a failure here is logged and never stops the reset.
+  const e2eTenants = must(await admin.from('tenant').select('id, name').ilike('name', 'e2e %').eq('status', 'active')) ?? [];
+  for (const t of e2eTenants) {
+    try {
+      const ua = must(await admin.from('membership').select('phone_e164').eq('tenant_id', t.id).eq('role', 'unit_admin').eq('status', 'active').eq('must_change_password', false).limit(1).maybeSingle());
+      if (!ua) continue;
+      const res = await closeAsUnitAdmin(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, `${(ua.phone_e164 as string).slice(3)}@${AUTH_DOMAIN}`, password);
+      if (res.closed || res.left) console.log(`throwaway issues in "${t.name}": closed ${res.closed}, left ${res.left}`);
+    } catch (e) {
+      console.warn(`throwaway issue clean-up skipped for "${t.name}": ${(e as Error).message}`);
+    }
   }
 
   // Clean-up: legacy email fixtures, throwaway users from earlier test runs, and any non-canonical member of a fixture tenant.

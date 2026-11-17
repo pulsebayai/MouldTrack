@@ -1211,6 +1211,7 @@ declare
   v_esc boolean;
   v_stop boolean;
   v_need boolean;
+  v_alerts boolean;
   v_total int;
   v_items jsonb;
 begin
@@ -1230,6 +1231,7 @@ begin
     v_esc := nullif(f->>'escalated', '')::boolean;
     v_stop := nullif(f->>'stopped', '')::boolean;
     v_need := nullif(f->>'needs_owner', '')::boolean;
+    v_alerts := nullif(f->>'alerts', '')::boolean;
   exception when others then
     perform app._pm_fail('validation', 'A filter value is not valid', 'filters');
   end;
@@ -1241,9 +1243,10 @@ begin
   end if;
 
   with vis as (
-    select i.id, i.reported_at
+    select i.id, i.reported_at, i.machine_stopped, i.priority
     from public.machine_issue i
     where i.tenant_id = v_tenant
+      and (v_alerts is not true or (i.status <> 'closed' and i.priority in ('high', 'critical')))
       and (v_status is null or i.status = v_status or (v_status = 'not_closed' and i.status <> 'closed'))
       and (v_prio is null or i.priority = v_prio)
       and (v_cat is null or i.category_id = v_cat)
@@ -1257,8 +1260,9 @@ begin
            or (i.status = 'resolved' and i.priority in ('high', 'critical') and app.issue_can_verify(i.id, v_uid, p_at)))
   )
   select (select count(*)::int from vis),
-         (select coalesce(jsonb_agg(app._iss_row(q.id, p_at) order by q.reported_at desc, q.id), '[]'::jsonb)
-            from (select v.id, v.reported_at from vis v order by v.reported_at desc, v.id limit 25 offset (v_page - 1) * 25) q)
+         (select coalesce(jsonb_agg(app._iss_row(q.id, p_at) order by q.o1 desc, q.o2 desc, q.reported_at desc, q.id), '[]'::jsonb)
+            from (select v.id, v.reported_at, (v_alerts is true and v.machine_stopped) as o1, (v_alerts is true and v.priority = 'critical') as o2
+                    from vis v order by (v_alerts is true and v.machine_stopped) desc, (v_alerts is true and v.priority = 'critical') desc, v.reported_at desc, v.id limit 25 offset (v_page - 1) * 25) q)
     into v_total, v_items;
   return jsonb_build_object('ok', true, 'page', v_page, 'page_size', 25, 'total', v_total, 'items', v_items);
 end
