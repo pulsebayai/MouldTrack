@@ -9,7 +9,6 @@ export function IssueRowView({ issue, prefix }: { issue: IssueRow; prefix: strin
     <Pressable
       testID={`${prefix}-${issue.id}`}
       accessibilityRole="button"
-      accessibilityLabel={`${issue.machine_code} ${issue.category}, ${PRIORITY_LABEL[issue.priority]}, ${STATUS_LABEL[issue.status]}`}
       onPress={() => router.push(`/issues/${issue.id}`)}
       style={{ minHeight: 48, borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 12, gap: 6 }}
     >
