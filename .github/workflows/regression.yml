@@ -16,10 +16,15 @@ on:
       base_url:
         description: 'Web URL (defaults per target)'
         required: false
+  # TEMPORARY (03 step 9 proof before merge; remove in the next commit): dispatch/schedule only work from main. Runs the DEV target only.
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/regression.yml', 'supabase/migrations/**', 'scripts/auth-config.mjs', 'scripts/orphan-check.ts', 'scripts/hosted-checks.sh', 'e2e/maestro/**']
 
 permissions:
   contents: read
   issues: write
+  actions: read
 
 concurrency:
   group: regression-${{ inputs.target || 'dev' }}
@@ -37,6 +42,20 @@ jobs:
       base_url: ${{ steps.t.outputs.base_url }}
       full: ${{ steps.t.outputs.full }}
     steps:
+      # TEMPORARY with the pull_request trigger: test what this commit deployed, not the previous deploy.
+      - name: Wait for deploy-dev of this commit (pull_request only)
+        if: github.event_name == 'pull_request'
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: |
+          sha="${{ github.event.pull_request.head.sha }}"
+          for i in $(seq 1 40); do
+            r=$(gh api "repos/${{ github.repository }}/actions/workflows/deploy-dev.yml/runs?head_sha=$sha&per_page=1" --jq '.workflow_runs[0] | "\(.status) \(.conclusion)"' 2>/dev/null || true)
+            echo "deploy-dev for $sha: ${r:-not started}"
+            case "$r" in "completed success") exit 0;; completed*) echo "deploy-dev failed"; exit 1;; esac
+            [ -z "$r" ] && [ "$i" -ge 6 ] && { echo "no deploy-dev run for this commit; testing current dev"; exit 0; }
+            sleep 15
+          done
+          echo "timed out waiting for deploy-dev"; exit 1
       - id: t
         run: |
           t="$TARGET"
