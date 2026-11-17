@@ -1,5 +1,5 @@
 # Spec: Shift readings
-Intent: ./intent.md · Status: draft · Date: 2026-11-17
+Intent: ./intent.md · Status: approved · Date: 2026-11-17
 
 Terms: **occurrence** (05), **owner** = `app.machine_owner(machine, shift, date)`, **boundary** = occurrence start (opening) / end (closing). All prior patterns apply (`_pm_authorise`, D13, request ids tied to RPC, append-only + trigger incl. service_role, registry, composite FKs, 022 fixture additions, write RPCs use `now()`, read helpers take `p_at`).
 
