@@ -1,5 +1,5 @@
 import { router, useLocalSearchParams } from 'expo-router';
-import { useCallback, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { ActivityIndicator, ScrollView, Text, View } from 'react-native';
 import { PersonForm } from '@/components/console/person-form';
 import { SuspendDialog } from '@/components/console/suspend-dialog';
@@ -20,10 +20,8 @@ export default function TenantDetail() {
   const { client } = useSession();
   const { id } = useLocalSearchParams<{ id: string }>();
   const tenantId = String(id);
-  const loadTenant = useCallback(() => fetchTenant(client, tenantId), [client, tenantId]);
-  const loadAdmins = useCallback(() => fetchTenantUnitAdmins(client, tenantId), [client, tenantId]);
-  const tenant = useLoad(loadTenant);
-  const admins = useLoad(loadAdmins);
+  const tenant = useLoad(() => fetchTenant(client, tenantId), [tenantId]);
+  const admins = useLoad(() => fetchTenantUnitAdmins(client, tenantId), [tenantId]);
 
   const [editing, setEditing] = useState(false);
   const [adding, setAdding] = useState(false);

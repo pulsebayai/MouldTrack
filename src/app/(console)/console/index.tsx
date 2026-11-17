@@ -1,5 +1,5 @@
 import { router } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useState } from 'react';
 import { ActivityIndicator, ScrollView, Text, View } from 'react-native';
 import { Button, Chip, ErrorText, Field, StatusLabel, colors } from '@/components/ui';
 import { toUserMessage } from '@/lib/errors';
@@ -23,8 +23,7 @@ export default function Tenants() {
   const [status, setStatus] = useState<TenantStatusFilter>('all');
   const [plan, setPlan] = useState<PlanFilter>('all');
   const [page, setPage] = useState(0);
-  const load = useCallback(() => fetchTenantSummaries(client, { search, status, plan, page }), [client, search, status, plan, page]);
-  const { state, data, reload } = useLoad(load);
+  const { state, data, reload } = useLoad(() => fetchTenantSummaries(client, { search, status, plan, page }), [search, status, plan, page]);
   const rows = data?.rows ?? [];
   const total = data?.total ?? 0;
   const pages = Math.max(1, Math.ceil(total / TENANT_PAGE_SIZE));

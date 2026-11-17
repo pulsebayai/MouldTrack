@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useState } from 'react';
 import { ActivityIndicator, ScrollView, Text, View } from 'react-native';
 import { Button, ErrorText, colors } from '@/components/ui';
 import { toUserMessage } from '@/lib/errors';
@@ -14,8 +14,7 @@ export function whenText(iso: string): string {
 export default function PlatformAudit() {
   const { client } = useSession();
   const [page, setPage] = useState(0);
-  const load = useCallback(() => fetchPlatformAudit(client, page), [client, page]);
-  const { state, data, reload } = useLoad(load);
+  const { state, data, reload } = useLoad(() => fetchPlatformAudit(client, page), [page]);
   const rows = data?.rows ?? [];
   const total = data?.total ?? 0;
   const pages = Math.max(1, Math.ceil(total / AUDIT_PAGE_SIZE));

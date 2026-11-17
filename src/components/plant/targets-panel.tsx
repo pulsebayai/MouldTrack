@@ -7,7 +7,7 @@ import {
 import { useSession } from '@/lib/session-provider';
 import { Label, Loading, LoadError, rowStyle } from './common';
 import { TargetForm } from './target-form';
-import { useLoad } from './use-load';
+import { useLoad } from '@/lib/use-load';
 
 /** Targets of one machine: per product the current and next target and the full history (AC-9). */
 export function TargetsPanel({ machineId, machineCode, retired }: { machineId: string; machineCode: string; retired: boolean }) {

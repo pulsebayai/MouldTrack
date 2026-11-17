@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { ActivityIndicator, ScrollView, Text, View } from 'react-native';
 import { PersonForm } from '@/components/console/person-form';
 import { TempPasswordPanel } from '@/components/temp-password-panel';
@@ -13,8 +13,7 @@ type Pending = { kind: 'toggle' | 'reset'; row: SuperAdminRow };
 
 export default function SuperAdmins() {
   const { client } = useSession();
-  const load = useCallback(() => fetchSuperAdmins(client), [client]);
-  const { state, data, reload } = useLoad(load);
+  const { state, data, reload } = useLoad(() => fetchSuperAdmins(client), []);
   const rows = data ?? [];
   const [adding, setAdding] = useState(false);
   const [pending, setPending] = useState<Pending | null>(null);
