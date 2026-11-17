@@ -97,3 +97,9 @@ AC-1–16 → tests (spec table, with D8's Android scope); full suite green; dev
 - Shared files changed (for 06's rebase): `supabase/seed.sql` (07 block appended), `scripts/fixtures-reset.ts` (ISSUES, resetIssues, referenced checks), `supabase/tests/022` fixture block (additions), `src/lib/plant.ts` (export `call`, `readRpc`, `RpcClient`), `src/app/(app)/home.tsx`, `src/components/my-shift-card.tsx`, `src/components/plant/plant-tabs.tsx`, `package.json` + lockfile (expo-image-picker, expo-image-manipulator), `app.json` (image-picker plugin, CSP img-src), `e2e/api/helpers.ts` (additions: issue world, seeds, TINY_JPEG/PNG), `.github/workflows/ci.yml` (e2e-web exclude list). 06 should reuse `src/lib/photos.ts` and the attachment RPC pattern; the 06 photo step waits for this PR.
 - Observed: `e2e/web/shifts.spec.ts` (05) failed once in run 44081306984 (board group not found right after `assign-submit`, then `fill` of the board date) and passed in all later runs with no change to it. It looks like a race in that test (the date fill triggers a refetch while the assign RPC may still be in flight). Not edited; flag for 05's owner/Opus.
 - Blockers: none.
+
+### 2026-11-17 (Sonnet, step 7a)
+- Done: 7a (R1-R8) ticked; deviations logged above the session log. Code commit 0a6fe5b (on d85532a).
+- Proof: PR #16 CI run 44098349213 on head 0a6fe5b: changes, static, db, e2e-web, ci-ok, summary all success; wall clock about 6 m 40 s (13:59:58 to 14:06:38Z). Local: Jest 58 suites / 755 tests, pgTAP 23 files / 1696 tests (with and without seed), lint + typecheck clean, `npm run build` exit 0 incl. Android prebuild.
+- Shared files changed since step 7: `scripts/fixtures-reset.ts` (needsFreshCopy + resetIssues, N-14), `app.json` (CSP img-src reverted), `src/lib/photos.ts` and the 07 migration/tests only otherwise; no 01-05/006 test or 022 change.
+- Blockers: none. Step 8 not started.
