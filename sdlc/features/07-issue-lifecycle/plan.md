@@ -70,6 +70,8 @@ AC-1–16 → tests (spec table, with D8's Android scope); full suite green; dev
 
 - Step 3 (found by CI `db`, real Storage): a client DELETE on `storage.objects` is refused with 42501 by Storage's own protect trigger rather than affecting 0 rows. 042 tests 64-65 now accept `ok` (stub: 0 rows) or `42501` (real Storage); the control test still proves nothing was removed.
 
+- Step 7 (found by CI `e2e-web`; flag for Opus): the e2e-web job's `SUPABASE_EXCLUDE` omitted `storage-api`, so no Storage service existed in PR CI ("name resolution failed") and photo upload/signed-URL could not be proven. Removed `storage-api` from that one job's exclude list in `.github/workflows/ci.yml` (no trigger change; the `db` job keeps excluding it, pgTAP only needs the `storage` schema). Cost: one more image pull + container in e2e-web. Revert if Opus prefers a Storage-less CI and a nightly-only photo proof.
+
 ## Session log
 ### 2026-11-17
 - Done: intent + spec approved (owner: categories extendable; High/Critical verified by later-shift owner, UA fallback when unassigned; reporting on non-owned machines; photos visible to all who see the issue; stopped → Critical + UA alerts).

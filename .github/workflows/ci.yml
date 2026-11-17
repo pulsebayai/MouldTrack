@@ -102,7 +102,8 @@ jobs:
     timeout-minutes: 20
     env:
       # This job runs the edge runtime (02, D7): the Edge Functions are part of what it tests.
-      SUPABASE_EXCLUDE: studio,imgproxy,logflare,vector,realtime,storage-api,postgres-meta
+      # 07 (issue photos): the Storage API runs here because the API and web specs upload and read photos through it (policies on storage.objects, signed URLs).
+      SUPABASE_EXCLUDE: studio,imgproxy,logflare,vector,realtime,postgres-meta
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
