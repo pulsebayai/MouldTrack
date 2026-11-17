@@ -46,6 +46,7 @@ export default function AssignmentsTab() {
         accessibilityRole="checkbox"
         accessibilityLabel={`${m.code} ${m.name}`}
         accessibilityState={{ checked: on }}
+        aria-checked={on}
         onPress={() => toggle(m.machine_id)}
         style={{ minHeight: 48, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 12, borderWidth: on ? 2 : 1, borderColor: on ? colors.primary : colors.border, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6 }}
       >
