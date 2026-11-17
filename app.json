@@ -34,6 +34,14 @@
         }
       ],
       [
+        "expo-image-picker",
+        {
+          "cameraPermission": "MouldTrack uses the camera to photograph a machine issue. Photos are attached to the issue report.",
+          "photosPermission": "MouldTrack lets you pick a photo of a machine issue to attach to the report.",
+          "microphonePermission": false
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "backgroundColor": "#208AEF",

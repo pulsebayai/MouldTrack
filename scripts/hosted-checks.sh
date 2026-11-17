@@ -5,6 +5,7 @@
 #     3 no orphan Auth users (D4)                                 4 CORS: dev web origin allowed, foreign origin never reflected (D8)
 #     5 every membership's Auth email = its phone, inactive = banned, active = not banned (R7)
 #     6 platform-setup refuses on dev (403 not_allowed: no usable token, no database access)  7 the configured token, if any, is not the local literal  8 dev has no PLATFORM_SETUP_TOKEN at all (03 step 9, D11)
+#     9 Storage bucket `attachments` exists, is private, limited to 5 MB and to image/jpeg, image/png, image/webp (07, read-only)
 #   TARGET=staging: only check 1 (AC-15, R4), needs SUPABASE_ACCESS_TOKEN and STAGING_SUPABASE_PROJECT_REF. Read-only.
 set -uo pipefail
 TARGET="${TARGET:-dev}"
@@ -23,7 +24,7 @@ if [ "$TARGET" = staging ]; then
 fi
 [ "$TARGET" = dev ] || { echo "TARGET must be dev or staging"; exit 1; }
 : "${DEV_SUPABASE_PROJECT_REF:?}"
-printf 'TAP version 13\n1..8\n' > "$OUT"
+printf 'TAP version 13\n1..9\n' > "$OUT"
 
 node scripts/auth-config.mjs --check --ref dev; tap $? "auth config on dev matches (signup off, min length 10, letters+digits)"
 
@@ -71,5 +72,11 @@ if echo "$secrets_json" | jq -e 'type == "array"' >/dev/null 2>&1; then
 else
   echo "could not list secrets"; tap 1 "the configured setup token (if any) is not the local literal"; tap 1 "dev has no PLATFORM_SETUP_TOKEN secret"
 fi
+
+# 9 (07): the private photo bucket exists as the migration defines it (read-only Storage API call with the service role).
+bucket="$(curl -s -w '\n%{http_code}' "${SUPABASE_URL%/}/storage/v1/bucket/attachments" -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}")"
+bucket_code="$(echo "$bucket" | tail -1)"; bucket_body="$(echo "$bucket" | head -n -1)"
+echo "attachments bucket: HTTP $bucket_code"
+[ "$bucket_code" = 200 ] && echo "$bucket_body" | jq -e '.id == "attachments" and .public == false and .file_size_limit == 5242880 and ((.allowed_mime_types // []) | sort) == ["image/jpeg","image/png","image/webp"]' >/dev/null; tap $? "Storage bucket attachments exists, is private, 5 MB limit, MIME list jpeg/png/webp"
 
 exit $([ "$fails" = 0 ] && echo 0 || echo 1)

@@ -1,10 +1,11 @@
 import Constants from 'expo-constants';
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { Platform, Text, View } from 'react-native';
+import { Platform, ScrollView, Text, View } from 'react-native';
+import { IssueAlertsCard } from '@/components/issue-alerts-card';
 import { MyShiftCard } from '@/components/my-shift-card';
 import { SignOutButton } from '@/components/sign-out-button';
-import { Button, Screen, colors } from '@/components/ui';
+import { Button, colors } from '@/components/ui';
 import type { AppEnv } from '@/lib/env';
 import { authEmailToPhone, formatPhone } from '@/lib/identity';
 import { sendTestError } from '@/lib/sentry';
@@ -25,7 +26,9 @@ export default function Home() {
   const phone = ctx.user.email ? authEmailToPhone(ctx.user.email) : null;
   const banner = ENV_LABEL[appEnv];
   return (
-    <Screen testID="home-screen">
+    <View testID="home-screen" style={{ flex: 1, backgroundColor: colors.bg }}>
+      <ScrollView contentContainerStyle={{ flexGrow: 1, alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+      <View style={{ width: '100%', maxWidth: 420, gap: 16 }}>
       {banner ? (
         <View style={{ backgroundColor: colors.bannerBg, padding: 8, borderRadius: 6 }}>
           <Text testID="env-banner" style={{ color: colors.bannerText, fontWeight: '700', textAlign: 'center' }}>
@@ -41,6 +44,8 @@ export default function Home() {
       </Text>
       <Text style={{ fontSize: 15, color: colors.muted }}>{phone ? formatPhone(phone) : ctx.user.email}</Text>
       {ctx.role === 'supervisor' ? <MyShiftCard /> : null}
+      {ctx.role === 'supervisor' ? <Button title="My issues" testID="issues-link" variant="secondary" onPress={() => router.push('/issues')} /> : null}
+      {ctx.role === 'unit_admin' && Platform.OS === 'web' ? <IssueAlertsCard /> : null}
       {ctx.role === 'unit_admin' && Platform.OS === 'web' ? (
         <Button title="Users" testID="users-link" onPress={() => router.push('/users')} />
       ) : null}
@@ -68,6 +73,8 @@ export default function Home() {
         </>
       ) : null}
       <Text style={{ fontSize: 12, color: colors.muted }}>Version {Constants.expoConfig?.version ?? '0.0.0'}</Text>
-    </Screen>
+      </View>
+      </ScrollView>
+    </View>
   );
 }

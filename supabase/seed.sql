@@ -104,3 +104,39 @@ insert into public.assignment_version (tenant_id, shift_id, machine_id, supervis
   ('20000000-0000-4000-a000-00000000000e', '54000000-0000-4000-a000-0000000000e1', '43000000-0000-4000-a000-0000000000e2', '30000000-0000-4000-a000-0000000000e3', date '2026-01-01', '30000000-0000-4000-a000-0000000000e1'),
   ('20000000-0000-4000-a000-00000000000e', '54000000-0000-4000-a000-0000000000e2', '43000000-0000-4000-a000-0000000000e1', '30000000-0000-4000-a000-0000000000e3', date '2026-01-01', '30000000-0000-4000-a000-0000000000e1'),
   ('20000000-0000-4000-a000-00000000000e', '54000000-0000-4000-a000-0000000000e2', '43000000-0000-4000-a000-0000000000e2', '30000000-0000-4000-a000-0000000000e3', date '2026-01-01', '30000000-0000-4000-a000-0000000000e1');
+
+-- 07-issue-lifecycle (D12): fixture issues. Must match ISSUES in scripts/fixtures-reset.ts (a Jest test checks this file against it).
+-- Org U: a stopped-machine Critical, a High awaiting verification on the never-assigned FX-MU3, a closed Low. Org A: one open issue for supervisor A.
+-- Read-only for e2e. Starter categories already exist (the tenant trigger seeded them).
+do $$
+declare
+  f record;
+  v_by uuid;
+  v_cat uuid;
+begin
+  for f in
+    select * from (values
+      ('60000000-0000-4000-a000-0000000000e1'::uuid, '20000000-0000-4000-a000-00000000000e'::uuid, '43000000-0000-4000-a000-0000000000e1'::uuid, 'critical', 'open', true,
+       '30000000-0000-4000-a000-0000000000e3'::uuid, 'Fixture issue: hydraulic pump failed, machine stopped', timestamptz '2026-01-02T08:00:00Z', null::timestamptz, null::text),
+      ('60000000-0000-4000-a000-0000000000e2', '20000000-0000-4000-a000-00000000000e', '43000000-0000-4000-a000-0000000000e3', 'high', 'resolved', false,
+       '30000000-0000-4000-a000-0000000000e3', 'Fixture issue: mould cooling line leaking', timestamptz '2026-01-02T08:30:00Z', timestamptz '2026-01-02T10:00:00Z', 'Fixture resolution: line re-sealed'),
+      ('60000000-0000-4000-a000-0000000000e3', '20000000-0000-4000-a000-00000000000e', '43000000-0000-4000-a000-0000000000e2', 'low', 'closed', false,
+       '30000000-0000-4000-a000-0000000000e3', 'Fixture issue: guard door sticks', timestamptz '2026-01-02T09:00:00Z', timestamptz '2026-01-02T11:00:00Z', 'Fixture resolution: hinge oiled'),
+      ('60000000-0000-4000-a000-0000000000a1', '20000000-0000-4000-a000-00000000000a', '43000000-0000-4000-a000-0000000000a1', 'medium', 'open', false,
+       '30000000-0000-4000-a000-0000000000a2', 'Fixture issue: oil mist near the nozzle', timestamptz '2026-01-02T08:00:00Z', null, null)
+    ) as t(id, tenant_id, machine_id, priority, status, stopped, uid, description, reported_at, resolved_at, resolution)
+  loop
+    select c.id into v_cat from public.issue_category c where c.tenant_id = f.tenant_id and c.name = 'Mechanical';
+    insert into public.machine_issue (id, tenant_id, machine_id, category_id, priority, description, machine_stopped, status, accountable_owner_id, reported_by, reported_at,
+                                      resolved_by, resolved_at, resolution_notes, closed_at, closed_by)
+    values (f.id, f.tenant_id, f.machine_id, v_cat, f.priority, f.description, f.stopped, f.status, f.uid, f.uid, f.reported_at,
+            case when f.resolved_at is not null then f.uid end, f.resolved_at, f.resolution,
+            case when f.status = 'closed' then f.resolved_at end, case when f.status = 'closed' then f.uid end);
+    insert into public.issue_action (tenant_id, issue_id, actor_id, actor_role, type, status_after, at) values (f.tenant_id, f.id, f.uid, 'supervisor', 'report', 'open', f.reported_at);
+    if f.resolved_at is not null then
+      insert into public.issue_action (tenant_id, issue_id, actor_id, actor_role, type, notes, status_before, status_after, at)
+      values (f.tenant_id, f.id, f.uid, 'supervisor', 'resolve', f.resolution, 'open', f.status, f.resolved_at);
+    end if;
+    insert into public.issue_ownership_history (tenant_id, issue_id, new_owner, source, actor_id, at) values (f.tenant_id, f.id, f.uid, 'report', f.uid, f.reported_at);
+  end loop;
+end $$;

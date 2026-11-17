@@ -1,5 +1,6 @@
 // Shared helpers for the API project (02-tenancy-and-roles, D10). Talks to Auth, PostgREST and the Edge Functions over HTTP.
 // Local/ephemeral stacks only: CI exports E2E_API_URL / E2E_ANON_KEY / E2E_SERVICE_ROLE_KEY from `supabase status`.
+import { createHash } from 'node:crypto';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { test, type APIRequestContext } from '@playwright/test';
 import { authEmailToPhone, phoneToAuthEmail } from '../../supabase/functions/_shared/identity';
@@ -237,3 +238,111 @@ export async function authUserExists(phone: string): Promise<boolean> {
 }
 
 export { authEmailToPhone, phoneToAuthEmail };
+
+// ---- 07-issue-lifecycle world --------------------------------------------------------------------------------------------------------------
+// One machine on two shifts that together cover the day (AM 00:00-12:00 owned by sup1, PM 12:00-00:00 owned by sup2, plant time Asia/Kolkata),
+// so exactly one shift is running at any moment and the shift that started at the last boundary has an owner who may verify an issue that
+// was resolved before that boundary. Everything is derived from the clock, so no case depends on the time of day (D10). Not safe in the
+// two seconds around 00:00 / 12:00 IST (the running shift would flip mid-test).
+export const IST_OFFSET_MIN = 330;
+export const TINY_JPEG = Buffer.from(
+  '/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=',
+  'base64',
+);
+export const sha256Hex = (b: Buffer) => createHash('sha256').update(b).digest('hex');
+/** A 1x1 PNG, for the web file chooser. */
+export const TINY_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+
+export type IssueWorld = {
+  org: Org;
+  ua: Session;
+  sup1: Session; // owns the AM shift
+  sup2: Session; // owns the PM shift
+  machine: { id: string; code: string };
+  shiftAm: string;
+  shiftPm: string;
+  today: string;
+  /** The supervisor whose shift is running now, and the one whose shift is not. */
+  running: { user: OrgUser; session: Session };
+  idle: { user: OrgUser; session: Session };
+  /** Start of the shift that is running now (the last boundary). An issue resolved before it can be verified by `running`. */
+  lastBoundary: Date;
+  categoryId: string;
+  cleanup: string[];
+};
+
+export async function setupIssueWorld(org: Org, plantName: string): Promise<IssueWorld> {
+  org.users.fresh.mustChange = false; // the fourth user is the second supervisor here
+  await provisionOrg(org);
+  const ua = await signIn(org.users.ua1.phone, FIXTURE_PASSWORD);
+  const sup1 = await signIn(org.users.sup.phone, FIXTURE_PASSWORD);
+  const sup2 = await signIn(org.users.fresh.phone, FIXTURE_PASSWORD);
+  const rpc = (fn: string, args: Record<string, unknown>) => ua.client.rpc(fn, args);
+  const site = await rpc('pm_save_site', { p_request_id: uuid(), p_name: plantName, p_timezone: 'Asia/Kolkata' });
+  if (site.error) throw site.error;
+  const old = await ua.client.from('shift').select('id').is('retired_at', null);
+  for (const row of old.data ?? []) await rpc('sh_set_shift_retired', { p_request_id: uuid(), p_id: row.id, p_retired: true });
+  const code = `E2E-${Math.random().toString(36).slice(2, 10).toUpperCase()}`;
+  const mk = await rpc('pm_save_machine', { p_request_id: uuid(), p_id: null, p_code: code, p_name: 'E2E issue machine', p_asset_tag: '', p_make: '', p_model: '', p_controller: '', p_line_id: null, p_status: 'active' });
+  if (!mk.data?.ok) throw new Error(`machine: ${JSON.stringify(mk)}`);
+  const shift = async (start: string, end: string) => {
+    const r = await rpc('sh_save_shift', { p_request_id: uuid(), p_id: null, p_name: `E2E-${Math.random().toString(36).slice(2, 10).toUpperCase()}`, p_start: start, p_end: end });
+    if (!r.data?.ok) throw new Error(`shift: ${JSON.stringify(r)}`);
+    return r.data.id as string;
+  };
+  const shiftAm = await shift('00:00', '12:00');
+  const shiftPm = await shift('12:00', '00:00');
+  const t = await ua.client.from('plant_today').select('plant_date').single();
+  const today = t.data!.plant_date as string;
+  // The standing plan is seeded as service role dated today (a plan change cannot start on an occurrence that has already started, 05 R1).
+  for (const [s, who] of [[shiftAm, sup1], [shiftPm, sup2]] as const) {
+    const r = await service().from('assignment_version').insert({ tenant_id: org.id, shift_id: s, machine_id: mk.data.id, supervisor_id: who.userId, effective_from: today, recorded_by: ua.userId }).select('id');
+    if (r.error) throw r.error;
+  }
+  const cat = await ua.client.from('issue_category').select('id').eq('name', 'Mechanical').single();
+  if (cat.error) throw cat.error;
+  const ist = new Date(Date.now() + IST_OFFSET_MIN * 60_000);
+  const pm = ist.getUTCHours() >= 12;
+  const lastBoundary = new Date(Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate(), pm ? 12 : 0) - IST_OFFSET_MIN * 60_000);
+  return {
+    org, ua, sup1, sup2, machine: { id: mk.data.id, code }, shiftAm, shiftPm, today, lastBoundary, categoryId: cat.data.id,
+    running: pm ? { user: org.users.fresh, session: sup2 } : { user: org.users.sup, session: sup1 },
+    idle: pm ? { user: org.users.sup, session: sup1 } : { user: org.users.fresh, session: sup2 },
+    cleanup: [mk.data.id],
+  };
+}
+
+/** Retires the throwaway shifts and machine (history is append-only, so they cannot be deleted). Never throws. */
+export async function teardownIssueWorld(w: IssueWorld | undefined) {
+  if (!w) return;
+  try {
+    for (const id of [w.shiftAm, w.shiftPm]) await w.ua.client.rpc('sh_set_shift_retired', { p_request_id: uuid(), p_id: id, p_retired: true });
+    for (const id of w.cleanup) await w.ua.client.rpc('pm_set_machine_retired', { p_request_id: uuid(), p_id: id, p_retired: true });
+  } catch {
+    /* best effort */
+  }
+}
+
+/**
+ * An issue already resolved by the idle supervisor one hour before the last shift boundary (service-role insert, like the fixture issues):
+ * the running supervisor owns the shift that started after it, so they may verify it (D4). Returns the issue id.
+ */
+export async function seedResolvedIssue(w: IssueWorld, priority: 'high' | 'critical', description: string): Promise<string> {
+  const sb = service();
+  const id = uuid();
+  const resolver = w.idle.session.userId;
+  const reportedAt = new Date(w.lastBoundary.getTime() - 2 * 3600_000).toISOString();
+  const resolvedAt = new Date(w.lastBoundary.getTime() - 3600_000).toISOString();
+  const ins = async (table: string, row: Record<string, unknown>) => {
+    const r = await sb.from(table).insert(row).select('*');
+    if (r.error) throw new Error(`${table}: ${r.error.message}`);
+  };
+  await ins('machine_issue', {
+    id, tenant_id: w.org.id, machine_id: w.machine.id, category_id: w.categoryId, priority, description, machine_stopped: false, status: 'resolved',
+    accountable_owner_id: resolver, reported_by: resolver, reported_at: reportedAt, resolved_by: resolver, resolved_at: resolvedAt, resolution_notes: 'E2E seeded fix',
+  });
+  await ins('issue_action', { tenant_id: w.org.id, issue_id: id, actor_id: resolver, actor_role: 'supervisor', type: 'report', status_after: 'open', at: reportedAt });
+  await ins('issue_action', { tenant_id: w.org.id, issue_id: id, actor_id: resolver, actor_role: 'supervisor', type: 'resolve', notes: 'E2E seeded fix', status_before: 'open', status_after: 'resolved', at: resolvedAt });
+  await ins('issue_ownership_history', { tenant_id: w.org.id, issue_id: id, new_owner: resolver, source: 'report', actor_id: resolver, at: reportedAt });
+  return id;
+}

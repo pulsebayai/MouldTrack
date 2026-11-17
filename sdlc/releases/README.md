@@ -37,6 +37,7 @@ Date: · Commit: <sha> · Features: · Approved by: Sidambara Raja, <date>
 - [ ] Sign in/out (web + Android phone)
 - [ ] Key screens vs design / prototype
 - [ ] One real end-to-end path
+- [ ] Photo on a real Android phone: report an issue with a camera photo; view it as the Unit Admin (07 D8)
 - [ ] No console/CSP errors (browser devtools)
 - [ ] Mobile width check (web) and one mid-range Android device (cold start ≤ 3 s)
 ## Backups (R1 and while prod is on Free)
