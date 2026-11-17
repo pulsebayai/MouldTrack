@@ -63,7 +63,7 @@ Batch A with 04 (03 merges **after** 04). Locks: **architecture: 03**; schema sp
   - **F5 Nits.** N-6 restore 04's idempotency comment in the redefined `_pm_authorise`; N-7 scope `pa_*` idempotency by action/source (like 04); N-8 partial index for `pa_audit`; N-11 log `src/lib/api.ts` in Deviations.
   - Step 9 (hosted proof) runs **after** 11a and before the PR is marked ready (I-3).
   - Proof: CI green on PR #9.
-- [ ] 11. **Review + PR.** sdlc-reviewer (focus: setup endpoint, SA boundary, account change), fix Important, AC table, session log. — proof: PR CI green
+- [x] 11. **Review + PR.** sdlc-reviewer (focus: setup endpoint, SA boundary, account change), fix Important, AC table, session log. — proof: PR CI green
 
 ## Risks
 - **Setup endpoint** (only unauthenticated write): tests for every refusal path; secret absent on dev/staging; hosted check.
@@ -131,3 +131,8 @@ AC-1–16 → tests (spec table); full suite green after rebase on 04; dev regre
 - Commits: 1-2 first of the D11 series, 3, 4, 5 and a YAML fix (the step name contained a colon; that made a deploy-dev.yml push run fail with no jobs, nothing deployed) up to 65d6a21; temporary triggers f1cd65c; removal 89798c9. PR CI on 65d6a21 (44029400534) green incl. api-setup.
 - Proof (temporary triggers): deploy-dev 44030408905 green (migration already on dev, unset step ran). Regression 44030408923: setup, drift, web (107 passed), hosted-checks (8/8: `platform-setup` 403 not_allowed, token secret count 0, no secret), android all green. The two web tests that failed once before (console.spec lifecycle, plant.spec supervisor) passed again, as in the second previous run; the first failure stays unexplained (no logs kept). Triggers removed in 89798c9; PR CI on 89798c9 (code commit, workflow files identical to 65d6a21) run 44031908641 all jobs green (changes, static, db, e2e-web, summary, ci-ok).
 - Deviation: the temporary trigger commit re-applied e77c628's diff (cherry-pick); the removal is a revert. Not done: PR not marked ready, body unchanged.
+
+### 2026-11-17 (Opus, step 11)
+- Done: 11a + D11 verified; hosted proof green (deploy-dev 44030408905, regression 44030408923: web 107, hosted-checks 8/8, Android, drift); last code commit 89798c9 PR CI 44031908641 green. AC table in PR #9; PR ready.
+- Known: the two web tests that failed once in the first proof run didn't recur in two later runs; cause unknown (no logs). Watch the nightly.
+- Next: owner merges PR #9 → on main: 03 shipped, release architecture + schema locks; 05 rebases (its step 8).
