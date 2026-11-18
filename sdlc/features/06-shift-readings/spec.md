@@ -83,3 +83,8 @@ Additive; existing machines default to Pieces with no maximum.
 
 ## Out of scope
 Rework, downtime, scrap reasons, product change mid-shift, OCR/PLC, dashboards/exports (09), notifications, approval of rollovers.
+
+## Clarifications (Opus, 2026-11-18, after review)
+- AC-3: the opening may be recorded until **12 h after the occurrence ends** (Late after start + 30 min), by the owner or a UA — the owner's rule "late readings are accepted and flagged"; a missed opening no longer makes the occurrence impossible to complete.
+- AC-4/AC-13: a closing submitted **more than 30 min before the end** is accepted and flagged **Early**; for metric 1 a closing is on time only within 30 min either side of the end, and an occurrence is counted once its end + 30 min has passed.
+- AC-12: attainment shows "Not closed yet" when a target exists but no closing; assumed targets are labelled.
