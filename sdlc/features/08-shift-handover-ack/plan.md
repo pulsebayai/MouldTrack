@@ -46,7 +46,7 @@ Branch: feat/08-shift-handover-ack, rebased on main 9978d02 (06 + dev reset merg
 ## Steps (tests first in each)
 - [x] 1. Migration part 1: tables, RLS, append-only triggers, registry, `handover_setting` backfill + registration hook (D1, D8);
   pgTAP 060 (tables, isolation, append-only, backfill, registration enforces). 022 fixture additions.
-- [ ] 2. Helpers: `app.handover_items_at`, `app._ho_declared_at`, windows (D2–D4); pgTAP 061 incl. cover time, reported during O
+- [x] 2. Helpers: `app.handover_items_at`, `app._ho_declared_at`, windows (D2–D4); pgTAP 061 incl. cover time, reported during O
   excluded, closed drops out, carry-forward across day / overnight / cover (AC-11).
 - [ ] 3. Write RPCs (D5) + gate (D6); pgTAP 062: AC-2–8, AC-10, AC-13 (denials, idempotency, SA denied, cross-tenant),
   `rd_opening` refused then allowed, UA bypass, unenforced tenant unaffected.
@@ -82,3 +82,8 @@ lines, Console tenant detail (label), Jest tests, `e2e/web/handover.spec.ts`, `e
 - 07's `issue_action.type` CHECK widened with `handover_ack` and `handover_refuse` (additive; 040/041 unchanged).
 - pgTAP 060 (47 tests) + 022 fixture-block additions (additions only).
 - Verification aid (not an official result): migrations + tests also run on a plain PostgreSQL 16 with stubbed Supabase schemas; 060 and 022 pass there; CI is the authority. 013/030/031/032/042/050/054 show stub-related errors on that rig with and without 08 (identical counts), so they are not evidence either way.
+
+### 2026-11-18 (Sonnet) step 2
+- Helpers: `app._ho_upto` (moment handling: a moment that is not in the past means "no upper bound", because rows written in the same transaction carry `clock_timestamp()` later than `now()`), `app._ho_owners` (set-based owner resolution: cover > plan, unassigned and retired excluded, `since` = cover time when recorded after the start, handover start; bounded to 93 days; copy of 05's rule pinned to `app.machine_owner` / `app.shift_window` by 061), `app._ho_status_at` (issue status as of a moment from 07's append-only actions; current row when the moment is not in the past), `app.handover_items_at`, `app._ho_declared_at`.
+- Interpretation recorded: a declaration or acknowledgement made in the 30 minutes before the start counts; only a later **cover time** makes earlier ones stale (D2/AC-6). Declaration with no inherited items is valid at any time within the windows (enforced by the RPC in step 3).
+- pgTAP 061 (51 tests): inherited set incl. before/after start, resolved included, closed drops out as of a moment, cover recorded before/after the start, overnight and cover carry-forward, stale acknowledgement/declaration, exception pending, pins to 05.

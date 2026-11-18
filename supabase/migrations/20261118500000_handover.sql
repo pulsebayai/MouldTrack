@@ -238,6 +238,133 @@ begin
 end
 $$;
 
+-- 6. Helpers (step 2, D2-D4) ----------------------------------------------------------------------------------------------------------
+-- Moment handling: the public reads and RPCs pass now(); pgTAP passes explicit moments. Rows written in the same transaction carry
+-- clock_timestamp() (later than now()), so "as of the moment" means "no upper bound" when the moment is not in the past.
+create function app._ho_upto(p_at timestamptz)
+returns timestamptz
+language sql
+stable
+set search_path = ''
+as $$ select case when p_at is null or p_at >= now() then 'infinity'::timestamptz else p_at end $$;
+
+-- Set-based owner resolution over a date range for ONE tenant: the machine-occurrences that have a supervisor (cover > plan; unassigned and
+-- retired excluded) with their window, `since` (the cover time when a cover recorded after the start gave the machine to the supervisor, else null)
+-- and the handover start (since, or the window start). The rule is a copy of 05's app.machine_owner_src and the window a copy of
+-- app.shift_window (via 06's app._rd_window) for set-based queries; pgTAP 061 pins both to the originals. Covers recorded after p_at are ignored.
+create function app._ho_owners(p_tenant uuid, p_from date, p_to date, p_shift uuid default null, p_at timestamptz default null)
+returns table (shift_id uuid, shift_date date, machine_id uuid, supervisor_id uuid, w_start timestamptz, w_end timestamptz, since timestamptz, handover_start timestamptz)
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_upto timestamptz := app._ho_upto(p_at);
+begin
+  if p_tenant is null or p_from is null or p_to is null or p_to < p_from or p_to - p_from > 92 then
+    perform app._pm_fail('validation', 'Choose a valid date range of at most 93 days', 'range');
+  end if;
+  return query
+  with occ as (
+    select s.id as sid, d.d as sdate, app._rd_window(s.start_time, s.end_time, d.d, z.timezone) as w, s.retired_at as s_retired
+      from public.shift s
+      join public.site z on z.id = s.site_id
+      cross join lateral (select (p_from + g.n) as d from generate_series(0, p_to - p_from) as g(n)) d
+     where s.tenant_id = p_tenant and (p_shift is null or s.id = p_shift)
+  ), live as (
+    select o.* from occ o where o.s_retired is null or o.s_retired >= upper(o.w)
+  ), owned as (
+    select e.sid, e.sdate, m.id as mid, e.w, cv.found as cover_found, cv.supervisor_id as cover_sup, cv.recorded_at as cover_at, pv.supervisor_id as plan_sup
+      from live e
+      join public.machine m on m.tenant_id = p_tenant and (m.retired_at is null or m.retired_at >= upper(e.w))
+      left join lateral (select true as found, c.supervisor_id, c.recorded_at from public.assignment_cover c
+                          where c.shift_id = e.sid and c.shift_date = e.sdate and c.machine_id = m.id and c.recorded_at <= v_upto
+                          order by c.recorded_at desc, c.id desc limit 1) cv on true
+      left join lateral (select v.supervisor_id from public.assignment_version v
+                          where v.shift_id = e.sid and v.machine_id = m.id and v.effective_from <= e.sdate
+                          order by v.effective_from desc, v.recorded_at desc, v.id desc limit 1) pv on true
+  )
+  select x.sid, x.sdate, x.mid, x.sup, lower(x.w), upper(x.w), x.since_at, coalesce(x.since_at, lower(x.w))
+    from (select o.*, case when o.cover_found then o.cover_sup else o.plan_sup end as sup,
+                 case when o.cover_found and o.cover_sup is not null and o.cover_at > lower(o.w) then o.cover_at end as since_at
+            from owned o) x
+   where x.sup is not null;
+end
+$$;
+
+-- The status of an issue as of a moment: the latest action's status_after at or before it (07's history); an issue without any action row
+-- (fixtures) has its current status. A moment that is not in the past reads the current row. Null = the issue did not exist yet.
+create function app._ho_status_at(p_issue uuid, p_at timestamptz)
+returns text
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select case when p_at is null or p_at >= now() then (select i.status from public.machine_issue i where i.id = p_issue)
+              else coalesce((select a.status_after from public.issue_action a
+                              where a.issue_id = p_issue and a.status_after is not null and a.at <= p_at order by a.at desc, a.id desc limit 1),
+                            (select i.status from public.machine_issue i
+                              where i.id = p_issue and i.reported_at <= p_at and not exists (select 1 from public.issue_action a where a.issue_id = i.id)))
+         end
+$$;
+
+-- D4: the inherited issues of supervisor p_sup in occurrence (p_shift, p_date) as of p_at: unclosed issues on machines the supervisor owns there,
+-- reported before the supervisor's handover start. state: pending | acknowledged | refused (the supervisor's latest acknowledgement made at or
+-- after `since`; an earlier one is stale, AC-6). exception_pending: refused and no Unit Admin exception recorded since.
+create function app.handover_items_at(p_sup uuid, p_shift uuid, p_date date, p_at timestamptz)
+returns table (issue_id uuid, machine_id uuid, handover_start timestamptz, since timestamptz, status text, state text, exception_pending boolean, handled_at timestamptz)
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_tenant uuid;
+  v_upto timestamptz := app._ho_upto(p_at);
+begin
+  select s.tenant_id into v_tenant from public.shift s where s.id = p_shift;
+  if v_tenant is null or p_sup is null or p_date is null then return; end if;
+  return query
+  select i.id, o.machine_id, o.handover_start, o.since, st.status,
+         case when a.kind is null then 'pending' else a.kind end,
+         coalesce(a.kind = 'refused' and not exists (select 1 from public.handover_exception x
+                                                       where x.issue_id = i.id and x.shift_id = p_shift and x.shift_date = p_date and x.at >= a.at and x.at <= v_upto), false),
+         a.at
+    from app._ho_owners(v_tenant, p_date, p_date, p_shift, p_at) o
+    join public.machine_issue i on i.tenant_id = v_tenant and i.machine_id = o.machine_id
+    cross join lateral (select app._ho_status_at(i.id, p_at) as status) st
+    left join lateral (select k.kind, k.at from public.issue_acknowledgement k
+                        where k.issue_id = i.id and k.shift_id = p_shift and k.shift_date = p_date and k.supervisor_id = p_sup
+                          and k.at <= v_upto and (o.since is null or k.at >= o.since)
+                        order by k.at desc, k.id desc limit 1) a on true
+   where o.supervisor_id = p_sup and i.reported_at < o.handover_start and st.status in ('open', 'in_progress', 'resolved')
+   order by o.machine_id, i.reported_at, i.id;
+end
+$$;
+
+-- D2: has the supervisor declared for the occurrence? A declaration made at or after the latest cover time among their inherited items counts
+-- (a declaration made before a later cover is stale, AC-6); with no cover any declaration of the occurrence counts, made even in the 30 minutes
+-- before the start.
+create function app._ho_declared_at(p_sup uuid, p_shift uuid, p_date date, p_at timestamptz)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_since timestamptz;
+  v_upto timestamptz := app._ho_upto(p_at);
+begin
+  if p_sup is null or p_shift is null or p_date is null then return false; end if;
+  select max(i.since) into v_since from app.handover_items_at(p_sup, p_shift, p_date, p_at) i;
+  return exists (select 1 from public.handover_declaration d
+                  where d.shift_id = p_shift and d.shift_date = p_date and d.supervisor_id = p_sup and d.at <= v_upto and (v_since is null or d.at >= v_since));
+end
+$$;
+
 create function app._ho_enforced(p_tenant uuid)
 returns boolean
 language sql
