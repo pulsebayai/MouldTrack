@@ -13,6 +13,7 @@ export default defineConfig({
   timeout: 30_000,
   reporter: [
     ['list'],
+    ['./e2e/failure-reporter.ts'],
     ['junit', { outputFile: 'test-results/junit-e2e.xml' }],
     ['json', { outputFile: 'test-results/e2e.json' }],
     ['html', { outputFolder: 'playwright-report', open: 'never' }],

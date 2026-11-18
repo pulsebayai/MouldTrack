@@ -228,7 +228,7 @@ jobs:
           emulator-boot-timeout: 600
           script: |
             adb install -r android/app/build/outputs/apk/release/app-release.apk
-            mkdir -p test-results && maestro test e2e/maestro --env PASSWORD="$PASSWORD" --format junit --output test-results/junit-android.xml
+            bash scripts/ci-maestro.sh
       - if: always()
         uses: actions/upload-artifact@v4
         with: { name: 'regression-android', path: test-results/, retention-days: 90, if-no-files-found: warn }

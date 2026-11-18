@@ -1,6 +1,6 @@
 // AC-13 (web): the dev build reports errors to Sentry and Sentry accepts them.
 // Hosted DEV only: the button exists only when APP_ENV=development, and local CI has no DSN.
-import { expect, test } from '@playwright/test';
+import { expect, test } from '../diagnostics';
 import { USERS, signIn } from './fixtures';
 
 test('dev build sends a test error that Sentry accepts', async ({ page, baseURL }) => {

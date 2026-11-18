@@ -3,7 +3,7 @@
 // fixed); a Low issue closes on resolve; the Unit Admin manages categories. Own tenant "e2e web org issues" with throwaway E2E-<random>
 // machine and shifts (the fixture issues stay untouched); the clock decides who owns the running shift (see setupIssueWorld).
 import AxeBuilder from '@axe-core/playwright';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from '../diagnostics';
 import { TINY_PNG, customOrg, requireApi, seedResolvedIssue, setupIssueWorld, teardownIssueWorld, type IssueWorld } from '../api/helpers';
 import { FIXTURE_PASSWORD, signIn } from './fixtures';
 

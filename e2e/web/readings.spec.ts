@@ -3,7 +3,7 @@
 // occurrence on the Today board and in the Counter panel. Own tenant "e2e web org readings" with a throwaway E2E-<random> machine, product and shifts
 // (07's clock-derived world); every code is unique per run because the dev database persists between runs.
 import AxeBuilder from '@axe-core/playwright';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from '../diagnostics';
 import { TINY_PNG, customOrg, requireApi, service, setupIssueWorld, teardownIssueWorld, uuid, type IssueWorld } from '../api/helpers';
 import { FIXTURE_PASSWORD, signIn } from './fixtures';
 

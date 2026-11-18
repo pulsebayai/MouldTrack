@@ -2,7 +2,7 @@
 // a Supervisor sees "My shift" on Home. Mutating tests run in fixture org U with throwaway E2E-<random> shifts and machines (the
 // fixture shifts and ownership stay untouched); fixtures-reset retires the throwaways on dev.
 import AxeBuilder from '@axe-core/playwright';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from '../diagnostics';
 import { FIXTURE_PASSWORD as API_PASSWORD, requireApi, signIn as apiSignIn, uuid } from '../api/helpers';
 import { SHIFT_FIXTURE, USERS, signIn, throwawayPlantCode } from './fixtures';
 

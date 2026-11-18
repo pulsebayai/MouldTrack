@@ -15,7 +15,7 @@ Maestro `opening-closing.yaml` ("Both readings recorded" on FX-MA1). Policy: fla
 - App bug → fix the app (new tests first). Server bug → Opus decides (migration = schema lock question).
 
 ## Steps
-- [ ] 1. **Diagnostics first.** On any e2e failure, CI and regression print to the job log: Playwright's `error-context.md`
+- [x] 1. **Diagnostics first.** On any e2e failure, CI and regression print to the job log: Playwright's `error-context.md`
   (page snapshot), the failing step's last network calls (URL path + status + duration, never bodies or headers), and console
   errors; Maestro prints the hierarchy dump + last screenshot name. Proxy-safe: everything goes to the log, not only artifacts.
   Unit-test the log formatter (redaction: no tokens, phones masked).
@@ -35,3 +35,9 @@ Maestro `opening-closing.yaml` ("Both readings recorded" on FX-MA1). Policy: fla
 ## Session log
 ### 2026-11-18 (Opus)
 - Plan written; waits for PR #22 merge.
+
+### 2026-11-18 (Sonnet) - step 1
+- `e2e/diagnostics-format.ts` (redaction + formatters), `e2e/diagnostics.ts` (drop-in `@playwright/test` replacement: auto fixture records network path/status/ms and console errors per context, attaches them only on failure), `e2e/failure-reporter.ts` (prints error-context.md + the attachments to stdout), registered in playwright.config.ts (applies to ci.yml e2e-web and regression web).
+- Only change to existing specs: the module specifier of the `@playwright/test` import in the 10 `e2e/web/*.spec.ts` files now points at `../diagnostics` (re-exports everything; no assertion touched).
+- Maestro: `scripts/ci-maestro.sh` (used by regression.yml android) prints hierarchy, failed commands, maestro.log tail and screenshot names through `scripts/redact-log.ts` on failure.
+- Redaction unit test: scripts/__tests__/diagnostics-format.test.ts. Local: jest, lint, typecheck green; DB/e2e not run locally.

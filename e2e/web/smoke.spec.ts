@@ -1,5 +1,5 @@
 // AC-10 smoke suite: READ-ONLY and safe for production. Never sign in, never write data.
-import { expect, test } from '@playwright/test';
+import { expect, test } from '../diagnostics';
 
 test.describe('Smoke (prod-safe)', () => {
   test('app responds 200 and renders sign-in without console errors', async ({ page }) => {

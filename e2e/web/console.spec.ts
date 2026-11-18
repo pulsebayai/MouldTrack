@@ -1,7 +1,7 @@
 // 03 (web): the Super Admin console. Sign-in lands on the console, tenant users and Super Admins stay on their own side,
 // register tenant -> create Unit Admin -> that Unit Admin signs in, suspend blocks them, activate restores them.
 import AxeBuilder from '@axe-core/playwright';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from '../diagnostics';
 import { FIXTURE_PASSWORD as API_PASSWORD, SA_FIXTURES, cleanupCreated, created, provisionSuperAdmin, requireApi, service, tenantNameOf, throwawayEmpId, throwawayPhone } from '../api/helpers';
 import { USERS, SUPER_ADMINS, signIn } from './fixtures';
 
