@@ -1,4 +1,4 @@
-import { formatConsole, formatFailure, formatNetwork, maskPhone, pathOf, redact } from '../../e2e/diagnostics-format';
+import { formatConsole, formatFailure, formatNetwork, maskPhone, pathOf, redact, summarizeHierarchy } from '../../e2e/diagnostics-format';
 
 const JWT = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c';
 
@@ -40,5 +40,21 @@ describe('failure diagnostics redaction', () => {
     expect(block).toContain('FAILURE CONTEXT');
     expect(block).not.toContain('eyJ');
     expect(block).toContain('+91******2345');
+  });
+});
+
+describe('Maestro hierarchy summary', () => {
+  it('lists id, text and label of on-screen elements only, redacted', () => {
+    const tree = { attributes: { 'resource-id': '', text: '' }, children: [
+      { attributes: { 'resource-id': 'reading-state-s-m-d', text: 'Opening recorded', bounds: '[0,0][10,10]' }, children: [] },
+      { attributes: { 'resource-id': '', text: '', accessibilityText: 'Save closing reading' }, children: [] },
+      { attributes: { 'resource-id': 'phone', text: '9000012345' }, children: [] },
+    ] };
+    const out = summarizeHierarchy(JSON.stringify(tree));
+    expect(out).toContain('reading-state-s-m-d | Opening recorded | [0,0][10,10]');
+    expect(out).toContain('a11y: Save closing reading');
+    expect(out).toContain('+91******2345');
+    expect(out).not.toContain('9000012345');
+    expect(summarizeHierarchy('not json')).toBe('not json');
   });
 });

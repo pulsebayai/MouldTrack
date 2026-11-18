@@ -19,7 +19,7 @@ Maestro `opening-closing.yaml` ("Both readings recorded" on FX-MA1). Policy: fla
   (page snapshot), the failing step's last network calls (URL path + status + duration, never bodies or headers), and console
   errors; Maestro prints the hierarchy dump + last screenshot name. Proxy-safe: everything goes to the log, not only artifacts.
   Unit-test the log formatter (redaction: no tokens, phones masked).
-- [ ] 2. **Reproduce.** One dispatched dev regression + PR CI runs with step 1 in place; list every failure with its printed cause.
+- [x] 2. **Reproduce.** One dispatched dev regression + PR CI runs with step 1 in place; list every failure with its printed cause.
 - [ ] 3. **The two consistent failures first** (readings correction list; Maestro opening-closing on FX-MA1): root cause, fix, tests.
 - [ ] 4. **The moving failures** (change-password, console, issues escalate, plant "No target set", shifts, Today board,
   Maestro my-shift): classify each as app refresh bug / test wait bug / hosted latency, fix per Rules.
@@ -41,3 +41,16 @@ Maestro `opening-closing.yaml` ("Both readings recorded" on FX-MA1). Policy: fla
 - Only change to existing specs: the module specifier of the `@playwright/test` import in the 10 `e2e/web/*.spec.ts` files now points at `../diagnostics` (re-exports everything; no assertion touched).
 - Maestro: `scripts/ci-maestro.sh` (used by regression.yml android) prints hierarchy, failed commands, maestro.log tail and screenshot names through `scripts/redact-log.ts` on failure.
 - Redaction unit test: scripts/__tests__/diagnostics-format.test.ts. Local: jest, lint, typecheck green; DB/e2e not run locally.
+
+### 2026-11-18 (Sonnet) - step 2 (PR #23 draft; PR CI 44315379124 green on d4ad7d6; dev regression 44315387557)
+PR CI (ephemeral stacks): every job green, including e2e-web, so both consistent failures are hosted-only (latency).
+Dev regression: drift, reset, hosted-checks green; web 1 failed / 162 passed (the moving failures of earlier runs did not recur); android: opening-closing failed, the other 7 flows passed.
+
+| Failure | Printed cause |
+|---|---|
+| web readings.spec.ts:51 (line 104 `toHaveCount(3)`) got 2 | Network summary shows **no `rd_correct` call at all** after `reading_detail`; the last request in the log is `GET /rest/v1/product` (the correction form's product list, 276 ms). No console errors. So the second click on "Save correction" sent nothing: the form's product is null until that list has loaded, the test clicks within milliseconds, client validation fails with "Choose the product" and no RPC goes out. On ephemeral CI the list answers in a few ms, on hosted dev in ~300 ms. |
+| Maestro opening-closing: no visible "Both readings recorded" for FX-MA1 | maestro.log: closing form filled and `record-submit` tapped, `readings` visible right after, then 9 scroll attempts without the element. Step 1's hierarchy was taken after the later flows ran (useless: wrong screen), so the on-screen state is NOT yet known. Step 1 fixed to dump the hierarchy right after the failing flow (flows now run one at a time by `scripts/ci-maestro.sh`). |
+
+### 2026-11-18 (Sonnet) - step 3 (in progress)
+- **Web readings (app bug, fixed, test first):** `CorrectForm` derived `productId` from the loaded product list, so it was null until the list loaded. Now the original product stays chosen while the list is loading and is dropped only when the list has loaded and the product is retired (N7 unchanged). New RNTL test `test-reliability: the original product stays chosen while the product list is still loading...` failed before the fix (no `rd_correct`), passes after; all 904 unit tests, lint, typecheck green. No e2e assertion or wait changed.
+- Diagnostics improved after the first read: the page snapshot is printed first (the 6000-char cut had kept only the test source), in-flight requests at failure are listed, Maestro hierarchy is summarised per on-screen element.

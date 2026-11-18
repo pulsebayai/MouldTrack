@@ -60,3 +60,26 @@ export function formatFailure(title: string, parts: { name: string; body: string
   out.push(bar);
   return out.join('\n');
 }
+
+type HNode = { attributes?: Record<string, string>; children?: HNode[] };
+
+/** Maestro `hierarchy` JSON -> one line per element that has an id, text or accessibility label (what is on screen, not the layout tree). */
+export function summarizeHierarchy(json: string): string {
+  let root: HNode;
+  try {
+    root = JSON.parse(json) as HNode;
+  } catch {
+    return redact(json.slice(0, 4000));
+  }
+  const lines: string[] = [];
+  const walk = (n: HNode) => {
+    const a = n.attributes ?? {};
+    const id = a['resource-id'] ?? '';
+    const text = a.text ?? '';
+    const label = a.accessibilityText ?? '';
+    if (id || text || label) lines.push(`${id || '-'} | ${text || '-'}${label && label !== text ? ` | a11y: ${label}` : ''}${a.bounds ? ` | ${a.bounds}` : ''}`);
+    (n.children ?? []).forEach(walk);
+  };
+  walk(root);
+  return redact(lines.slice(0, 200).join('\n') || '(empty hierarchy)');
+}
