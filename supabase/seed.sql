@@ -140,3 +140,22 @@ begin
     insert into public.issue_ownership_history (tenant_id, issue_id, new_owner, source, actor_id, at) values (f.tenant_id, f.id, f.uid, 'report', f.uid, f.reported_at);
   end loop;
 end $$;
+
+-- 06-shift-readings (D11): counter settings, cavities and two past occurrences on fixed dates in org U (Morning shift, 2026-11-10), with the summary
+-- numbers pinned by pgTAP 052. Must match READINGS in scripts/fixtures-reset.ts (a Jest test checks this file against it).
+-- FX-MU1 counts shots (4 cavities); FX-MU2 counts pieces and rolls over at 999999. Org A stays untouched: supervisor A always has an opening due.
+update public.machine set counter_unit = 'shots' where id = '43000000-0000-4000-a000-0000000000e1';
+update public.machine set counter_unit = 'pieces', counter_max = 999999 where id = '43000000-0000-4000-a000-0000000000e2';
+insert into public.cavity_version (tenant_id, machine_id, product_id, effective_from, cavities, recorded_by) values
+  ('20000000-0000-4000-a000-00000000000e', '43000000-0000-4000-a000-0000000000e1', '44000000-0000-4000-a000-0000000000e1', date '2026-01-01', 4, '30000000-0000-4000-a000-0000000000e1');
+insert into public.production_reading (id, tenant_id, machine_id, shift_id, shift_date, kind, product_id, counter_value, good, reject, late, recorded_by, recorded_at, counter_max) values
+  ('56000000-0000-4000-a000-0000000000e1', '20000000-0000-4000-a000-00000000000e', '43000000-0000-4000-a000-0000000000e1', '54000000-0000-4000-a000-0000000000e1', date '2026-11-10', 'opening', '44000000-0000-4000-a000-0000000000e1', 1000, null, null, false, '30000000-0000-4000-a000-0000000000e3', timestamptz '2026-11-10 06:05+05:30', null),
+  ('56000000-0000-4000-a000-0000000000e2', '20000000-0000-4000-a000-00000000000e', '43000000-0000-4000-a000-0000000000e1', '54000000-0000-4000-a000-0000000000e1', date '2026-11-10', 'closing', null, 1250, 950, 30, false, '30000000-0000-4000-a000-0000000000e3', timestamptz '2026-11-10 14:05+05:30', null),
+  ('56000000-0000-4000-a000-0000000000e3', '20000000-0000-4000-a000-00000000000e', '43000000-0000-4000-a000-0000000000e2', '54000000-0000-4000-a000-0000000000e1', date '2026-11-10', 'opening', '44000000-0000-4000-a000-0000000000e2', 999900, null, null, false, '30000000-0000-4000-a000-0000000000e3', timestamptz '2026-11-10 06:05+05:30', null),
+  ('56000000-0000-4000-a000-0000000000e4', '20000000-0000-4000-a000-00000000000e', '43000000-0000-4000-a000-0000000000e2', '54000000-0000-4000-a000-0000000000e1', date '2026-11-10', 'closing', null, 100, 150, 10, false, '30000000-0000-4000-a000-0000000000e3', timestamptz '2026-11-10 14:05+05:30', 999999);
+insert into public.production_summary (id, tenant_id, machine_id, shift_id, shift_date, calc_version, product_id, counter_unit, cavities, counter_max, opening_reading_id, closing_reading_id,
+  opening_counter, closing_counter, good, reject, target, movement_units, movement_pieces, unaccounted, attainment_pct, rollover, needs_review, over_reported, late_opening, late_closing, entered_by_ua, recorded_by, recorded_at) values
+  ('57000000-0000-4000-a000-0000000000e1', '20000000-0000-4000-a000-00000000000e', '43000000-0000-4000-a000-0000000000e1', '54000000-0000-4000-a000-0000000000e1', date '2026-11-10', 1, '44000000-0000-4000-a000-0000000000e1', 'shots', 4, null,
+   '56000000-0000-4000-a000-0000000000e1', '56000000-0000-4000-a000-0000000000e2', 1000, 1250, 950, 30, 1200, 250, 1000, 20, 79.17, false, false, false, false, false, false, '30000000-0000-4000-a000-0000000000e3', timestamptz '2026-11-10 14:05+05:30'),
+  ('57000000-0000-4000-a000-0000000000e2', '20000000-0000-4000-a000-00000000000e', '43000000-0000-4000-a000-0000000000e2', '54000000-0000-4000-a000-0000000000e1', date '2026-11-10', 1, '44000000-0000-4000-a000-0000000000e2', 'pieces', 1, 999999,
+   '56000000-0000-4000-a000-0000000000e3', '56000000-0000-4000-a000-0000000000e4', 999900, 100, 150, 10, 800, 200, 200, 40, 18.75, true, false, false, false, false, false, '30000000-0000-4000-a000-0000000000e3', timestamptz '2026-11-10 14:05+05:30');

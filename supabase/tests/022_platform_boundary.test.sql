@@ -49,6 +49,19 @@ insert into public.attachment (tenant_id, entity_type, entity_id, storage_path, 
   ('1f000000-0000-4000-ba00-00000000000a', 'issue_action', '5e000000-0000-4000-ba00-000000000007',
    'tenant/1f000000-0000-4000-ba00-00000000000a/issue/5e000000-0000-4000-ba00-000000000006/5e000000-0000-4000-ba00-000000000008.png', 'image/png', 10, repeat('c', 64),
    '00000000-0000-4000-ba00-0000000000b2');
+-- 06's reading tables: one row each (an opening, a closing and the summary that uses them; cavities for the machine x product).
+insert into public.production_reading (id, tenant_id, machine_id, shift_id, shift_date, kind, product_id, counter_value, late, recorded_by) values
+  ('5e000000-0000-4000-ba00-000000000016', '1f000000-0000-4000-ba00-00000000000a', '5e000000-0000-4000-ba00-000000000003', '5e000000-0000-4000-ba00-000000000005', current_date - 1, 'opening',
+   '5e000000-0000-4000-ba00-000000000004', 1000, false, '00000000-0000-4000-ba00-0000000000b2');
+insert into public.production_reading (id, tenant_id, machine_id, shift_id, shift_date, kind, counter_value, good, reject, late, recorded_by) values
+  ('5e000000-0000-4000-ba00-000000000017', '1f000000-0000-4000-ba00-00000000000a', '5e000000-0000-4000-ba00-000000000003', '5e000000-0000-4000-ba00-000000000005', current_date - 1, 'closing',
+   1100, 90, 5, false, '00000000-0000-4000-ba00-0000000000b2');
+insert into public.production_summary (tenant_id, machine_id, shift_id, shift_date, calc_version, product_id, counter_unit, cavities, opening_reading_id, closing_reading_id, opening_counter, closing_counter,
+  good, reject, target, movement_units, movement_pieces, unaccounted, attainment_pct, rollover, needs_review, over_reported, late_opening, late_closing, entered_by_ua) values
+  ('1f000000-0000-4000-ba00-00000000000a', '5e000000-0000-4000-ba00-000000000003', '5e000000-0000-4000-ba00-000000000005', current_date - 1, 1, '5e000000-0000-4000-ba00-000000000004', 'pieces', 1,
+   '5e000000-0000-4000-ba00-000000000016', '5e000000-0000-4000-ba00-000000000017', 1000, 1100, 90, 5, 90, 100, 100, 5, 100.00, false, false, false, false, false, false);
+insert into public.cavity_version (tenant_id, machine_id, product_id, effective_from, cavities, recorded_by) values
+  ('1f000000-0000-4000-ba00-00000000000a', '5e000000-0000-4000-ba00-000000000003', '5e000000-0000-4000-ba00-000000000004', current_date - 2, 4, '00000000-0000-4000-ba00-0000000000b1');
 -- tenant events, an SA event, and a denial exist, so "0 rows" is meaningful
 select app.ua_set_status('00000000-0000-4000-ba00-0000000000b1', gen_random_uuid(), '00000000-0000-4000-ba00-0000000000b2', 'inactive');
 select app.ua_set_status('00000000-0000-4000-ba00-0000000000b1', gen_random_uuid(), '00000000-0000-4000-ba00-0000000000b2', 'active');
@@ -167,9 +180,10 @@ select is((select count(*)::int from public.audit_event where action = 'access.d
   'the inactive SA''s pm_* denial is audited as a platform event too');
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-ba00-0000000000a1","role":"authenticated"}', true);
-select is((select count(*)::int from public.pa_audit(0) where action = 'access.denied' and source in (select 'rpc:' || proname from public.tap22_rpcs())), (select count(*)::int from public.tap22_rpcs()) + 1,
-  'the platform audit lists them: one per discovered RPC plus the inactive SA''s (pa_audit)');
-select is((select count(*)::int from public.pa_audit(0) where action = 'access.denied' and source in (select 'rpc:' || proname from public.tap22_rpcs()) and tenant_name is not null), 0, 'and they carry no tenant (an SA has none)');
+-- D14 (06): pages 0..9 of pa_audit (bounded) instead of page 0 only, so adding client RPCs cannot overflow one page of 50; the condition is unchanged.
+select is((select count(*)::int from generate_series(0, 9) pg(n) cross join lateral public.pa_audit(pg.n) a where a.action = 'access.denied' and a.source in (select 'rpc:' || proname from public.tap22_rpcs())), (select count(*)::int from public.tap22_rpcs()) + 1,
+  'the platform audit lists them: one per discovered RPC plus the inactive SA''s (pa_audit, pages 0..9)');
+select is((select count(*)::int from generate_series(0, 9) pg(n) cross join lateral public.pa_audit(pg.n) a where a.action = 'access.denied' and a.source in (select 'rpc:' || proname from public.tap22_rpcs()) and a.tenant_name is not null), 0, 'and they carry no tenant (an SA has none)');
 reset role;
 select is(
   (select count(*)::int from public.audit_event where action = 'access.denied' and reason = 'no_membership' and actor_user_id = '00000000-0000-4000-ba00-0000000000a1'), 0,
@@ -184,7 +198,7 @@ select set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-ba00-0000000
 select is((select count(*)::int from public.audit_event where action = 'tenant.updated'), 0, 'a supervisor does not');
 select set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-ba00-0000000000a1","role":"authenticated"}', true);
 select ok((select count(*) from public.pa_audit(0) where action = 'access.denied' and actor_name = 'SA') >= 3, 'the platform audit lists the SA''s own denials (AC-12)');
-select is((select count(*)::int from public.pa_audit(0) where action = 'user.deactivated'), 0, 'the platform audit never lists tenant users'' own events');
+select is((select count(*)::int from generate_series(0, 9) pg(n) cross join lateral public.pa_audit(pg.n) a where a.action = 'user.deactivated'), 0, 'the platform audit never lists tenant users'' own events');
 reset role;
 
 select * from finish();

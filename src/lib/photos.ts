@@ -140,6 +140,26 @@ export async function uploadIssuePhoto(
   return { attachmentId: b.id, actionId: b.action_id };
 }
 
+type ReadingBegin = { ok: true; id: string; path: string; status: 'pending' | 'ready'; already?: boolean };
+
+/** Same two-phase upload for a photo of a counter display: rd_attachment_begin -> Storage -> rd_attachment_commit (request ids reused on retry). */
+export async function uploadReadingPhoto(
+  client: RpcClient & StorageClient,
+  readingId: string,
+  photo: Photo,
+  ids: { begin: string; commit: string },
+): Promise<{ attachmentId: string }> {
+  const b = (await call(client, 'rd_attachment_begin', {
+    p_request_id: ids.begin, p_reading_id: readingId, p_mime: photo.mime, p_size: photo.bytes.length, p_sha256: photo.sha256,
+  })) as unknown as ReadingBegin;
+  if (b.status !== 'ready') {
+    const { error } = await client.storage.from(BUCKET).upload(b.path, photo.bytes, { contentType: photo.mime, upsert: false });
+    if (error && !isAlreadyThere(error)) throw error;
+    await call(client, 'rd_attachment_commit', { p_request_id: ids.commit, p_attachment_id: b.id });
+  }
+  return { attachmentId: b.id };
+}
+
 export type LoadedPhoto = { uri: string; release: () => void };
 
 /**

@@ -8,6 +8,7 @@ import {
 } from '@/lib/plant';
 import { useSession } from '@/lib/session-provider';
 import { Label, Loading, LoadError } from './common';
+import { CounterPanel } from './counter-panel';
 import { TargetsPanel } from './targets-panel';
 import { useLoad } from '@/lib/use-load';
 
@@ -151,6 +152,7 @@ function MachineFormBody({ row, reload }: { row: Machine | null; reload: () => v
       </View>
 
       {editing && row ? <TargetsPanel machineId={row.id} machineCode={row.code} retired={retired} /> : null}
+      {editing && row ? <CounterPanel machineId={row.id} retired={retired} /> : null}
 
       <ConfirmDialog
         visible={confirm !== null}
