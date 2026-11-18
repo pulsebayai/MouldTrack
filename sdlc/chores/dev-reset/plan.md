@@ -75,3 +75,18 @@ timeouts seen in 06's and 07's hosted proofs. Owner: "clean the test data and do
 
 ### 2026-11-18 (Opus)
 - Plan drafted; owner approved approach and chose option (a) demo tenant (D9). Next: step 1 spike (Sonnet).
+
+### 2026-11-18 (Sonnet) - step 1 blocked
+- Blocked - needs Opus: the step 1 spike cannot run in this sandbox. `npx supabase start` (CLI 3.1.0) fails with ImagePrepullError:
+  the egress proxy answers 403 to every container registry (ghcr.io, public.ecr.aws, registry-1.docker.io), so no Supabase image
+  (postgres, gotrue, storage-api, ...) can be pulled. dockerd itself starts (I launched it manually; it was not running), `npm ci`
+  works, but there is no local stack: no spike, no `npm run test:db`, and no local run of the step 3a seed test.
+  Per the proxy README a 403 is a policy denial; I did not try to route around it. No hosted calls were made. No code changed; steps 2-5 not started.
+- Options for Opus / owner:
+  (a) Allow ghcr.io, public.ecr.aws and registry-1.docker.io for this session, then I run the spike and continue as planned.
+  (b) Run the spike where Docker works (owner's Mac, per CLAUDE.md "needs Docker") and paste findings (does `supabase db reset --db-url`
+      clear `auth.users` and `storage.objects`, is the `attachments` bucket row recreated, any prompt, exit code); I then do steps 2-5.
+  (c) Proceed on D3 as written (Auth users and Storage objects cleared via the admin APIs, DB via `db reset --db-url --no-seed`) with the
+      spike unanswered, and let PR CI (ephemeral stack) be the first place the demo-seed test and pgTAP run. Risk: a wrong
+      assumption about `db reset --db-url` is found in CI or at step 6 rather than now.
+  Recommendation: (a) or (b); (c) only if the owner accepts slower feedback.
