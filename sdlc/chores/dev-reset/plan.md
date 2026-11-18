@@ -53,18 +53,18 @@ timeouts seen in 06's and 07's hosted proofs. Owner: "clean the test data and do
   debt for the R1 gate, not built here.
 
 ## Steps
-- [ ] 1. **Spike (D10: proven by the CI job `reset-roundtrip`, no local stack in the builder sandbox):** confirm CLI 3.1.0 `supabase db reset --db-url <local>` behaviour:
+- [x] 1. **Spike (D10: proven by the CI job `reset-roundtrip`, no local stack in the builder sandbox):** confirm CLI 3.1.0 `supabase db reset --db-url <local>` behaviour:
   are `auth.users` and `storage.objects` kept or cleared; is the `attachments` bucket row recreated by the migration;
   exit codes; any prompt. Record findings in the session log; if `--db-url` reset is unsupported → `Blocked - needs Opus`.
-- [ ] 2. Tests first: Jest for `dev-reset.ts` guard (wrong ref, missing env, non-fixture phone → refuse; no secret in output)
+- [x] 2. Tests first: Jest for `dev-reset.ts` guard (wrong ref, missing env, non-fixture phone → refuse; no secret in output)
   and `dev-size-check.ts` (baseline from fixture lists; mismatch → non-zero with a readable diff).
-- [ ] 3. Implement `scripts/dev-reset.ts` (D3, D4) and `scripts/dev-size-check.ts` (D5); `npm run dev:reset`, `dev:size-check`.
-- [ ] 3a. Demo tenant (D9): tests first — a pgTAP or Jest test that loads the demo seed on the local stack and asserts it is
+- [x] 3. Implement `scripts/dev-reset.ts` (D3, D4) and `scripts/dev-size-check.ts` (D5); `npm run dev:reset`, `dev:size-check`.
+- [x] 3a. Demo tenant (D9): tests first — a pgTAP or Jest test that loads the demo seed on the local stack and asserts it is
   internally consistent (every summary matches `_rd_compute_summary`, issues pass `issue_can_verify` rules, UA sees it, other
   tenants and SAs don't), then the seed; `dev-reset.ts` runs it after `fixtures:reset`.
-- [ ] 4. Workflows: `reset` job per D2 (TAP output + artifact like drift), size check after fixtures in the reset job,
+- [x] 4. Workflows: `reset` job per D2 (TAP output + artifact like drift), size check after fixtures in the reset job,
   `web`/`android` need `reset`; concurrency group `dev-db` in both workflows (D6).
-- [ ] 5. Docs (architecture lock): policy item 2 (nightly reset order, size check, D7), remove the five "accumulates on dev"
+- [x] 5. Docs (architecture lock): policy item 2 (nightly reset order, size check, D7), remove the five "accumulates on dev"
   known-debt items (03 console tenants, 04 target history, 05/07 append-only, 06 readings), add D8 debt, decision-log row.
 - [ ] 6. Proof on dev: dispatch `regression` (target dev) on this branch **twice**; both green on the first attempt;
   size-check counts identical in both; record run ids. Any web failure → diagnose, no blind re-run.
