@@ -1,5 +1,5 @@
 # Plan: 08 Shift handover and acknowledgement
-Spec: ./spec.md (approved 2026-11-18) · Status: draft · Author: Opus · Executor: Sonnet
+Spec: ./spec.md (approved 2026-11-18) · Status: approved 2026-11-18 (owner: late declaring OK, 08 test data OK, Q1 OK) · Author: Opus · Executor: Sonnet
 Locks: **schema** (08 tables + additive redefinitions) and **architecture** (handover model, cross-feature gate, compliance) when approved.
 Branch: feat/08-shift-handover-ack, rebased on main 9978d02 (06 + dev reset merged). Builds alongside chore/test-reliability
 (which touches app/e2e waits, not migrations); 08 rebases on it before step 9.
@@ -69,9 +69,10 @@ lines, Console tenant detail (label), Jest tests, `e2e/web/handover.spec.ts`, `e
 `e2e/maestro/handover.yaml`, architecture.md.
 
 ## Owner questions (plan gate)
-- **Q1 (D1):** handover is mandatory for every tenant created through the Console, with no off switch in R1; tenants that
+- **Q1 (D1) — owner: approved 2026-11-18.** handover is mandatory for every tenant created through the Console, with no off switch in R1; tenants that
   tests insert directly are exempt so earlier tests stay untouched. OK?
 
 ## Session log
 ### 2026-11-18 (Opus)
 - Plan drafted after rebasing on main 9978d02.
+- Owner approved the plan, D3 (declare until end + 12 h), D1 test data and Q1. 08 takes the schema and architecture locks.
