@@ -44,7 +44,7 @@ Branch: feat/08-shift-handover-ack, rebased on main 9978d02 (06 + dev reset merg
   Plant → Site & lines. Server-driven `allowed_actions` only.
 
 ## Steps (tests first in each)
-- [ ] 1. Migration part 1: tables, RLS, append-only triggers, registry, `handover_setting` backfill + registration hook (D1, D8);
+- [x] 1. Migration part 1: tables, RLS, append-only triggers, registry, `handover_setting` backfill + registration hook (D1, D8);
   pgTAP 060 (tables, isolation, append-only, backfill, registration enforces). 022 fixture additions.
 - [ ] 2. Helpers: `app.handover_items_at`, `app._ho_declared_at`, windows (D2–D4); pgTAP 061 incl. cover time, reported during O
   excluded, closed drops out, carry-forward across day / overnight / cover (AC-11).
@@ -76,3 +76,9 @@ lines, Console tenant detail (label), Jest tests, `e2e/web/handover.spec.ts`, `e
 ### 2026-11-18 (Opus)
 - Plan drafted after rebasing on main 9978d02.
 - Owner approved the plan, D3 (declare until end + 12 h), D1 test data and Q1. 08 takes the schema and architecture locks.
+
+### 2026-11-18 (Sonnet) step 1
+- `20261118500000_handover.sql` part 1: six tables (`handover_setting`, `handover_session`, `issue_acknowledgement`, `handover_declaration`, `handover_exception`, `handover_note`), RLS (UA read only), append-only triggers, member-same-tenant trigger, registry `handover.*` (6), `app._ho_backfill` (run once in the migration), `app._ho_enforced`, `app.pa_tenant_create` redefined to insert the setting row.
+- 07's `issue_action.type` CHECK widened with `handover_ack` and `handover_refuse` (additive; 040/041 unchanged).
+- pgTAP 060 (47 tests) + 022 fixture-block additions (additions only).
+- Verification aid (not an official result): migrations + tests also run on a plain PostgreSQL 16 with stubbed Supabase schemas; 060 and 022 pass there; CI is the authority. 013/030/031/032/042/050/054 show stub-related errors on that rig with and without 08 (identical counts), so they are not evidence either way.

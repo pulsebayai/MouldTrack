@@ -62,6 +62,18 @@ insert into public.production_summary (tenant_id, machine_id, shift_id, shift_da
    '5e000000-0000-4000-ba00-000000000016', '5e000000-0000-4000-ba00-000000000017', 1000, 1100, 90, 5, 90, 100, 100, 5, 100.00, false, false, false, false, false, false);
 insert into public.cavity_version (tenant_id, machine_id, product_id, effective_from, cavities, recorded_by) values
   ('1f000000-0000-4000-ba00-00000000000a', '5e000000-0000-4000-ba00-000000000003', '5e000000-0000-4000-ba00-000000000004', current_date - 2, 4, '00000000-0000-4000-ba00-0000000000b1');
+-- 08's handover tables: one row each (rows inserted as the table owner; handover_setting has no row for a directly inserted tenant until now).
+insert into public.handover_setting (tenant_id, overdue_minutes, required) values ('1f000000-0000-4000-ba00-00000000000a', 60, false);
+insert into public.handover_session (tenant_id, shift_id, shift_date, supervisor_id, handover_start, overdue_minutes) values
+  ('1f000000-0000-4000-ba00-00000000000a', '5e000000-0000-4000-ba00-000000000005', current_date, '00000000-0000-4000-ba00-0000000000b2', now(), 60);
+insert into public.issue_acknowledgement (tenant_id, issue_id, shift_id, shift_date, supervisor_id, kind, remark) values
+  ('1f000000-0000-4000-ba00-00000000000a', '5e000000-0000-4000-ba00-000000000006', '5e000000-0000-4000-ba00-000000000005', current_date, '00000000-0000-4000-ba00-0000000000b2', 'acknowledged', 'tap22');
+insert into public.handover_declaration (tenant_id, shift_id, shift_date, supervisor_id, covered_issue_ids) values
+  ('1f000000-0000-4000-ba00-00000000000a', '5e000000-0000-4000-ba00-000000000005', current_date, '00000000-0000-4000-ba00-0000000000b2', array['5e000000-0000-4000-ba00-000000000006'::uuid]);
+insert into public.handover_exception (tenant_id, issue_id, shift_id, shift_date, ua_id, reason, owner_id, kept) values
+  ('1f000000-0000-4000-ba00-00000000000a', '5e000000-0000-4000-ba00-000000000006', '5e000000-0000-4000-ba00-000000000005', current_date, '00000000-0000-4000-ba00-0000000000b1', 'tap22', '00000000-0000-4000-ba00-0000000000b2', true);
+insert into public.handover_note (tenant_id, issue_id, author_id, shift_id, shift_date, note) values
+  ('1f000000-0000-4000-ba00-00000000000a', '5e000000-0000-4000-ba00-000000000006', '00000000-0000-4000-ba00-0000000000b2', '5e000000-0000-4000-ba00-000000000005', current_date, 'tap22');
 -- tenant events, an SA event, and a denial exist, so "0 rows" is meaningful
 select app.ua_set_status('00000000-0000-4000-ba00-0000000000b1', gen_random_uuid(), '00000000-0000-4000-ba00-0000000000b2', 'inactive');
 select app.ua_set_status('00000000-0000-4000-ba00-0000000000b1', gen_random_uuid(), '00000000-0000-4000-ba00-0000000000b2', 'active');
