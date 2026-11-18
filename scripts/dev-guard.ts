@@ -11,6 +11,8 @@ export type ResetTarget = { mode: 'local' | 'dev'; supabaseUrl: string; dbUrl: s
 const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost']);
 // 0.0.0.0 reaches the same local Postgres on Linux, and makes the Supabase CLI take its remote-database code path (the one hosted dev uses): CI proves both.
 const LOCAL_DB_HOSTS = new Set([...LOCAL_HOSTS, '0.0.0.0']);
+/** The Supabase CLI's local database port (supabase/config.toml [db] port): the only local database the reset may touch. */
+export const LOCAL_DB_PORT = '15322';
 const refuse = (why: string): never => {
   throw new Error(`Refusing: ${why}`);
 };
@@ -38,13 +40,24 @@ export function assertResetTarget(env: ResetEnv, opts: { needDb?: boolean } = {}
 
   if (appEnv === 'local') {
     if (url.protocol !== 'http:' || !LOCAL_HOSTS.has(url.hostname)) refuse('local mode requires a loopback API URL');
-    if (db && !LOCAL_DB_HOSTS.has(db.hostname)) refuse('local mode requires a loopback database URL');
+    if (db && (!LOCAL_DB_HOSTS.has(db.hostname) || db.port !== LOCAL_DB_PORT)) refuse('local mode requires the loopback database URL of the local stack');
     return { mode: 'local', supabaseUrl: url.origin, dbUrl: db ? env.SUPABASE_DB_URL! : null };
   }
   const ref = env.DEV_SUPABASE_PROJECT_REF ?? '';
   if (!/^[a-z0-9]{20}$/.test(ref)) refuse('the dev project ref is not configured');
+  // The other environments' refs, when the caller supplies them: a ref that equals one of them (or an empty value for a secret that exists) is a mix-up.
+  for (const other of ['STAGING_SUPABASE_PROJECT_REF', 'PROD_SUPABASE_PROJECT_REF']) {
+    const v = env[other];
+    if (v === undefined) continue;
+    if (v === '') refuse('another environment project ref is set but empty');
+    if (v === ref) refuse('the dev project ref equals another environment project ref');
+  }
   if (url.protocol !== 'https:' || url.hostname !== `${ref}.supabase.co`) refuse('the API URL is not the configured dev project');
-  if (db && db.username !== `postgres.${ref}` && db.hostname !== `db.${ref}.supabase.co`) refuse('the database URL is not the configured dev project');
+  if (db) {
+    const pooler = db.username === `postgres.${ref}` && db.hostname.endsWith('.pooler.supabase.com');
+    const direct = db.username === 'postgres' && db.hostname === `db.${ref}.supabase.co`;
+    if (!pooler && !direct) refuse('the database URL is not the configured dev project');
+  }
   return { mode: 'dev', supabaseUrl: url.origin, dbUrl: db ? env.SUPABASE_DB_URL! : null };
 }
 
@@ -76,6 +89,7 @@ export function redact(text: string, env: ResetEnv): string {
   }
   return out
     .replace(/postgres(ql)?:\/\/\S+/g, '<redacted-db-url>')
+    .replace(/password=\S+/gi, 'password=<redacted>')
     .replace(/[a-z0-9]{20}\.supabase\.co/g, '<redacted-host>')
     .replace(/Bearer\s+\S+/g, 'Bearer <redacted>')
     .replace(/eyJ[\w-]+\.[\w-]+\.[\w-]+/g, '<redacted-jwt>');

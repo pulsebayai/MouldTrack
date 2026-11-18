@@ -12,7 +12,7 @@ import {
   DEMO_ASSIGNMENTS, DEMO_LINES, DEMO_MACHINES, DEMO_PLAN_FROM, DEMO_PRODUCTS, DEMO_SHIFTS, DEMO_SITE_NAME, DEMO_TENANT_NAME, DEMO_USERS,
   buildIssues, buildOccurrences, plantToday, type DemoUserKey,
 } from './dev-demo-spec';
-import { assertResetTarget } from './dev-guard';
+import { assertResetTarget, redact } from './dev-guard';
 
 const AUTH_DOMAIN = 'phone.mouldtrack.invalid';
 
@@ -141,7 +141,7 @@ async function main() {
 
 if (require.main === module) {
   main().catch((e) => {
-    console.error(`dev-demo-seed failed: ${e instanceof Error ? e.message : String(e)}`);
+    console.error(`dev-demo-seed failed: ${redact(e instanceof Error ? e.message : String(e), process.env)}`);
     process.exit(1);
   });
 }

@@ -9,7 +9,7 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { ISSUES, PLANT, READINGS, SHIFTS, SUPER_ADMINS, TENANTS, USERS } from './fixtures-reset';
 import { demoCounts, plantToday } from './dev-demo-spec';
-import { assertResetTarget, countStorageObjects } from './dev-guard';
+import { assertResetTarget, countStorageObjects, redact } from './dev-guard';
 
 export const COUNT_KEYS = [
   'tenant', 'site', 'line', 'machine', 'product', 'target_version', 'cavity_version', 'shift', 'assignment_version', 'assignment_cover',
@@ -26,6 +26,35 @@ const STARTER_CATEGORIES = 7;
  * expected value is 0; CI (reset-roundtrip) fails if that is ever wrong.
  */
 const AUDIT_EVENTS_AFTER_RESET = 0;
+
+/**
+ * Tables and views the API exposes that are deliberately NOT counted (reference or derived data that a run cannot grow). Every other
+ * public-exposed relation must be in COUNT_KEYS, so a feature that adds a table (08's shift_handover, ...) fails this check until it is counted.
+ */
+export const IGNORED_RELATIONS: string[] = [];
+
+/** Relations named by the paths of PostgREST's OpenAPI root (`/table`; `/rpc/...` and the root itself are not relations) that are neither counted nor ignored. */
+export function unlistedRelations(paths: string[]): string[] {
+  const counted = new Set<string>(COUNT_KEYS.filter((k) => k !== 'auth_users' && k !== 'storage_objects'));
+  const ignored = new Set(IGNORED_RELATIONS);
+  return paths
+    .filter((p) => p !== '/' && !p.startsWith('/rpc/'))
+    .map((p) => p.slice(1))
+    .filter((name) => !counted.has(name) && !ignored.has(name))
+    .sort();
+}
+
+async function openApiPaths(): Promise<string[] | null> {
+  try {
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+    const res = await fetch(`${process.env.SUPABASE_URL}/rest/v1/`, { headers: { apikey: key, Authorization: `Bearer ${key}`, Accept: 'application/openapi+json' } });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { paths?: Record<string, unknown> };
+    return body.paths ? Object.keys(body.paths) : null;
+  } catch {
+    return null;
+  }
+}
 
 export function expectedCounts(today: string): Counts {
   const d = demoCounts(today);
@@ -103,6 +132,9 @@ async function main() {
   console.log(formatCounts(actual));
   const diff = diffCounts(actual, expected);
   if (!bucket) diff.push('storage bucket "attachments": missing');
+  const paths = await openApiPaths();
+  if (!paths) diff.push('API schema (OpenAPI root) could not be read, so new tables cannot be checked');
+  else for (const name of unlistedRelations(paths)) diff.push(`public relation "${name}" is exposed by the API but neither counted (COUNT_KEYS) nor in IGNORED_RELATIONS`);
   if (diff.length) {
     console.error('dev size check FAILED (data differs from the one-run baseline):');
     for (const line of diff) console.error(`  ${line}`);
@@ -113,7 +145,7 @@ async function main() {
 
 if (require.main === module) {
   main().catch((e) => {
-    console.error(`dev-size-check failed: ${e instanceof Error ? e.message : String(e)}`);
+    console.error(`dev-size-check failed: ${redact(e instanceof Error ? e.message : String(e), process.env)}`);
     process.exit(1);
   });
 }

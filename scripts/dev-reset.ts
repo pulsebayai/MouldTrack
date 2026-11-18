@@ -30,12 +30,26 @@ async function listAuthUsers(admin: SupabaseClient): Promise<{ id: string; email
   return out;
 }
 
-async function assertNoRealData(admin: SupabaseClient): Promise<void> {
+/** PostgREST says PGRST205 (not in the schema cache) or Postgres 42P01 (undefined table) when the table does not exist, e.g. on a half-built dev. */
+export const isMissingTable = (error: { code?: string; message?: string } | null): boolean =>
+  !!error && (error.code === 'PGRST205' || error.code === '42P01' || /could not find the table|does not exist/i.test(error.message ?? ''));
+
+/**
+ * D4: real data on dev is a stop, never a wipe. Phones are read from membership and platform_admin; when one of those tables is missing
+ * (a half-built or freshly dropped database) the Auth addresses alone are checked and that is logged. Any other read error refuses.
+ */
+export async function assertNoRealData(admin: SupabaseClient, log: (m: string) => void = console.log): Promise<void> {
   const users = await listAuthUsers(admin);
   const phones: string[] = [];
   for (const table of ['membership', 'platform_admin']) {
     const r = await admin.from(table).select('phone_e164');
-    if (r.error) throw new Error(`Refusing: cannot verify the identities in ${table}`);
+    if (r.error) {
+      if (isMissingTable(r.error)) {
+        log(`dev-reset: table ${table} not found; checking the Auth addresses only`);
+        continue;
+      }
+      throw new Error(`Refusing: cannot verify the identities in ${table}`);
+    }
     for (const row of r.data ?? []) phones.push(row.phone_e164 as string);
   }
   const bad = nonFixtureIdentities(users.map((u) => u.email), phones);
@@ -50,6 +64,16 @@ function runSupabaseReset(env: NodeJS.ProcessEnv, dbUrl: string): void {
   const out = redact(`${r.stdout ?? ''}${r.stderr ?? ''}`, env).trim();
   if (out) console.log(out.split('\n').map((l) => `  supabase: ${l}`).join('\n'));
   if (r.status !== 0) throw new Error(`supabase db reset failed (exit ${r.status ?? 'signal'})`);
+}
+
+/** Runs one SQL statement through psql (the same database URL as the CLI). Returns trimmed stdout, or null (and a redacted warning) on failure. */
+function psql(env: NodeJS.ProcessEnv, dbUrl: string, sql: string): string | null {
+  const r = spawnSync('psql', [dbUrl, '-v', 'ON_ERROR_STOP=1', '-qAt', '-c', sql], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 120_000 });
+  if (r.status !== 0) {
+    console.warn(`dev-reset: psql step skipped (${redact(`${r.stderr ?? r.error?.message ?? ''}`, env).trim().split('\n')[0] || 'psql unavailable'})`);
+    return null;
+  }
+  return (r.stdout ?? '').trim();
 }
 
 async function waitForSchema(admin: SupabaseClient): Promise<void> {
@@ -72,6 +96,8 @@ async function main() {
   console.log(`dev-reset: identities are fixtures only; removed ${await clearStorage(admin, 'attachments')} storage object(s) before the reset`);
 
   runSupabaseReset(process.env, target.dbUrl!);
+  // N4: PostgREST must reload its schema cache for the freshly migrated database (best effort; waitForSchema is the real check).
+  psql(process.env, target.dbUrl!, "NOTIFY pgrst, 'reload schema'");
   await waitForSchema(admin);
 
   const left = await clearStorage(admin, 'attachments');
@@ -88,6 +114,10 @@ async function main() {
   if (fx.status !== 0) throw new Error('fixtures-reset failed');
 
   await seedDemo(admin, password);
+
+  // S6: GoTrue writes auth.audit_log_entries for every admin call above (and the hosted reset may keep older ones); dev holds fixtures only, so they are cleared.
+  const cleared = psql(process.env, target.dbUrl!, 'with d as (delete from auth.audit_log_entries returning 1) select count(*) from d');
+  if (cleared !== null) console.log(`dev-reset: cleared ${cleared} auth.audit_log_entries row(s)`);
   console.log('dev-reset: done (migrations + canonical fixtures + demo tenant)');
 }
 

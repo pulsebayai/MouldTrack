@@ -34,6 +34,26 @@ jobs:
         with: { node-version: '22', cache: npm }
       - run: npm ci
 
+      # S8 (dev-reset D7): a hosted proof on a feature branch leaves that branch's migrations on dev. `db push` of main would then fail on the
+      # remote-only versions, so when dev holds a version main lacks, dev is rebuilt first (migrations + fixtures + demo tenant), exactly as a nightly would.
+      - name: Rebuild dev first when it holds migrations main does not have
+        env:
+          APP_ENV: development
+          SUPABASE_URL: ${{ secrets.DEV_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.DEV_SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_DB_URL: ${{ secrets.DEV_SUPABASE_DB_URL }}
+          STAGING_SUPABASE_PROJECT_REF: ${{ secrets.STAGING_SUPABASE_PROJECT_REF }}
+          E2E_FIXTURE_PASSWORD: ${{ secrets.E2E_FIXTURE_PASSWORD }}
+        run: |
+          out="$(npx supabase migration list --db-url "$DEV_SUPABASE_DB_URL" 2>&1)" || { echo "$out" | sed -E 's#postgres(ql)?://[^ ]*#<redacted>#g'; exit 1; }
+          remote_only="$(echo "$out" | bash scripts/drift-check.sh --remote-only)"
+          if [ -n "$remote_only" ]; then
+            echo "dev holds migration(s) main does not have: $(echo $remote_only); rebuilding dev from main"
+            npm run dev:reset
+          else
+            echo "dev has no migration main lacks"
+          fi
+
       - name: Apply migrations to dev
         run: npx supabase db push --db-url "$DEV_SUPABASE_DB_URL" --include-all --yes
 

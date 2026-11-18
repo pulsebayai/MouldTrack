@@ -1,4 +1,4 @@
-import { diffCounts, expectedCounts, formatCounts, COUNT_KEYS } from '../dev-size-check';
+import { diffCounts, expectedCounts, formatCounts, unlistedRelations, COUNT_KEYS } from '../dev-size-check';
 import { PLANT, SHIFTS, ISSUES, READINGS, USERS, SUPER_ADMINS, TENANTS } from '../fixtures-reset';
 import { demoCounts } from '../dev-demo-spec';
 
@@ -53,5 +53,15 @@ describe('dev-size-check diff', () => {
     const lines = formatCounts(e).split('\n');
     expect(lines).toHaveLength(COUNT_KEYS.length);
     expect(lines[0]).toBe(`${COUNT_KEYS[0]}=${e[COUNT_KEYS[0]]}`);
+  });
+});
+
+describe('S6: new public relations must be counted', () => {
+  it('accepts exactly the counted relations and the RPC paths', () => {
+    const paths = ['/', ...COUNT_KEYS.filter((k) => k !== 'auth_users' && k !== 'storage_objects').map((k) => `/${k}`), '/rpc/pm_save_site', '/rpc/my_shift'];
+    expect(unlistedRelations(paths)).toEqual([]);
+  });
+  it('names a table a feature added (e.g. 08) until it is counted', () => {
+    expect(unlistedRelations(['/', '/tenant', '/shift_handover', '/zz_view'])).toEqual(['shift_handover', 'zz_view']);
   });
 });

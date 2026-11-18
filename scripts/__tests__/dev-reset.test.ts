@@ -1,4 +1,4 @@
-import { assertResetTarget, isFixturePhone, nonFixtureIdentities, redact } from '../dev-reset';
+import { assertNoRealData, assertResetTarget, isFixturePhone, isMissingTable, nonFixtureIdentities, redact } from '../dev-reset';
 
 const REF = 'abcdefghijklmnopqrst';
 const KEY = 'service-role-key-secret-value-0123456789';
@@ -62,6 +62,44 @@ describe('dev-reset guard (D4)', () => {
     }
   });
 
+  it('N1: a pooler URL needs the pooler host and the user postgres.<ref>; a direct URL needs the user postgres and the exact db host', () => {
+    expect(() => assertResetTarget({ ...dev, SUPABASE_DB_URL: `postgresql://postgres.${REF}:x@evil.example:5432/postgres` })).toThrow(/^Refusing/);
+    expect(() => assertResetTarget({ ...dev, SUPABASE_DB_URL: `postgresql://postgres.${REF}:x@db.${REF}.supabase.co:5432/postgres` })).toThrow(/^Refusing/);
+    expect(() => assertResetTarget({ ...dev, SUPABASE_DB_URL: `postgresql://admin:x@db.${REF}.supabase.co:5432/postgres` })).toThrow(/^Refusing/);
+    expect(() => assertResetTarget({ ...dev, SUPABASE_DB_URL: `postgresql://postgres:x@db.${REF}.supabase.co.evil.example:5432/postgres` })).toThrow(/^Refusing/);
+    expect(() => assertResetTarget({ ...dev, SUPABASE_DB_URL: `postgresql://postgres.zzzzzzzzzzzzzzzzzzzz:x@aws-0-ap-south-1.pooler.supabase.com:5432/postgres` })).toThrow(/^Refusing/);
+  });
+
+  it('N2: the local database must be on the local stack port 15322', () => {
+    expect(() => assertResetTarget({ ...local, SUPABASE_DB_URL: 'postgresql://postgres:postgres@127.0.0.1:54322/postgres' })).toThrow(/^Refusing/);
+    expect(() => assertResetTarget({ ...local, SUPABASE_DB_URL: 'postgresql://postgres:postgres@127.0.0.1/postgres' })).toThrow(/^Refusing/);
+    expect(() => assertResetTarget({ ...local, SUPABASE_DB_URL: 'postgresql://postgres:postgres@0.0.0.0:5432/postgres' })).toThrow(/^Refusing/);
+  });
+
+  describe('S5: other environments project refs', () => {
+    const STAGING = 'sssssssssssssssssss1';
+    const PROD = 'ppppppppppppppppppp1';
+    it('accepts distinct refs and absent ones', () => {
+      expect(assertResetTarget({ ...dev, STAGING_SUPABASE_PROJECT_REF: STAGING, PROD_SUPABASE_PROJECT_REF: PROD }).mode).toBe('dev');
+      expect(assertResetTarget({ ...dev, STAGING_SUPABASE_PROJECT_REF: STAGING }).mode).toBe('dev');
+      expect(assertResetTarget(dev).mode).toBe('dev');
+    });
+    it.each([
+      ['dev ref equals staging', { ...dev, STAGING_SUPABASE_PROJECT_REF: REF }],
+      ['dev ref equals prod', { ...dev, PROD_SUPABASE_PROJECT_REF: REF }],
+      ['staging ref set but empty', { ...dev, STAGING_SUPABASE_PROJECT_REF: '' }],
+      ['prod ref set but empty', { ...dev, PROD_SUPABASE_PROJECT_REF: '' }],
+    ])('refuses: %s', (_n, env) => {
+      let msg = '';
+      try { assertResetTarget(env); } catch (e) { msg = (e as Error).message; }
+      expect(msg).toMatch(/^Refusing/);
+      expect(msg).not.toContain(REF);
+    });
+    it('does not apply to the local stack', () => {
+      expect(assertResetTarget({ ...local, STAGING_SUPABASE_PROJECT_REF: '' }).mode).toBe('local');
+    });
+  });
+
   it('can skip the db url for the size check', () => {
     expect(assertResetTarget({ ...dev, SUPABASE_DB_URL: undefined }, { needDb: false }).dbUrl).toBeNull();
   });
@@ -100,5 +138,46 @@ describe('redact', () => {
     expect(out).not.toContain(KEY);
     expect(out).not.toContain('eyJhbGciOi');
     expect(out).not.toContain(REF);
+  });
+});
+
+describe('redact (N3)', () => {
+  it('removes password= parameters', () => {
+    const out = redact('connect host=db.example port=5432 password=hunter2-secret user=postgres', {});
+    expect(out).not.toContain('hunter2-secret');
+    expect(out).toContain('password=<redacted>');
+  });
+});
+
+describe('S4: assertNoRealData falls back to the Auth addresses when a table is missing', () => {
+  const fake = (emails: string[], tables: Record<string, { data: { phone_e164: string }[] | null; error: { code?: string; message: string } | null }>) =>
+    ({
+      auth: { admin: { listUsers: async () => ({ data: { users: emails.map((email, i) => ({ id: `u${i}`, email })) }, error: null }) } },
+      from: (t: string) => ({ select: async () => tables[t] }),
+    }) as never;
+  const missing = { data: null, error: { code: 'PGRST205', message: "Could not find the table 'public.membership' in the schema cache" } };
+
+  it('recognises a missing table', () => {
+    expect(isMissingTable({ code: 'PGRST205' })).toBe(true);
+    expect(isMissingTable({ code: '42P01' })).toBe(true);
+    expect(isMissingTable({ message: 'relation "membership" does not exist' })).toBe(true);
+    expect(isMissingTable({ code: '42501', message: 'permission denied' })).toBe(false);
+    expect(isMissingTable(null)).toBe(false);
+  });
+  it('passes on fixtures and logs the fallback', async () => {
+    const log: string[] = [];
+    await assertNoRealData(fake(['9000000010@phone.mouldtrack.invalid'], { membership: missing, platform_admin: missing }), (m) => log.push(m));
+    expect(log).toHaveLength(2);
+    expect(log[0]).toMatch(/membership not found/);
+  });
+  it('still refuses a real-looking Auth address when the tables are missing', async () => {
+    await expect(assertNoRealData(fake(['9876543210@phone.mouldtrack.invalid'], { membership: missing, platform_admin: missing }), () => undefined)).rejects.toThrow(/^Refusing/);
+  });
+  it('still checks the phones of a table that exists', async () => {
+    await expect(assertNoRealData(fake([], { membership: { data: [{ phone_e164: '+919812345678' }], error: null }, platform_admin: missing }), () => undefined)).rejects.toThrow(/^Refusing/);
+  });
+  it('refuses on any other read error', async () => {
+    const denied = { data: null, error: { code: '42501', message: 'permission denied for table membership' } };
+    await expect(assertNoRealData(fake([], { membership: denied, platform_admin: denied }), () => undefined)).rejects.toThrow(/^Refusing/);
   });
 });

@@ -1,7 +1,8 @@
 /**
  * CI only (reset-roundtrip, dev-reset D10): leaves behind the kinds of data a hosted run creates, so that the next dev-reset has something to
  * clear: a throwaway Auth user (throwaway phone range), a Storage object in `attachments`, an issue, a reading and a Console-style test tenant.
- * Refuses anything but the LOCAL stack. Env: APP_ENV=local, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY.
+ * It also writes one audit_event row (a supervisor's denied pm_* call), which the reset must remove (S7).
+ * Refuses anything but the LOCAL stack. Env: APP_ENV=local, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY, E2E_FIXTURE_PASSWORD.
  */
 import { createClient } from '@supabase/supabase-js';
 import { assertResetTarget } from './dev-guard';
@@ -50,10 +51,19 @@ async function main() {
     tenant_id: tid, machine_id: machine.id, shift_id: shift.id, shift_date: addDays(plantToday(), -3), kind: 'opening', product_id: product.id, counter_value: 1, good: null, reject: null,
     late: false, early: false, entered_by_ua: false, recorded_by: by, counter_max: null,
   }).select('id'));
-  console.log('pollute: left an Auth user, a Storage object, a test tenant, an issue and a reading');
+  // S7: a denied call writes an access.denied audit row (denials are returned, not raised).
+  const anon = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!, { auth: { persistSession: false, autoRefreshToken: false } });
+  const signed = await anon.auth.signInWithPassword({ email: '9000000008@phone.mouldtrack.invalid', password });
+  if (signed.error) throw new Error(`pollute: supervisor sign-in: ${signed.error.message}`);
+  const denied = await anon.rpc('pm_save_line', { p_request_id: crypto.randomUUID(), p_id: null, p_name: 'E2E-RT-DENIED' });
+  if (denied.error || (denied.data as { ok?: boolean } | null)?.ok !== false) throw new Error('pollute: expected the supervisor call to be denied');
+  const audit = await admin.from('audit_event').select('*', { count: 'exact', head: true });
+  if (audit.error || !audit.count) throw new Error('pollute: the denied call left no audit_event row');
+
+  console.log('pollute: left an Auth user, a Storage object, a test tenant, an issue, a reading and an audit event');
 }
 
 main().catch((e) => {
-  console.error(`ci-reset-pollute failed: ${e instanceof Error ? e.message : String(e)}`);
+  console.error(`ci-reset-pollute failed: ${e instanceof Error ? e.message : String(e)}`.replace(/eyJ[\w-]+\.[\w-]+\.[\w-]+/g, '<jwt>'));
   process.exit(1);
 });
