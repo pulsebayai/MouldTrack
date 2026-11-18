@@ -19,6 +19,8 @@ export function ReadingsCard() {
   const { client } = useSession();
   const st = useLoad<ReadingState>(() => fetchReadingState(client), []);
   const { reload } = st;
+  // Coming back from the record form must show the saved reading at once (the Stack keeps this screen mounted; only the 60 s timer refreshed it).
+  useRefreshOnFocus(reload);
   const tz = useLoad(() => fetchPlantTimezone(client), []).data ?? 'Asia/Kolkata';
   // The opening waits for the handover declaration (the server also refuses it). The read is silent when it fails: the server still decides.
   const handover = useLoad(() => fetchHandoverChecklist(client), []);

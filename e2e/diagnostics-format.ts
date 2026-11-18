@@ -17,15 +17,15 @@ export function maskPhone(phone: string): string {
   return d.length === 10 ? `+91******${d.slice(-4)}` : phone;
 }
 
-export function redact(text: string): string {
-  return text
+export function redact(text: string, keepLong = false): string {
+  const out = text
     .replace(JWT, '[jwt]')
     .replace(BEARER, '$1 [token]')
     .replace(KEYED, '$1$2[redacted]')
     .replace(SB_KEY, '[key]')
     .replace(PHONE_INTL, (m) => maskPhone(m))
-    .replace(PHONE_LOCAL, (_m, _a, last4: string) => `+91******${last4}`)
-    .replace(LONG_TOKEN, '[token]');
+    .replace(PHONE_LOCAL, (_m, _a, last4: string) => `+91******${last4}`);
+  return keepLong ? out : out.replace(LONG_TOKEN, '[token]');
 }
 
 export type NetCall = { method: string; path: string; status: number | 'failed'; ms: number };
@@ -77,9 +77,10 @@ export function summarizeHierarchy(json: string): string {
     const id = a['resource-id'] ?? '';
     const text = a.text ?? '';
     const label = a.accessibilityText ?? '';
-    if (id || text || label) lines.push(`${id || '-'} | ${text || '-'}${label && label !== text ? ` | a11y: ${label}` : ''}${a.bounds ? ` | ${a.bounds}` : ''}`);
+    // testIDs are not secrets and are long (shift-machine-date): keep them whole so selectors can be compared; everything else is fully redacted.
+    if (id || text || label) lines.push(`${redact(id, true) || '-'} | ${redact(text) || '-'}${label && label !== text ? ` | a11y: ${redact(label)}` : ''}${a.bounds ? ` | ${a.bounds}` : ''}`);
     (n.children ?? []).forEach(walk);
   };
   walk(root);
-  return redact(lines.slice(0, 200).join('\n') || '(empty hierarchy)');
+  return lines.slice(0, 200).join('\n').replace(/^$/, '(empty hierarchy)');
 }
