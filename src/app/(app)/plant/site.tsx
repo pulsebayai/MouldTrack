@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { Text, View } from 'react-native';
+import { OverdueSetting } from '@/components/handover/overdue-setting';
 import { Loading, LoadError, rowStyle } from '@/components/plant/common';
 import { usePlant } from '@/components/plant/plant-context';
 import { SiteForm } from '@/components/plant/site-form';
@@ -111,6 +112,8 @@ export default function SiteTab() {
             ))
           : null}
       </View>
+
+      <OverdueSetting />
 
       <ConfirmDialog
         visible={!!pending}

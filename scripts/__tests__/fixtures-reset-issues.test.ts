@@ -7,8 +7,9 @@ const seed = readFileSync(join(__dirname, '../../supabase/seed.sql'), 'utf8');
 
 describe('fixtures-reset 07 issue fixtures (D12)', () => {
   it('covers orgs U and A: a stopped Critical, a High awaiting verification, a closed Low, and one open issue for supA', () => {
+    // owner-approved 2026-11-18 (08 option A): e2e org H added
     expect(ISSUES.map((i) => `${i.tenant}:${i.priority}:${i.status}`).sort()).toEqual([
-      'e2e org A:medium:open', 'e2e org U:critical:open', 'e2e org U:high:resolved', 'e2e org U:low:closed',
+      'e2e org A:medium:open', 'e2e org H:high:open', 'e2e org H:medium:open', 'e2e org U:critical:open', 'e2e org U:high:resolved', 'e2e org U:low:closed',
     ]);
     const stopped = ISSUES.filter((i) => i.stopped);
     expect(stopped).toHaveLength(1);

@@ -7,14 +7,14 @@
  * Prints one `name=count` line per counter (stable order) so two runs can be diffed.
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { ISSUES, PLANT, READINGS, SHIFTS, SUPER_ADMINS, TENANTS, USERS } from './fixtures-reset';
+import { HANDOVER_ENFORCED, ISSUES, PLANT, READINGS, SHIFTS, SUPER_ADMINS, TENANTS, USERS } from './fixtures-reset';
 import { demoCounts, plantToday } from './dev-demo-spec';
 import { assertResetTarget, countStorageObjects, redact } from './dev-guard';
 
 export const COUNT_KEYS = [
   'tenant', 'site', 'line', 'machine', 'product', 'target_version', 'cavity_version', 'shift', 'assignment_version', 'assignment_cover',
   'target_override_version', 'production_reading', 'production_summary', 'machine_issue', 'issue_action', 'issue_ownership_history',
-  'issue_category', 'attachment', 'audit_event', 'membership', 'platform_admin', 'auth_users', 'storage_objects',
+  'issue_category', 'attachment', 'handover_setting', 'handover_session', 'issue_acknowledgement', 'handover_declaration', 'handover_exception', 'handover_note', 'audit_event', 'membership', 'platform_admin', 'auth_users', 'storage_objects',
 ] as const;
 export type CountKey = (typeof COUNT_KEYS)[number];
 export type Counts = Record<CountKey, number>;
@@ -83,6 +83,13 @@ export function expectedCounts(today: string): Counts {
     issue_ownership_history: ISSUES.length + d.issue_ownership_history,
     issue_category: tenants * STARTER_CATEGORIES,
     attachment: 0,
+    // 08: only the demo tenant is enforced after a reset (fixture tenants are inserted directly and are not gated); nothing else is written by reset + seeds.
+    handover_setting: d.handover_setting + HANDOVER_ENFORCED.length,
+    handover_session: 0,
+    issue_acknowledgement: 0,
+    handover_declaration: d.handover_declaration,
+    handover_exception: 0,
+    handover_note: 0,
     audit_event: AUDIT_EVENTS_AFTER_RESET,
     membership: USERS.filter((u) => u.tenant).length + d.membership,
     platform_admin: SUPER_ADMINS.length,

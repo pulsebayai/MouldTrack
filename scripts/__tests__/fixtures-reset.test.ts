@@ -45,7 +45,8 @@ describe('fixtures-reset 02 identities (D2, D3)', () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
   it('defines org U with two Unit Admins, a supervisor and a fresh must-change user, plus A, B, S', () => {
-    expect(TENANTS.map((t) => t.name)).toEqual(['e2e org A', 'e2e org B', 'e2e org S', 'e2e org U']);
+    // owner-approved 2026-11-18 (08 option A): e2e org H added
+    expect(TENANTS.map((t) => t.name)).toEqual(['e2e org A', 'e2e org B', 'e2e org S', 'e2e org U', 'e2e org H']);
     const u = USERS.filter((x) => x.tenant === 'e2e org U');
     expect(u.map((x) => [x.role, !!x.mustChange])).toEqual([['unit_admin', false], ['unit_admin', false], ['supervisor', false], ['supervisor', true]]);
     expect(USERS.filter((x) => x.mustChange).map((x) => x.tenant)).toEqual(['e2e org U']);
@@ -90,7 +91,8 @@ describe('fixtures-reset 04 plant fixtures (D8)', () => {
   const seed = readFileSync(join(__dirname, '../../supabase/seed.sql'), 'utf8');
   const byTenant = (t: string) => PLANT.find((p) => p.tenant === t)!;
 
-  it('covers orgs A, B and U only (S has no plant)', () => expect(PLANT.map((p) => p.tenant)).toEqual(['e2e org A', 'e2e org B', 'e2e org U']));
+  // owner-approved 2026-11-18 (08 option A): e2e org H added
+  it('covers orgs A, B, U and H only (S has no plant)', () => expect(PLANT.map((p) => p.tenant)).toEqual(['e2e org A', 'e2e org B', 'e2e org U', 'e2e org H']));
   it('orgs A and B hold one machine and one product each; org U holds 2 lines, 3 machines, 3 products', () => {
     for (const t of ['e2e org A', 'e2e org B']) expect([byTenant(t).machines.length, byTenant(t).products.length, byTenant(t).lines.length]).toEqual([1, 1, 0]);
     const u = byTenant('e2e org U');
@@ -174,7 +176,8 @@ describe('fixtures-reset 05 shift fixtures (D12)', () => {
     return out;
   };
 
-  it('defines shifts for orgs A and U only', () => expect([...new Set(SHIFTS.map((s) => s.tenant))]).toEqual(['e2e org A', 'e2e org U']));
+  // owner-approved 2026-11-18 (08 option A): e2e org H added
+  it('defines shifts for orgs A, U and H only', () => expect([...new Set(SHIFTS.map((s) => s.tenant))]).toEqual(['e2e org A', 'e2e org U', 'e2e org H']));
   it('every shift is valid: 15-minute steps, end differs from start, name 1-40 characters, never a throwaway name', () => {
     for (const s of SHIFTS) {
       expect(s.start).toMatch(/^([01][0-9]|2[0-3]):(00|15|30|45)$/);
@@ -217,7 +220,8 @@ describe('fixtures-reset 05 shift fixtures (D12)', () => {
       expect(seed).toContain(`'${s.name}', '${s.start}', '${s.end}'`);
     }
     // one plan row per fixture assignment (recorded_by is the tenant's Unit Admin)
-    expect(seed.match(/date '2026-01-01', '30000000-0000-4000-a000-0000000000(a1|e1)'\)/g)?.length).toBe(SHIFTS.reduce((n, s) => n + s.assignments.length, 0));
+    // owner-approved 2026-11-18 (08 option A): e2e org H added (the recorded_by of org H's plan is its Unit Admin, c2)
+    expect(seed.match(/date '2026-01-01', '30000000-0000-4000-a000-0000000000(a1|e1|c2)'\)/g)?.length).toBe(SHIFTS.reduce((n, s) => n + s.assignments.length, 0));
   });
 });
 

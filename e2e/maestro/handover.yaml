@@ -1,0 +1,29 @@
+# 08 (Android): a supervisor of the enforced fixture org H sees the Home banner for the issue handed over to them, opens the handover checklist and
+# acknowledges it with a remark. Org H: supervisor H2 (+91 90000 00016) owns FX-MH1 on both fixture shifts (which together cover the whole day) and the open
+# fixture issue "spindle vibration on H1" was reported by the other supervisor, so a checklist is always waiting. The declaration and the blocked opening are
+# proven by the web and API e2e (their own tenants); this flow is the only one that answers org H's checklist (the dev database is rebuilt every run).
+appId: com.pulsebayai.mouldtrack
+name: handover
+---
+- launchApp: { clearState: true }
+- tapOn: { id: "phone" }
+- inputText: "9000000016"
+- tapOn: { id: "password" }
+- inputText: ${PASSWORD}
+- hideKeyboard
+- tapOn: { id: "sign-in-submit" }
+- extendedWaitUntil: { visible: { id: "home-tenant", text: "e2e org H" }, timeout: 15000 }
+- extendedWaitUntil: { visible: { id: "handover-banner-text", text: "Handover: .* to acknowledge" }, timeout: 15000 }
+- scrollUntilVisible: { element: { id: "handover-link" }, timeout: 15000 }
+- tapOn: { id: "handover-link" }
+- extendedWaitUntil: { visible: { id: "handover-screen" }, timeout: 15000 }
+- assertVisible: "Fixture issue: spindle vibration on H1"
+- extendedWaitUntil: { visible: { id: "ho-state-.*", text: "Not answered yet" }, timeout: 15000 }
+- scrollUntilVisible: { element: { id: "ho-ack-.*" }, timeout: 15000 }
+- tapOn: { id: "ho-ack-.*" }
+- tapOn: { id: "ho-input-.*" }
+- inputText: "Seen on Maestro"
+- hideKeyboard
+- scrollUntilVisible: { element: { id: "ho-submit-.*" }, timeout: 15000 }
+- tapOn: { id: "ho-submit-.*" }
+- extendedWaitUntil: { visible: { id: "ho-state-.*", text: "Acknowledged" }, timeout: 15000 }

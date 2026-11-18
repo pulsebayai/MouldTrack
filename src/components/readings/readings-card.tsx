@@ -1,13 +1,15 @@
 import { router } from 'expo-router';
-import { useEffect } from 'react';
+import { useCallback, useEffect } from 'react';
 import { AppState, Text, View } from 'react-native';
 import { Button, colors } from '@/components/ui';
 import { toUserMessage } from '@/lib/errors';
+import { GATE_MESSAGE, fetchHandoverChecklist, openingBlocked } from '@/lib/handover';
 import { formatPlantDate, timeWindow } from '@/lib/plant';
 import { fetchPlantTimezone, formatPlantDateTime } from '@/lib/plant-time';
 import { STATE_LABEL, fetchReadingState, openingNote, type ReadingState } from '@/lib/readings';
 import { useSession } from '@/lib/session-provider';
 import { useLoad } from '@/lib/use-load';
+import { useRefreshOnFocus } from '@/lib/use-refresh';
 import { SummaryBlock } from './summary-block';
 
 const REFRESH_MS = 60_000;
@@ -18,16 +20,30 @@ export function ReadingsCard() {
   const st = useLoad<ReadingState>(() => fetchReadingState(client), []);
   const { reload } = st;
   const tz = useLoad(() => fetchPlantTimezone(client), []).data ?? 'Asia/Kolkata';
+  // The opening waits for the handover declaration (the server also refuses it). The read is silent when it fails: the server still decides.
+  const handover = useLoad(() => fetchHandoverChecklist(client), []);
+  const ho = handover.data ?? handover.latest;
+  const handoverReload = handover.reload;
+  // Coming back from the handover checklist (declared there) must lift the gate at once, not at the next minute.
+  const reloadAll = useCallback(() => {
+    reload();
+    handoverReload();
+  }, [reload, handoverReload]);
+  useRefreshOnFocus(reloadAll);
   useEffect(() => {
-    const timer = setInterval(reload, REFRESH_MS);
+    const all = () => {
+      reload();
+      handoverReload();
+    };
+    const timer = setInterval(all, REFRESH_MS);
     const sub = AppState.addEventListener('change', (s) => {
-      if (s === 'active') reload();
+      if (s === 'active') all();
     });
     return () => {
       clearInterval(timer);
       sub.remove();
     };
-  }, [reload]);
+  }, [reload, handoverReload]);
   const d = st.data ?? st.latest;
   const text = { fontSize: 16, color: colors.text } as const;
   return (
@@ -54,7 +70,14 @@ export function ReadingsCard() {
                   <Text testID={`reading-opening-time-${key}`} style={text}>{openingNote(m.opening, (iso) => formatPlantDateTime(iso, tz))}</Text>
                 ) : null}
                 {m.summary ? <SummaryBlock s={m.summary} testID={`reading-summary-${key}`} late={{ opening: m.opening?.late, closing: m.closing?.late, early: m.closing?.early }} /> : null}
-                {m.can_open ? <Button title={`Record opening for ${m.code}`} testID={`reading-open-${key}`} onPress={() => go('/readings/record', { kind: 'opening' })} /> : null}
+                {m.can_open && openingBlocked(ho, o.shift.id, o.shift_date) ? (
+                  <View testID={`reading-open-blocked-${key}`} style={{ gap: 6 }}>
+                    <Button title={`Record opening for ${m.code}`} testID={`reading-open-${key}`} onPress={() => undefined} disabled />
+                    <Text testID={`reading-open-blocked-text-${key}`} style={{ fontSize: 15, color: colors.text }}>{GATE_MESSAGE}</Text>
+                    <Button title="Open handover checklist" variant="secondary" testID={`reading-handover-${key}`} onPress={() => router.push('/handover')} />
+                  </View>
+                ) : null}
+                {m.can_open && !openingBlocked(ho, o.shift.id, o.shift_date) ? <Button title={`Record opening for ${m.code}`} testID={`reading-open-${key}`} onPress={() => go('/readings/record', { kind: 'opening' })} /> : null}
                 {m.can_close ? <Button title={`Record closing for ${m.code}`} testID={`reading-close-${key}`} onPress={() => go('/readings/record', { kind: 'closing' })} /> : null}
                 {m.opening || m.closing ? <Button title={`Details for ${m.code}`} variant="secondary" testID={`reading-details-${key}`} onPress={() => go('/readings/occurrence')} /> : null}
               </View>

@@ -29,7 +29,12 @@ export const TENANTS: { name: string; status: 'active' | 'suspended' }[] = [
   { name: 'e2e org B', status: 'active' },
   { name: 'e2e org S', status: 'suspended' },
   { name: 'e2e org U', status: 'active' },
+  { name: 'e2e org H', status: 'active' }, // 08: the handover fixture tenant, enforced (handover_setting.required = true)
 ];
+
+/** 08 (D1): fixture tenants where the rd_opening gate applies. Tenants inserted directly are otherwise not gated; mirrors supabase/seed.sql. */
+export const HANDOVER_ENFORCED = ['e2e org H'];
+export const HANDOVER_OVERDUE_MINUTES = 60;
 
 // 04-plant-masters (D8): the fixture plant. Org U is mutated by e2e (own site, lines, machines, products and targets);
 // A and B hold one machine and one product each for read-only isolation checks. Must match supabase/seed.sql.
@@ -71,6 +76,14 @@ export const PLANT: PlantFixture[] = [
       { machine: 'FX-MU2', product: 'FX-PU2', pieces: 800 },
     ], // FX-MU3 deliberately has no target ("No target set")
   },
+  {
+    // 08: org H holds two machines, owned by two supervisors on both shifts, with one open issue on each machine reported by the other supervisor,
+    // so each supervisor always has an inherited issue to answer (the e2e and Maestro handover flows).
+    tenant: 'e2e org H', site: 'Fixture Plant H', lines: [],
+    machines: [{ code: 'FX-MH1', name: 'Fixture Machine H1' }, { code: 'FX-MH2', name: 'Fixture Machine H2' }],
+    products: [{ code: 'FX-PH1', description: 'Fixture Product H1' }],
+    targets: [{ machine: 'FX-MH1', product: 'FX-PH1', pieces: 900 }, { machine: 'FX-MH2', product: 'FX-PH1', pieces: 700 }],
+  },
 ];
 // 05-shifts-and-assignments (D12): fixture shifts and the recurring plan. Must match supabase/seed.sql (a Jest test checks this file against it).
 // Org A: two shifts that together cover all 24 hours, so the supervisor fixture (supA) always has a running occurrence (Android/web "My shift").
@@ -94,6 +107,9 @@ export const SHIFTS: ShiftFixture[] = [
     id: '54000000-0000-4000-a000-0000000000e2', tenant: 'e2e org U', name: 'Fixture Night', start: '22:00', end: '06:00',
     assignments: [{ machine: 'FX-MU1', supervisor: 'u3' }, { machine: 'FX-MU2', supervisor: 'u3' }],
   },
+  // 08: org H, like org A, covers all 24 hours, so each supervisor always has a running occurrence (and a handover checklist). h2 owns FX-MH1, h3 owns FX-MH2.
+  { id: '54000000-0000-4000-a000-0000000000f1', tenant: 'e2e org H', name: 'Fixture Shift H1', start: '00:00', end: '12:00', assignments: [{ machine: 'FX-MH1', supervisor: 'h2' }, { machine: 'FX-MH2', supervisor: 'h3' }] },
+  { id: '54000000-0000-4000-a000-0000000000f2', tenant: 'e2e org H', name: 'Fixture Shift H2', start: '12:00', end: '00:00', assignments: [{ machine: 'FX-MH1', supervisor: 'h2' }, { machine: 'FX-MH2', supervisor: 'h3' }] },
 ];
 export const FIXTURE_PLAN_FROM = '2026-01-01';
 export const FIXTURE_COVER_REASON = 'Fixture reset';
@@ -155,6 +171,11 @@ export const ISSUES: IssueFixture[] = [
     description: 'Fixture issue: guard door sticks', reportedAt: '2026-01-02T09:00:00Z', resolvedAt: '2026-01-02T11:00:00Z', resolution: 'Fixture resolution: hinge oiled' },
   { id: '60000000-0000-4000-a000-0000000000a1', tenant: 'e2e org A', machine: 'FX-MA1', priority: 'medium', status: 'open', stopped: false, reporter: 'supA',
     description: 'Fixture issue: oil mist near the nozzle', reportedAt: '2026-01-02T08:00:00Z' },
+  // 08: each is open on a machine one supervisor owns and was reported by the other, so it is inherited by the machine's owner at every handover.
+  { id: '60000000-0000-4000-a000-0000000000f1', tenant: 'e2e org H', machine: 'FX-MH1', priority: 'high', status: 'open', stopped: false, reporter: 'h3',
+    description: 'Fixture issue: spindle vibration on H1', reportedAt: '2026-01-02T08:00:00Z' },
+  { id: '60000000-0000-4000-a000-0000000000f2', tenant: 'e2e org H', machine: 'FX-MH2', priority: 'medium', status: 'open', stopped: false, reporter: 'h2',
+    description: 'Fixture issue: coolant drip on H2', reportedAt: '2026-01-02T08:30:00Z' },
 ];
 
 /** Rows created by e2e tests carry this code/name prefix; fixtures-reset removes (or retires) them. */
@@ -195,6 +216,10 @@ export const USERS: Fixture[] = [
   fx('u2', '+919000000007', 'Fixture Admin U2', 'FX-U2', 'e2e org U', 'unit_admin'),
   fx('u3', '+919000000008', 'Fixture Supervisor U3', 'FX-U3', 'e2e org U', 'supervisor'),
   fx('u4', '+919000000009', 'Fixture Fresh U4', 'FX-U4', 'e2e org U', 'supervisor', true),
+  // 08: org H (handover). Canonical block, unused elsewhere (the demo tenant uses 00010-00012).
+  fx('h1', '+919000000015', 'Fixture Admin H1', 'FX-H1', 'e2e org H', 'unit_admin'),
+  fx('h2', '+919000000016', 'Fixture Supervisor H2', 'FX-H2', 'e2e org H', 'supervisor'),
+  fx('h3', '+919000000017', 'Fixture Supervisor H3', 'FX-H3', 'e2e org H', 'supervisor'),
 ];
 
 /** 03: plan label per fixture tenant (default trial). */
@@ -521,6 +546,14 @@ async function main() {
 
   for (const [name, plan] of Object.entries(TENANT_PLANS)) {
     const { error } = await admin.from('tenant').update({ plan_label: plan }).eq('id', tenantIds.get(name)!);
+    if (error) throw error;
+  }
+  // 08: the enforced fixture tenant has its handover setting (the gate applies there); the row is the whole switch (D1).
+  for (const name of HANDOVER_ENFORCED) {
+    const { error } = await admin.from('handover_setting').upsert(
+      { tenant_id: tenantIds.get(name)!, overdue_minutes: HANDOVER_OVERDUE_MINUTES, required: true },
+      { onConflict: 'tenant_id', ignoreDuplicates: true },
+    );
     if (error) throw error;
   }
   // Tenants registered by earlier test runs stay (never deleted) but are suspended so they cost nothing.
