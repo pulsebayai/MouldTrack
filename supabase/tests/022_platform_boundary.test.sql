@@ -180,8 +180,9 @@ select is((select count(*)::int from public.audit_event where action = 'access.d
   'the inactive SA''s pm_* denial is audited as a platform event too');
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-ba00-0000000000a1","role":"authenticated"}', true);
-select is((select count(*)::int from public.pa_audit(0) where action = 'access.denied' and source in (select 'rpc:' || proname from public.tap22_rpcs())), (select count(*)::int from public.tap22_rpcs()) + 1,
-  'the platform audit lists them: one per discovered RPC plus the inactive SA''s (pa_audit)');
+-- D14 (06): pages 0..9 of pa_audit (bounded) instead of page 0 only, so adding client RPCs cannot overflow one page of 50; the condition is unchanged.
+select is((select count(*)::int from generate_series(0, 9) pg(n) cross join lateral public.pa_audit(pg.n) a where a.action = 'access.denied' and a.source in (select 'rpc:' || proname from public.tap22_rpcs())), (select count(*)::int from public.tap22_rpcs()) + 1,
+  'the platform audit lists them: one per discovered RPC plus the inactive SA''s (pa_audit, pages 0..9)');
 select is((select count(*)::int from public.pa_audit(0) where action = 'access.denied' and source in (select 'rpc:' || proname from public.tap22_rpcs()) and tenant_name is not null), 0, 'and they carry no tenant (an SA has none)');
 reset role;
 select is(

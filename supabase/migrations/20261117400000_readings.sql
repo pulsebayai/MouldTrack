@@ -1018,6 +1018,10 @@ begin
     'closing', case when c.id is null then null else v_hist -> (select (i - 1)::int from jsonb_array_elements(v_hist) with ordinality as e(x, i) where (e.x ->> 'id')::uuid = c.id) end,
     'summary', case when sm.id is null then null else to_jsonb(sm) - 'tenant_id' - 'request_id' end,
     'summary_count', v_n,
+    'photos', (select coalesce(jsonb_agg(jsonb_build_object('id', t.id, 'reading_id', t.entity_id, 'path', t.storage_path, 'mime', t.mime, 'ready_at', t.ready_at) order by t.ready_at, t.id), '[]'::jsonb)
+                 from public.attachment t
+                 where t.entity_type = 'production_reading' and t.status = 'ready' and t.tenant_id = v_tenant
+                   and t.entity_id in (select (e.x ->> 'id')::uuid from jsonb_array_elements(v_hist) e(x))),
     'allowed', jsonb_build_object(
       'can_open', (o.id is null and p_at >= lower(v_w) - interval '30 minutes' and p_at < upper(v_w) and m.retired_at is null and s.retired_at is null),
       'can_close', (o.id is not null and c.id is null and p_at <= upper(v_w) + interval '12 hours'),
@@ -1240,6 +1244,157 @@ stable
 security definer
 set search_path = ''
 as $$ select * from app.reading_capture_at(p_tenant, p_from, p_to, now()) $$;
+
+-- 13. Reading photos (step 6, D6): 07's attachment model with entity type `production_reading` -----------------------------------------------------
+-- A photo of the counter display belongs to one reading (entity_id = parent_id = the reading id) and is visible to the owner of that machine in that
+-- occurrence and to Unit Admins of the tenant. Same two-phase upload as 07 (begin -> Storage upload -> commit); the Storage INSERT policy is 07's
+-- (own pending path only). The SELECT helper is redefined additively: 07's issue branch is unchanged and a production_reading branch is added.
+-- No new function in app_policy (its contract is pinned by 07's tests): the reading rule lives in app._rd_can_see_reading, called as the owner.
+create function app._rd_can_see_reading(p_reading uuid, p_user uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1
+    from public.production_reading r
+    join public.membership m on m.user_id = p_user and m.tenant_id = r.tenant_id and m.status = 'active'
+    where r.id = p_reading
+      and (m.role = 'unit_admin'
+           or (m.role = 'supervisor' and app.machine_owner(r.machine_id, r.shift_id, r.shift_date) = p_user)))
+$$;
+
+create or replace function app_policy.can_see_attachment(p_name text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1 from public.attachment a
+    where a.storage_path = p_name
+      and a.tenant_id = app.current_tenant_id()
+      and (
+        (a.status = 'pending' and a.uploaded_by = auth.uid())
+        or (a.status = 'ready' and a.entity_type = 'issue_action'
+            and exists (select 1 from public.issue_action x where x.id = a.entity_id and x.tenant_id = a.tenant_id and app.can_see_issue(x.issue_id)))
+        or (a.status = 'ready' and a.entity_type = 'production_reading' and app._rd_can_see_reading(a.entity_id, auth.uid()))))
+$$;
+
+create function public.rd_attachment_begin(p_request_id uuid, p_reading_id uuid, p_mime text, p_size bigint, p_sha256 text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:rd_attachment_begin';
+  a jsonb;
+  v_actor uuid;
+  v_tenant uuid;
+  v_own text;
+  v_sha text := lower(btrim(p_sha256));
+  v_ext text;
+  v_id uuid := gen_random_uuid();
+  v_path text;
+  ex public.attachment;
+  r public.production_reading;
+begin
+  if not exists (select 1 from public.membership m where m.user_id = auth.uid()) then
+    return app._pm_authorise(p_request_id, c_src);
+  end if;
+  a := app._rd_authorise(p_request_id, c_src);
+  if not (a->>'ok')::boolean then return a; end if;
+  v_actor := (a->>'actor')::uuid;
+  v_tenant := (a->>'tenant_id')::uuid;
+  -- begin writes no audit row, so an audit row with this request id belongs to another RPC (reuse across RPCs -> validation)
+  if exists (select 1 from public.audit_event e where e.actor_user_id = v_actor and e.request_id = p_request_id) then
+    perform app._pm_fail('validation', 'This request id was already used for another action', 'request_id');
+  end if;
+
+  v_own := app._rd_owned(p_reading_id, v_tenant);
+  if v_own <> 'ok' then return app._pm_deny(a, v_own, 'production_reading', p_reading_id, c_src); end if;
+  select * into r from public.production_reading x where x.id = p_reading_id;
+  if a->>'role' = 'supervisor' and app.machine_owner(r.machine_id, r.shift_id, r.shift_date) is distinct from v_actor then
+    return app._pm_deny(a, 'not_owner', 'production_reading', p_reading_id, c_src);
+  end if;
+
+  v_ext := case lower(btrim(p_mime)) when 'image/jpeg' then 'jpg' when 'image/png' then 'png' when 'image/webp' then 'webp' end;
+  if v_ext is null then perform app._pm_fail('validation', 'Photos must be JPEG, PNG or WebP', 'mime'); end if;
+  if p_size is null or p_size < 1 or p_size > 5242880 then perform app._pm_fail('validation', 'A photo must be 5 MB or smaller', 'size'); end if;
+  if v_sha is null or v_sha !~ '^[0-9a-f]{64}$' then perform app._pm_fail('validation', 'The checksum must be a SHA-256 hex digest', 'sha256'); end if;
+
+  -- a retried begin (same request id) returns the same row
+  select * into ex from public.attachment x where x.uploaded_by = v_actor and x.begin_request_id = p_request_id;
+  if found then
+    if ex.parent_id is distinct from p_reading_id or ex.entity_type <> 'production_reading' then
+      perform app._pm_fail('validation', 'This request id was already used for another action', 'request_id');
+    end if;
+    return jsonb_build_object('ok', true, 'id', ex.id, 'path', ex.storage_path, 'status', ex.status, 'already', true);
+  end if;
+
+  if (select count(*) from public.attachment x where x.uploaded_by = v_actor and x.parent_id = p_reading_id and x.status = 'pending'
+        and x.created_at > now() - interval '10 minutes') >= 3 then
+    perform app._pm_fail('guard', 'Finish or wait for the photos already being uploaded (up to 3 at a time)', 'too_many_pending');
+  end if;
+  if (select count(*) from public.attachment x where x.parent_id = p_reading_id and x.entity_type = 'production_reading' and x.status = 'ready') >= 3 then
+    perform app._pm_fail('guard', 'This reading already has 3 photos', 'photo_limit');
+  end if;
+
+  v_path := 'tenant/' || v_tenant::text || '/reading/' || p_reading_id::text || '/' || v_id::text || '.' || v_ext;
+  insert into public.attachment (id, tenant_id, entity_type, entity_id, storage_path, mime, size_bytes, sha256, uploaded_by, parent_id, begin_request_id)
+  values (v_id, v_tenant, 'production_reading', p_reading_id, v_path, lower(btrim(p_mime)), p_size::integer, v_sha, v_actor, p_reading_id, p_request_id);
+  return jsonb_build_object('ok', true, 'id', v_id, 'path', v_path, 'status', 'pending');
+end
+$$;
+
+create function public.rd_attachment_commit(p_request_id uuid, p_attachment_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:rd_attachment_commit';
+  a jsonb;
+  v_actor uuid;
+  att public.attachment;
+  obj record;
+  r public.production_reading;
+begin
+  if not exists (select 1 from public.membership m where m.user_id = auth.uid()) then
+    return app._pm_authorise(p_request_id, c_src);
+  end if;
+  a := app._rd_authorise(p_request_id, c_src);
+  if not (a->>'ok')::boolean then return a; end if;
+  if a->>'done' is not null then return jsonb_build_object('ok', true, 'id', (a->>'done')::uuid, 'already', true); end if;
+  v_actor := (a->>'actor')::uuid;
+
+  select * into att from public.attachment x where x.id = p_attachment_id;
+  if not found then return app._pm_deny(a, 'not_found', 'attachment', p_attachment_id, c_src); end if;
+  if att.tenant_id <> (a->>'tenant_id')::uuid then return app._pm_deny(a, 'cross_tenant', 'attachment', p_attachment_id, c_src); end if;
+  if att.uploaded_by <> v_actor then return app._pm_deny(a, 'not_uploader', 'attachment', p_attachment_id, c_src); end if;
+  if att.entity_type <> 'production_reading' then perform app._pm_fail('guard', 'This attachment is not a reading photo', 'entity_type'); end if;
+  if att.status <> 'pending' then perform app._pm_fail('guard', 'This photo is already attached', 'already_ready'); end if;
+  if att.created_at < now() - interval '1 hour' then perform app._pm_fail('guard', 'This upload expired. Start again', 'expired'); end if;
+  if not app._rd_can_see_reading(att.parent_id, v_actor) then return app._pm_deny(a, 'not_visible', 'attachment', p_attachment_id, c_src); end if;
+
+  select o.metadata into obj from storage.objects o where o.bucket_id = 'attachments' and o.name = att.storage_path;
+  if not found then perform app._pm_fail('guard', 'The photo has not been uploaded', 'not_uploaded'); end if;
+  if (obj.metadata->>'size')::bigint is distinct from att.size_bytes or obj.metadata->>'mimetype' is distinct from att.mime then
+    perform app._pm_fail('guard', 'The uploaded photo does not match what was declared', 'mismatch');
+  end if;
+
+  select * into r from public.production_reading x where x.id = att.parent_id;
+  update public.attachment x set status = 'ready', ready_at = now() where x.id = att.id;
+  perform app._pm_audit(a, 'attachment.added', 'attachment', att.id, null,
+    jsonb_build_object('reading_id', r.id, 'kind', r.kind, 'mime', att.mime, 'size_bytes', att.size_bytes, 'sha256', att.sha256), p_request_id, c_src);
+  return jsonb_build_object('ok', true, 'id', att.id);
+end
+$$;
 
 -- 99. Function privileges: no app function is executable by clients (test 004); the public entry points are executable by authenticated only.
 -- Repeated at the end of every step's section: each step adds functions, the loop runs over the whole 06 name range.
