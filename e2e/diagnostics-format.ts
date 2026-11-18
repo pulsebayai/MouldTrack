@@ -40,11 +40,21 @@ export function pathOf(url: string): string {
   }
 }
 
+const API_PATH = /\/(rest|auth|storage|functions|realtime)\/v1\//;
+const bad = (c: NetCall) => c.status === 'failed' || c.status >= 400;
+
+/**
+ * API calls (Supabase rest/auth/storage/functions) and every failed or >= 400 call are listed (last `limit`); the rest (JS bundles, documents, images)
+ * collapse into one count, so a page full of static assets can no longer push the calls that matter out of the log.
+ */
 export function formatNetwork(calls: NetCall[], limit = 40): string {
-  const last = calls.slice(-limit);
-  if (last.length === 0) return '(no network calls recorded)';
+  if (calls.length === 0) return '(no network calls recorded)';
+  const shown = calls.filter((c) => API_PATH.test(c.path) || bad(c));
+  const collapsed = calls.length - shown.length;
+  const last = shown.slice(-limit);
   const lines = last.map((c) => redact(`${c.method.padEnd(6)} ${String(c.status).padEnd(6)} ${String(c.ms).padStart(5)} ms  ${c.path}`));
-  return `${calls.length > limit ? `(last ${limit} of ${calls.length} calls)\n` : ''}${lines.join('\n')}`;
+  const head = `${calls.length} calls: ${shown.length} API or failed${shown.length > limit ? ` (last ${limit} shown)` : ''}, ${collapsed} static/document collapsed`;
+  return `${head}\n${lines.join('\n') || '(no API calls)'}`;
 }
 
 export function formatConsole(entries: string[], limit = 30): string {

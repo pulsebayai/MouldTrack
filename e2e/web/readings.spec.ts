@@ -116,10 +116,14 @@ test('the Unit Admin sees the machine on the Today board and reads its occurrenc
   const row = prefix(page, 'today-machine-').filter({ hasText: w.machine.code });
   await expect(row.first()).toBeVisible();
   await expect(row.first()).toContainText('Opening:');
-  await expect(prefix(page, 'today-target-').filter({ hasText: 'Target: 1,000' }).first()).toContainText('Good: 240');
-  await expect(prefix(page, 'today-target-').filter({ hasText: 'Target: 1,000' }).first()).toContainText('Attainment: 24.00%');
+  // The occurrence that holds the reading, addressed by its key (the board also lists the previous occurrence of the same machine with the assumed 1,000 target
+  // and no reading, and `.first()` on "Target: 1,000" picked that row depending on the time of day: PR CI 44319198472).
+  const written = `${w.running.session === w.sup2 ? w.shiftPm : w.shiftAm}-${w.today}-${w.machine.id}`;
+  await expect(tid(page, `today-target-${written}`)).toContainText('Target: 1,000');
+  await expect(tid(page, `today-target-${written}`)).toContainText('Good: 240');
+  await expect(tid(page, `today-target-${written}`)).toContainText('Attainment: 24.00%');
   await expectNoSeriousViolations(page);
-  await prefix(page, 'today-open-').filter({ hasText: w.machine.code }).first().click();
+  await tid(page, `today-open-${written}`).click(); // the occurrence with the 3 entries, not the neighbouring one
   await expect(tid(page, 'occurrence-owner')).toContainText('Supervisor:');
   await expect(prefix(page, 'reading-entry-')).toHaveCount(3);
   await expect(tid(page, 'correct-opening')).toBeVisible(); // a Unit Admin may correct at any time

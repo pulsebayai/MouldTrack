@@ -28,11 +28,28 @@ describe('failure diagnostics redaction', () => {
   it('keeps only host and path of a URL: the query string never reaches the log', () => {
     expect(pathOf('https://x.supabase.co/rest/v1/rpc/rd_correct?apikey=secret&phone=eq.%2B919000012345')).toBe('x.supabase.co/rest/v1/rpc/rd_correct');
   });
-  it('formats the network summary with status and duration and redacts the rest', () => {
-    const out = formatNetwork([{ method: 'POST', path: 'h/rest/v1/rpc/rd_correct', status: 200, ms: 123 }, { method: 'GET', path: 'h/x', status: 'failed', ms: 5 }]);
-    expect(out).toMatch(/POST\s+200\s+123 ms\s+h\/rest\/v1\/rpc\/rd_correct/);
+  it('lists API calls and failures first and collapses static assets into a count', () => {
+    const statics = Array.from({ length: 100 }, (_, i) => ({ method: 'GET', path: `h.expo.app/_expo/static/js/web/a${i}.js`, status: 200 as const, ms: 3 }));
+    const out = formatNetwork([
+      ...statics,
+      { method: 'POST', path: 'x.supabase.co/rest/v1/rpc/rd_correct', status: 200, ms: 123 },
+      { method: 'GET', path: 'h.expo.app/missing.png', status: 404, ms: 4 },
+      { method: 'GET', path: 'x.supabase.co/auth/v1/user', status: 'failed', ms: 5 },
+    ]);
+    expect(out).toMatch(/103 calls: 3 API or failed, 100 static\/document collapsed/);
+    expect(out).toMatch(/POST\s+200\s+123 ms\s+x\.supabase\.co\/rest\/v1\/rpc\/rd_correct/);
+    expect(out).toMatch(/GET\s+404\s+4 ms\s+h\.expo\.app\/missing\.png/);
     expect(out).toMatch(/failed/);
+    expect(out).not.toContain('a5.js');
     expect(formatNetwork([])).toMatch(/no network/);
+    expect(formatNetwork(statics)).toMatch(/no API calls/);
+  });
+  it('keeps only the last N API calls', () => {
+    const api = Array.from({ length: 60 }, (_, i) => ({ method: 'POST', path: `x.supabase.co/rest/v1/rpc/f${i}`, status: 200 as const, ms: 1 }));
+    const out = formatNetwork(api);
+    expect(out).toContain('(last 40 shown)');
+    expect(out).toContain('f59');
+    expect(out).not.toContain('rpc/f0 ');
   });
   it('bounds and redacts console entries and the assembled failure block', () => {
     expect(formatConsole(Array.from({ length: 50 }, (_, i) => `e${i}`))).toMatch(/last 30 of 50/);
