@@ -1,5 +1,5 @@
 # Intent: Shift handover and acknowledgement
-Author: Sidambara Raja (drafted by Claude) · Status: draft · Date: 2026-11-18
+Author: Sidambara Raja (drafted by Claude) · Status: approved · Date: 2026-11-18
 Roadmap item: 08-shift-handover-ack · Release: R1 · Moves product metric: **Handover compliance** (≥ 98 % of shift openings where every inherited issue is individually acknowledged, or covered by an Admin exception, before the shift starts; overdue acknowledgements reported separately).
 
 ## Problem

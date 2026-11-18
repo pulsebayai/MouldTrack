@@ -1,5 +1,5 @@
 # Spec: Shift handover and acknowledgement
-Intent: ./intent.md · Status: draft · Date: 2026-11-18
+Intent: ./intent.md · Status: approved · Date: 2026-11-18
 
 Terms: **occurrence**, **owner** (05), **issue lifecycle** (07), **opening reading** (06). **Inherited issue** for supervisor S in occurrence O = an issue in status Open / In progress / Resolved-awaiting-verification on a machine S owns in O, reported before S's **handover start** (= O's start, or the cover time if S got the machine by a later cover). **Deadline** = handover start + the tenant's overdue minutes (default 60). All prior patterns apply (`_pm_authorise`, D13, request ids tied to the RPC, append-only + trigger, registry, 022 fixture additions, `allowed_actions`, no client-supplied time in public reads, bounded lists).
 
