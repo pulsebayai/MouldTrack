@@ -85,9 +85,9 @@ jobs:
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.DEV_SUPABASE_SERVICE_ROLE_KEY }}
       SUPABASE_DB_URL: ${{ secrets.DEV_SUPABASE_DB_URL }}
       DEV_SUPABASE_PROJECT_REF: ${{ secrets.DEV_SUPABASE_PROJECT_REF }}
-      # S5: the guard refuses when the dev ref equals the staging ref (or the secret is empty). A PROD_SUPABASE_PROJECT_REF secret is not known to exist
-      # (secrets cannot be listed from the builder sandbox), so it is not passed; add it here when the prod project and its secret exist (R1 release).
-      STAGING_SUPABASE_PROJECT_REF: ${{ secrets.STAGING_SUPABASE_PROJECT_REF }}
+      # S5: the guard refuses when STAGING_SUPABASE_PROJECT_REF / PROD_SUPABASE_PROJECT_REF are passed and equal the dev ref (or are passed empty).
+      # Neither secret exists yet (the first hosted attempt was refused for the empty staging value, as designed), so neither is passed. Add
+      # `STAGING_SUPABASE_PROJECT_REF: ${{ secrets.STAGING_SUPABASE_PROJECT_REF }}` (and the prod one) here when those projects' secrets exist (R1 release).
       E2E_FIXTURE_PASSWORD: ${{ secrets.E2E_FIXTURE_PASSWORD }}
       # S6: bounds on the database after a reset (provisional until the first hosted numbers are in; see plan.md)
       MAX_AUDIT_LOG_ROWS: '100'
