@@ -875,6 +875,313 @@ begin
 end
 $$;
 
+-- 9. Reads and compliance (step 4, D7) -------------------------------------------------------------------------------------------------
+-- R1 of 07's review: clients cannot choose the clock. The bodies are app.*_at(p_at) (pgTAP passes explicit moments; only the owner can execute
+-- them) and the public RPCs are thin wrappers that always pass now() and route callers without a membership through app._pm_authorise.
+
+-- The overdue minutes in force for a supervisor's handover start: the session snapshot taken when the checklist first opened (AC-8), else the
+-- tenant's current setting, else 60.
+create function app._ho_overdue_for(p_tenant uuid, p_shift uuid, p_date date, p_sup uuid, p_start timestamptz)
+returns integer
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select coalesce(
+    (select s.overdue_minutes from public.handover_session s
+      where s.tenant_id = p_tenant and s.shift_id = p_shift and s.shift_date = p_date and s.supervisor_id = p_sup and s.handover_start = p_start),
+    (select h.overdue_minutes from public.handover_setting h where h.tenant_id = p_tenant),
+    60)
+$$;
+
+-- AC-1: the caller's checklists: every occurrence where they own a machine from 30 minutes before the start until the end (and, until 12 hours
+-- after the end, while the declaration is still missing), with the inherited issues grouped by machine, the outgoing note, the last 3 actions, what
+-- may be done now (allowed_actions) and the "Verify this fix" section. The only write from a read (D7): the first read of an occurrence inserts
+-- the handover_session row (overdue minutes snapshot), at most once per (supervisor, occurrence, handover start).
+create function app.handover_checklist_at(p_at timestamptz)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:handover_checklist';
+  a jsonb;
+  v_tenant uuid;
+  v_actor uuid;
+  v_setting integer;
+  v_date date;
+  r record;
+  v_occ jsonb := '[]'::jsonb;
+  v_machines jsonb;
+  v_items jsonb;
+  v_pending integer;
+  v_total_pending integer := 0;
+  v_declared boolean;
+  v_declared_at timestamptz;
+  v_last_start timestamptz;
+  v_overdue integer;
+  v_verify jsonb;
+  v_upto timestamptz := app._ho_upto(p_at);
+begin
+  if not exists (select 1 from public.membership x where x.user_id = auth.uid()) then
+    return app._pm_authorise(null, c_src);
+  end if;
+  a := app._sh_read_authorise(c_src, false);
+  if not (a->>'ok')::boolean then return a; end if;
+  v_tenant := (a->>'tenant_id')::uuid;
+  v_actor := (a->>'actor')::uuid;
+  if a->>'role' <> 'supervisor' then
+    perform app.audit_denied(v_actor, v_tenant, a->>'role', 'role', null, null, c_src);
+    return jsonb_build_object('ok', false, 'code', 'not_allowed');
+  end if;
+  v_setting := coalesce((select h.overdue_minutes from public.handover_setting h where h.tenant_id = v_tenant), 60);
+  v_date := app.plant_date_at(v_tenant, p_at);
+
+  for r in
+    select o.shift_id, o.shift_date, s.name as shift_name, s.start_time, s.end_time, min(o.w_start) as w_start, max(o.w_end) as w_end
+      from app._ho_owners(v_tenant, v_date - 2, v_date + 1, null, p_at) o
+      join public.shift s on s.id = o.shift_id
+     where o.supervisor_id = v_actor and p_at >= o.w_start - interval '30 minutes' and p_at <= o.w_end + interval '12 hours'
+     group by o.shift_id, o.shift_date, s.name, s.start_time, s.end_time
+     order by min(o.w_start), o.shift_id
+  loop
+    v_declared := app._ho_declared_at(v_actor, r.shift_id, r.shift_date, p_at);
+    -- after the end the checklist stays only while a declaration is still missing (a late supervisor can still declare, D3)
+    continue when p_at > r.w_end and v_declared;
+    -- the session snapshot(s): the window start, and every cover time that gave the supervisor a machine later (AC-6, AC-8)
+    insert into public.handover_session (tenant_id, shift_id, shift_date, supervisor_id, handover_start, overdue_minutes)
+    select v_tenant, r.shift_id, r.shift_date, v_actor, x.st, v_setting
+      from (select r.w_start as st union select o.since from app._ho_owners(v_tenant, r.shift_date, r.shift_date, r.shift_id, p_at) o
+             where o.supervisor_id = v_actor and o.since is not null) x
+    on conflict do nothing;
+
+    -- one pass over the inherited items (grouped by machine, ordered by code, issues by reported time)
+    select coalesce(jsonb_agg(q.mj order by q.code), '[]'::jsonb), coalesce(sum(q.pending), 0)::int, coalesce(max(q.hs), r.w_start)
+      into v_machines, v_pending, v_last_start
+      from (
+        select g.code, g.pending, g.hs,
+               jsonb_build_object('machine_id', g.machine_id, 'code', g.code, 'name', g.name, 'items', g.items) as mj
+          from (
+            select i.machine_id, mc.code, mc.name, count(*) filter (where i.state = 'pending')::int as pending, max(i.handover_start) as hs,
+                   jsonb_agg(
+                     app._iss_row(i.issue_id, p_at) || jsonb_build_object(
+                       'state', i.state, 'exception_pending', i.exception_pending, 'handled_at', i.handled_at, 'handover_start', i.handover_start,
+                       'previous_owner_name', (select pm.full_name from public.membership pm
+                                                 where pm.user_id = case when mi.accountable_owner_id is distinct from v_actor then mi.accountable_owner_id
+                                                                         else (select h.previous_owner from public.issue_ownership_history h where h.issue_id = mi.id and h.new_owner = v_actor order by h.at desc limit 1) end),
+                       'last_actions', (select coalesce(jsonb_agg(jsonb_build_object('type', q2.type, 'notes', q2.notes, 'at', q2.at, 'actor_name', am.full_name) order by q2.at desc, q2.id desc), '[]'::jsonb)
+                                          from (select ia.id, ia.type, ia.notes, ia.at, ia.actor_id from public.issue_action ia where ia.issue_id = i.issue_id and ia.at <= v_upto order by ia.at desc, ia.id desc limit 3) q2
+                                          left join public.membership am on am.user_id = q2.actor_id),
+                       'note', (select jsonb_build_object('note', n.note, 'at', n.at, 'author_name', nm.full_name, 'shift_date', n.shift_date)
+                                  from public.handover_note n left join public.membership nm on nm.user_id = n.author_id
+                                 where n.issue_id = i.issue_id and n.at <= v_upto order by n.at desc, n.id desc limit 1),
+                       'allowed_actions', (case when i.state = 'pending' then '["acknowledge","refuse"]'::jsonb else '[]'::jsonb end)
+                                           || (case when i.status in ('open', 'in_progress') and p_at >= r.w_start and p_at <= r.w_end + interval '2 hours' then '["add_note"]'::jsonb else '[]'::jsonb end))
+                     order by mi.reported_at, mi.id) as items
+              from app.handover_items_at(v_actor, r.shift_id, r.shift_date, p_at) i
+              join public.machine mc on mc.id = i.machine_id
+              join public.machine_issue mi on mi.id = i.issue_id
+             group by i.machine_id, mc.code, mc.name) g) q;
+
+    select max(d.at) into v_declared_at from public.handover_declaration d
+     where d.shift_id = r.shift_id and d.shift_date = r.shift_date and d.supervisor_id = v_actor and d.at <= v_upto;
+    v_overdue := app._ho_overdue_for(v_tenant, r.shift_id, r.shift_date, v_actor, v_last_start);
+    v_total_pending := v_total_pending + v_pending;
+    v_occ := v_occ || jsonb_build_array(jsonb_build_object(
+      'shift', jsonb_build_object('id', r.shift_id, 'name', r.shift_name, 'start_time', r.start_time, 'end_time', r.end_time),
+      'shift_date', r.shift_date, 'window_start', r.w_start, 'window_end', r.w_end,
+      'running', p_at >= r.w_start and p_at < r.w_end,
+      'enforced', app._ho_enforced(v_tenant),
+      'machines', v_machines, 'pending_count', v_pending,
+      'declared', v_declared, 'declared_at', v_declared_at,
+      'overdue_minutes', v_overdue, 'deadline', v_last_start + make_interval(mins => v_overdue),
+      'allowed_actions', case when v_pending = 0 and not v_declared then '["declare"]'::jsonb else '[]'::jsonb end));
+  end loop;
+
+  -- "Verify this fix": resolved High/Critical issues the caller may verify now (non-blocking; 07's verify action does the rest)
+  select coalesce(jsonb_agg(app._iss_row(q.id, p_at) order by q.resolved_at, q.id), '[]'::jsonb) into v_verify
+    from (select i.id, i.resolved_at from public.machine_issue i
+           where i.tenant_id = v_tenant and i.status = 'resolved' and i.priority in ('high', 'critical') and app.issue_can_verify(i.id, v_actor, p_at)
+           order by i.resolved_at, i.id limit 20) q;
+  return jsonb_build_object('ok', true, 'occurrences', v_occ, 'pending_total', v_total_pending, 'verify', v_verify);
+end
+$$;
+
+-- AC-9: the Unit Admin's handover alerts: refusals waiting for an exception (oldest first) and overdue acknowledgements (most overdue first), each
+-- bounded to 50 with the totals (07's bounded pattern; the screens show 5 on Home and "View all").
+create function app.handover_alerts_at(p_at timestamptz)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  c_src constant text := 'rpc:handover_alerts';
+  a jsonb;
+  v_tenant uuid;
+  v_date date;
+  v_upto timestamptz := app._ho_upto(p_at);
+  v_exc jsonb;
+  v_exc_total integer;
+  v_over jsonb;
+  v_over_all jsonb;
+  v_over_total integer;
+begin
+  if not exists (select 1 from public.membership x where x.user_id = auth.uid()) then
+    return app._pm_authorise(null, c_src);
+  end if;
+  a := app._sh_read_authorise(c_src, true);
+  if not (a->>'ok')::boolean then return a; end if;
+  v_tenant := (a->>'tenant_id')::uuid;
+  v_date := app.plant_date_at(v_tenant, p_at);
+
+  -- overdue acknowledgements: a pending item whose deadline (handover start + the overdue minutes in force) has passed, in an occurrence that is
+  -- running or ended less than 12 hours ago (older ones belong to the compliance report)
+  select coalesce(jsonb_agg(jsonb_build_object('supervisor_id', q.sup, 'supervisor_name', q.sup_name, 'shift_id', q.shift_id, 'shift_name', q.shift_name,
+           'shift_date', q.shift_date, 'machine_code', q.machine_code, 'issue_id', q.issue_id, 'description', q.description, 'priority', q.priority,
+           'minutes_overdue', q.minutes_overdue) order by q.minutes_overdue desc, q.issue_id), '[]'::jsonb) into v_over_all
+    from (select x.sup, mm.full_name as sup_name, x.shift_id, sh.name as shift_name, x.shift_date, mc.code as machine_code, i.issue_id, mi.description, mi.priority,
+                 floor(extract(epoch from (p_at - (i.handover_start + make_interval(mins => app._ho_overdue_for(v_tenant, x.shift_id, x.shift_date, x.sup, i.handover_start))))) / 60)::int as minutes_overdue
+            from (select distinct o.supervisor_id as sup, o.shift_id, o.shift_date from app._ho_owners(v_tenant, v_date - 2, v_date + 1, null, p_at) o
+                   where o.w_start <= p_at and p_at <= o.w_end + interval '12 hours') x
+            cross join lateral app.handover_items_at(x.sup, x.shift_id, x.shift_date, p_at) i
+            join public.machine mc on mc.id = i.machine_id
+            join public.machine_issue mi on mi.id = i.issue_id
+            join public.shift sh on sh.id = x.shift_id
+            left join public.membership mm on mm.user_id = x.sup
+           where i.state = 'pending'
+             and p_at > i.handover_start + make_interval(mins => app._ho_overdue_for(v_tenant, x.shift_id, x.shift_date, x.sup, i.handover_start))) q;
+  v_over_total := jsonb_array_length(v_over_all);
+  select coalesce(jsonb_agg(e.v order by e.n), '[]'::jsonb) into v_over from jsonb_array_elements(v_over_all) with ordinality e(v, n) where e.n <= 50;
+
+  -- refusals waiting for an exception: the latest refusal of an issue in an occurrence with no exception recorded since (last 14 days)
+  select count(*)::int into v_exc_total from public.issue_acknowledgement k
+   where k.tenant_id = v_tenant and k.kind = 'refused' and k.at <= v_upto and k.at >= p_at - interval '14 days'
+     and not exists (select 1 from public.issue_acknowledgement k2 where k2.issue_id = k.issue_id and k2.shift_id = k.shift_id and k2.shift_date = k.shift_date and k2.kind = 'refused' and (k2.at, k2.id) > (k.at, k.id))
+     and not exists (select 1 from public.handover_exception x where x.issue_id = k.issue_id and x.shift_id = k.shift_id and x.shift_date = k.shift_date and x.at >= k.at and x.at <= v_upto);
+  select coalesce(jsonb_agg(jsonb_build_object('issue_id', q.issue_id, 'supervisor_id', q.supervisor_id, 'supervisor_name', q.sup_name, 'shift_id', q.shift_id,
+           'shift_name', q.shift_name, 'shift_date', q.shift_date, 'machine_code', q.code, 'description', q.description, 'priority', q.priority, 'reason', q.remark,
+           'refused_at', q.at, 'owner_id', q.owner_id, 'owner_name', q.owner_name, 'minutes_waiting', floor(extract(epoch from (p_at - q.at)) / 60)::int) order by q.at, q.id), '[]'::jsonb)
+    into v_exc
+    from (select k.id, k.issue_id, k.supervisor_id, sm.full_name as sup_name, k.shift_id, sh.name as shift_name, k.shift_date, mc.code, mi.description, mi.priority, k.remark, k.at,
+                 mi.accountable_owner_id as owner_id, om.full_name as owner_name
+            from public.issue_acknowledgement k
+            join public.machine_issue mi on mi.id = k.issue_id join public.machine mc on mc.id = mi.machine_id join public.shift sh on sh.id = k.shift_id
+            left join public.membership sm on sm.user_id = k.supervisor_id left join public.membership om on om.user_id = mi.accountable_owner_id
+           where k.tenant_id = v_tenant and k.kind = 'refused' and k.at <= v_upto and k.at >= p_at - interval '14 days'
+             and not exists (select 1 from public.issue_acknowledgement k2 where k2.issue_id = k.issue_id and k2.shift_id = k.shift_id and k2.shift_date = k.shift_date and k2.kind = 'refused' and (k2.at, k2.id) > (k.at, k.id))
+             and not exists (select 1 from public.handover_exception x where x.issue_id = k.issue_id and x.shift_id = k.shift_id and x.shift_date = k.shift_date and x.at >= k.at and x.at <= v_upto)
+           order by k.at, k.id limit 50) q;
+  return jsonb_build_object('ok', true, 'exceptions', v_exc, 'exceptions_total', v_exc_total, 'overdue', v_over, 'overdue_total', v_over_total,
+                            'alert_count', v_exc_total + v_over_total);
+end
+$$;
+
+-- AC-12: handover compliance per (supervisor, occurrence) for the occurrences that have ended by p_at (app-only; 09 wraps it; product metric 2).
+-- compliant = a valid declaration made by the deadline AND every inherited issue answered by its deadline (acknowledged, or refused with a Unit Admin
+-- exception recorded). reason: no_declaration | late | exception_missing. overdue_acks counts the inherited issues not answered by their deadline
+-- (unanswered or answered late). An issue closed before its deadline without an answer drops out. Machine-occurrences with no supervisor are not
+-- counted. Deadline = handover start (window start, or the cover time) + the minutes snapshotted when the checklist first opened (else the setting).
+create function app.handover_compliance_at(p_tenant uuid, p_from date, p_to date, p_at timestamptz)
+returns table (supervisor_id uuid, shift_id uuid, shift_date date, compliant boolean, reason text, declared_at timestamptz, deadline timestamptz,
+               issues integer, answered_in_time integer, overdue_acks integer, refused_without_exception integer)
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+begin
+  if p_tenant is null or p_from is null or p_to is null or p_to < p_from then
+    perform app._pm_fail('validation', 'Choose a valid date range', 'range');
+  end if;
+  return query
+  with so as (
+    select o.* from app._ho_owners(p_tenant, p_from, p_to, null, p_at) o where o.w_end <= p_at
+  ), items as (
+    select so.supervisor_id as sup, so.shift_id as sid, so.shift_date as sdate, so.w_start, so.since, i.id as issue_id,
+           so.handover_start + make_interval(mins => app._ho_overdue_for(p_tenant, so.shift_id, so.shift_date, so.supervisor_id, so.handover_start)) as dl
+      from so join public.machine_issue i on i.tenant_id = p_tenant and i.machine_id = so.machine_id and i.reported_at < so.handover_start
+     where app._ho_status_at(i.id, so.handover_start) in ('open', 'in_progress', 'resolved')
+  ), answered as (
+    select it.*, k.kind, k.at as k_at,
+           exists (select 1 from public.handover_exception x where x.issue_id = it.issue_id and x.shift_id = it.sid and x.shift_date = it.sdate and k.at is not null and x.at >= k.at and x.at <= app._ho_upto(p_at)) as has_exc
+      from items it
+      left join lateral (select k.kind, k.at from public.issue_acknowledgement k
+                          where k.issue_id = it.issue_id and k.shift_id = it.sid and k.shift_date = it.sdate and k.supervisor_id = it.sup
+                            and (it.since is null or k.at >= it.since)
+                          order by k.at, k.id limit 1) k on true
+  ), live_items as (
+    -- an unanswered issue that was already closed at its deadline dropped out of the checklist
+    select x.* from answered x where not (x.k_at is null and app._ho_status_at(x.issue_id, least(x.dl, p_at)) = 'closed')
+  ), per_item as (
+    select x.sup, x.sid, x.sdate, x.since, x.dl,
+           (x.k_at is not null and x.k_at <= x.dl) as in_time,
+           (x.k_at is null or x.k_at > x.dl) as overdue,
+           (x.kind = 'refused' and not x.has_exc) as refused_no_exc
+      from live_items x
+  ), per_so as (
+    select s.supervisor_id as sup, s.shift_id as sid, s.shift_date as sdate, min(s.w_start) as w_start
+      from so s group by s.supervisor_id, s.shift_id, s.shift_date
+  ), agg as (
+    select p.sup, p.sid, p.sdate, p.w_start,
+           count(pi.sup)::int as n_items, (count(*) filter (where pi.in_time))::int as n_in_time, (count(*) filter (where pi.overdue))::int as n_overdue,
+           (count(*) filter (where pi.refused_no_exc))::int as n_refused_no_exc, max(pi.since) as since_max, max(pi.dl) as dl_items
+      from per_so p left join per_item pi on pi.sup = p.sup and pi.sid = p.sid and pi.sdate = p.sdate
+     group by p.sup, p.sid, p.sdate, p.w_start
+  ), dec as (
+    select g.*, coalesce(g.dl_items, g.w_start + make_interval(mins => app._ho_overdue_for(p_tenant, g.sid, g.sdate, g.sup, g.w_start))) as decl_dl,
+           (select min(d.at) from public.handover_declaration d
+             where d.shift_id = g.sid and d.shift_date = g.sdate and d.supervisor_id = g.sup and (g.since_max is null or d.at >= g.since_max)) as decl_at
+      from agg g
+  )
+  select d.sup, d.sid, d.sdate,
+         (d.decl_at is not null and d.decl_at <= d.decl_dl and d.n_overdue = 0 and d.n_refused_no_exc = 0),
+         case when d.decl_at is null then 'no_declaration'
+              when d.decl_at > d.decl_dl or d.n_overdue > 0 then 'late'
+              when d.n_refused_no_exc > 0 then 'exception_missing' end,
+         d.decl_at, d.decl_dl, d.n_items, d.n_in_time, d.n_overdue, d.n_refused_no_exc
+    from dec d
+   order by d.sdate, d.sid, d.sup;
+end
+$$;
+create function app.handover_compliance(p_tenant uuid, p_from date, p_to date)
+returns table (supervisor_id uuid, shift_id uuid, shift_date date, compliant boolean, reason text, declared_at timestamptz, deadline timestamptz,
+               issues integer, answered_in_time integer, overdue_acks integer, refused_without_exception integer)
+language sql
+stable
+security definer
+set search_path = ''
+as $$ select * from app.handover_compliance_at(p_tenant, p_from, p_to, now()) $$;
+
+create function public.handover_checklist()
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if not exists (select 1 from public.membership m where m.user_id = auth.uid()) then
+    return app._pm_authorise(null, 'rpc:handover_checklist');
+  end if;
+  return app.handover_checklist_at(now());
+end
+$$;
+create function public.handover_alerts()
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if not exists (select 1 from public.membership m where m.user_id = auth.uid()) then
+    return app._pm_authorise(null, 'rpc:handover_alerts');
+  end if;
+  return app.handover_alerts_at(now());
+end
+$$;
+
 -- 99. Function privileges (re-run at the end of every step): no app function is executable by clients; the public ho_* / handover_* entry points
 -- are executable by authenticated only.
 do $$
