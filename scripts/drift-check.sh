@@ -16,7 +16,15 @@ parse() {
     }'
 }
 
+# Rows that exist only on the remote (dev holds a migration the checked-out branch does not have: an unmerged proof). Used by deploy-dev (S8).
+remote_only() {
+  awk -F'|' '
+    function ver(x) { gsub(/[^0-9]/, "", x); return (length(x) == 14) ? x : "" }
+    NF >= 3 { l = ver($1); r = ver($2); if (l == "" && r != "") print r }'
+}
+
 if [ "${1:-}" = "--parse" ]; then parse; exit 0; fi
+if [ "${1:-}" = "--remote-only" ]; then remote_only; exit 0; fi
 
 : "${DEV_SUPABASE_DB_URL:?DEV_SUPABASE_DB_URL required}"
 out="$(npx supabase migration list --db-url "$DEV_SUPABASE_DB_URL" 2>&1)" || { echo "$out" | sed -E 's#postgres(ql)?://[^ ]*#<redacted>#g'; exit 1; }

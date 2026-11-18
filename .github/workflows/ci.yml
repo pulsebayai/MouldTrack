@@ -95,6 +95,88 @@ jobs:
           retention-days: 90
           if-no-files-found: warn
 
+  # dev-reset D10: the permanent spike. dev-reset runs in LOCAL mode against this job's own ephemeral stack (Auth + Storage included, no secrets).
+  # Proves what `supabase db reset --remote=<db url>` clears, that it never prompts, that the `attachments` bucket survives/recreates, that the
+  # explicit Auth/Storage clearing leaves exactly the one-run baseline, and (second round) that counts do not grow.
+  reset-roundtrip:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash # S3: -eo pipefail, so `cmd | tee file` fails when cmd fails
+    env:
+      SUPABASE_EXCLUDE: studio,imgproxy,edge-runtime,logflare,vector,realtime,postgres-meta
+      APP_ENV: local
+      MAX_AUDIT_LOG_ROWS: '50' # local round-trip: 0 after dev-reset (it clears the log at its end)
+      MAX_DB_MB: '60' # local round-trip: 14-15 MB
+      E2E_FIXTURE_PASSWORD: local-e2e-Passw0rd!   # the public local literal (same as supabase/seed.sql), not a secret
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '${{ env.NODE_VERSION }}', cache: npm }
+      - run: npm ci
+      - name: Start ephemeral Supabase (migrations + seed only)
+        run: npx supabase start -x "$SUPABASE_EXCLUDE"
+      - name: psql (used by dev-reset for NOTIFY/audit-log clean-up and by the checks)
+        run: command -v psql >/dev/null || { sudo apt-get update -y && sudo apt-get install -y postgresql-client; }
+      - name: Local stack keys (CLI defaults, not secrets)
+        run: |
+          eval "$(npx supabase status -o env 2>/dev/null | grep -E '^[A-Z_]+=')"
+          {
+            echo "SUPABASE_URL=$API_URL"
+            echo "SUPABASE_SERVICE_ROLE_KEY=${SERVICE_ROLE_KEY:-$SECRET_KEY}"
+            echo "SUPABASE_DB_URL=$DB_URL"
+            echo "SUPABASE_ANON_KEY=${ANON_KEY:-$PUBLISHABLE_KEY}"
+          } >> "$GITHUB_ENV"
+      - name: Fixtures, demo tenant and throwaway data (round 1)
+        run: |
+          mkdir -p test-results
+          npm run fixtures:reset
+          npm run dev:demo-seed
+          npx tsx scripts/ci-reset-pollute.ts
+      - name: The size check detects the extra data (it must fail here)
+        run: |
+          if npm run -s dev:size-check > test-results/counts-before-reset.txt 2> test-results/size-check-before.err; then
+            echo "size check passed on a polluted database"; exit 1
+          fi
+          cat test-results/size-check-before.err
+          grep -q 'auth_users: expected' test-results/size-check-before.err
+          grep -q 'storage_objects: expected' test-results/size-check-before.err
+          grep -q 'audit_event: expected' test-results/size-check-before.err
+      - name: dev-reset (local mode, 127.0.0.1 = the CLI's local-database path)
+        run: |
+          npm run dev:reset 2>&1 | tee test-results/dev-reset-1.log
+          grep -q 'Resetting local database' test-results/dev-reset-1.log
+      - name: Size check after reset = exact one-run baseline (0 throwaway Auth users, 0 Storage objects)
+        run: |
+          npm run -s dev:size-check > test-results/counts-1.txt
+          cat test-results/counts-1.txt
+          grep -qx 'storage_objects=0' test-results/counts-1.txt
+          grep -qx 'audit_event=0' test-results/counts-1.txt
+          psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -v max_audit="$MAX_AUDIT_LOG_ROWS" -v max_db_mb="$MAX_DB_MB" -f scripts/dev-bounds.sql 2>&1 | tee test-results/bounds-1.log
+      - name: Demo tenant is consistent with the server calculation and tenant-isolated
+        run: |
+          psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -f scripts/demo-checks.sql 2>&1 | tee test-results/demo-checks.log
+      - name: Round 2 - throwaway data again, reset again through 0.0.0.0 (the CLI's remote-database path, as hosted dev), identical counts (no growth)
+        run: |
+          npx tsx scripts/ci-reset-pollute.ts
+          SUPABASE_DB_URL="${SUPABASE_DB_URL/127.0.0.1/0.0.0.0}" npm run dev:reset 2>&1 | tee test-results/dev-reset-2.log
+          grep -q 'Resetting remote database' test-results/dev-reset-2.log
+          npm run -s dev:size-check > test-results/counts-2.txt
+          diff test-results/counts-1.txt test-results/counts-2.txt
+          echo "counts identical across resets"
+          psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -v max_audit="$MAX_AUDIT_LOG_ROWS" -v max_db_mb="$MAX_DB_MB" -f scripts/dev-bounds.sql 2>&1 | tee test-results/bounds-2.log
+          psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -f scripts/demo-checks.sql
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-reset-roundtrip
+          path: test-results/
+          retention-days: 90
+          if-no-files-found: warn
+
   e2e-web:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -157,7 +239,7 @@ jobs:
           if-no-files-found: warn
 
   summary:
-    needs: [changes, static, db, e2e-web]
+    needs: [changes, static, db, reset-roundtrip, e2e-web]
     if: always() && needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -171,7 +253,7 @@ jobs:
 
   # Single required check for branch protection. Skipped suites (docs-only) count as success.
   ci-ok:
-    needs: [changes, static, db, e2e-web]
+    needs: [changes, static, db, reset-roundtrip, e2e-web]
     if: always()
     runs-on: ubuntu-latest
     steps:

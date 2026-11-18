@@ -23,6 +23,13 @@ Run from the **owner's own terminal**, never from CI (the repo and its logs are 
 
 R1 extra blockers (prod on Supabase Free): nightly **encrypted** DB + Storage backup running, and one **restore drill** recorded below.
 
+## Demo tenant on dev (manual testing)
+After every dev run dev holds the tenant "Demo Plastics (fixture)" (invented data, 10 machines, Day and Night shifts, seven plant days of readings and issues). Sign in on the dev web app with phone number + the fixture password (`E2E_FIXTURE_PASSWORD`, held only in GitHub secrets and with the owner; never written here):
+- Unit Admin: `+91 90000 00010` (Demo Admin)
+- Supervisor: `+91 90000 00011` (Demo Supervisor One: machines 1-5 by day, 6-10 by night)
+- Supervisor: `+91 90000 00012` (Demo Supervisor Two: machines 6-10 by day, 1-5 by night)
+The tenant is deleted and recreated on every dev run; do not keep anything on it. It never exists on staging or prod.
+
 ## Record template — copy to `sdlc/releases/<Rn>.md`
 ```markdown
 # Release Rn — <name>

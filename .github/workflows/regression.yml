@@ -21,8 +21,9 @@ permissions:
   contents: read
   issues: write
 
+# One writer at a time on hosted dev (dev-reset D6): the dev regression (which rebuilds the database) and deploy-dev (which migrates it) share this group.
 concurrency:
-  group: regression-${{ inputs.target || 'dev' }}
+  group: ${{ (inputs.target || 'dev') == 'dev' && 'dev-db' || format('regression-{0}', inputs.target) }}
   cancel-in-progress: false
 
 env:
@@ -71,8 +72,58 @@ jobs:
         uses: actions/upload-artifact@v4
         with: { name: 'regression-drift', path: test-results/, retention-days: 90, if-no-files-found: warn }
 
+  # dev-reset D2: runs AFTER drift (so drift still proves deploy-dev's incremental apply on the un-reset database) and BEFORE everything that
+  # reads or writes data. Dev only: the job condition and the script's own guard both refuse any other project.
+  reset:
+    needs: [setup, drift]
+    if: ${{ !cancelled() && needs.setup.outputs.target == 'dev' }} # a failed drift must not stop the reset
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      APP_ENV: development
+      SUPABASE_URL: ${{ secrets.DEV_SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.DEV_SUPABASE_SERVICE_ROLE_KEY }}
+      SUPABASE_DB_URL: ${{ secrets.DEV_SUPABASE_DB_URL }}
+      DEV_SUPABASE_PROJECT_REF: ${{ secrets.DEV_SUPABASE_PROJECT_REF }}
+      # S5: the guard refuses when STAGING_SUPABASE_PROJECT_REF / PROD_SUPABASE_PROJECT_REF are passed and equal the dev ref (or are passed empty).
+      # Neither secret exists yet (the first hosted attempt was refused for the empty staging value, as designed), so neither is passed. Add
+      # `STAGING_SUPABASE_PROJECT_REF: ${{ secrets.STAGING_SUPABASE_PROJECT_REF }}` (and the prod one) here when those projects' secrets exist (R1 release).
+      E2E_FIXTURE_PASSWORD: ${{ secrets.E2E_FIXTURE_PASSWORD }}
+      # S6: bounds on the database after a reset, taken from the hosted run 44299307195 (auth log 0 rows, database 15 MB) with headroom
+      MAX_AUDIT_LOG_ROWS: '50' # hosted reset job: 0 after dev-reset (run 44299307195)
+      MAX_DB_MB: '60' # hosted: 15 MB after the reset (run 44299307195)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '${{ env.NODE_VERSION }}', cache: npm }
+      - run: npm ci
+      - run: command -v psql >/dev/null || { sudo apt-get update -y && sudo apt-get install -y postgresql-client; }
+      - name: Rebuild dev (migrations + canonical fixtures + demo tenant), then check it holds exactly one run's data
+        run: |
+          mkdir -p test-results
+          reset=1; size=1
+          if npm run -s dev:reset > test-results/dev-reset.log 2>&1; then reset=0; fi
+          cat test-results/dev-reset.log
+          if [ $reset = 0 ]; then
+            if npm run -s dev:size-check > test-results/counts.txt 2> test-results/size-check.err; then size=0; fi
+            cat test-results/counts.txt test-results/size-check.err
+          fi
+          bounds=1
+          if [ $reset = 0 ]; then
+            if psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -v max_audit="$MAX_AUDIT_LOG_ROWS" -v max_db_mb="$MAX_DB_MB" -f scripts/dev-bounds.sql > test-results/bounds.log 2>&1; then bounds=0; fi
+            cat test-results/bounds.log
+          fi
+          tap() { [ "$1" = 0 ] && echo "ok $2 - $3" || echo "not ok $2 - $3"; }
+          { echo 'TAP version 13'; tap $reset 1 'dev rebuilt from migrations + fixtures + demo tenant'; tap $size 2 'dev holds exactly the one-run baseline'; tap $bounds 3 'auth audit log and database size within bounds'; echo '1..3'; } > test-results/reset.tap
+          [ $reset = 0 ] && [ $size = 0 ] && [ $bounds = 0 ]
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: 'regression-reset', path: test-results/, retention-days: 90, if-no-files-found: warn }
+
   web:
-    needs: setup
+    needs: [setup, reset]
+    # reset is skipped for staging/prod; on dev a failed or cancelled reset stops the run before anything touches the data
+    if: ${{ !cancelled() && needs.setup.result == 'success' && (needs.reset.result == 'success' || needs.reset.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -89,14 +140,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: '${{ env.NODE_VERSION }}', cache: npm }
       - run: npm ci
-      - name: Reset fixtures (dev only; script refuses any other project)
-        if: needs.setup.outputs.target == 'dev'
-        env:
-          APP_ENV: development
-          SUPABASE_URL: ${{ secrets.DEV_SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.DEV_SUPABASE_SERVICE_ROLE_KEY }}
-          DEV_SUPABASE_PROJECT_REF: ${{ secrets.DEV_SUPABASE_PROJECT_REF }}
-        run: npm run fixtures:reset
+      # Dev fixtures were recreated by the `reset` job (dev-reset); no separate fixtures step is needed here.
       - run: npx playwright install --with-deps chromium
       - name: Playwright (full on dev/staging, smoke only on prod)
         run: |
@@ -112,9 +156,9 @@ jobs:
           if-no-files-found: warn
 
   hosted-checks:
-    needs: [setup, web] # after web: its fixtures reset removes legacy users (e.g. the pre-02 e2e-nomember) the orphan check would flag
-    # dev: all checks. staging: only the Auth config check (AC-15, R4); the rest stay dev-only.
-    if: always() && (needs.setup.outputs.target == 'dev' || needs.setup.outputs.target == 'staging')
+    needs: [setup, reset, web] # after reset (dev starts from the rebuilt database) and web (it checks the state the e2e run leaves behind)
+    # dev: all checks. staging: only the Auth config check (AC-15, R4); the rest stay dev-only. Never after a failed or cancelled reset on dev.
+    if: ${{ !cancelled() && (needs.setup.outputs.target == 'dev' || needs.setup.outputs.target == 'staging') && (needs.reset.result == 'success' || needs.reset.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -138,8 +182,8 @@ jobs:
         with: { name: 'regression-hosted', path: test-results/, retention-days: 90, if-no-files-found: warn }
 
   android:
-    needs: [setup, web] # web resets the fixtures first
-    if: always() && needs.setup.outputs.full == 'true'
+    needs: [setup, reset, web] # on dev the reset job rebuilt the fixtures; the dev-only step below re-resets them for U4
+    if: ${{ !cancelled() && needs.setup.outputs.full == 'true' && needs.web.result != 'skipped' && (needs.reset.result == 'success' || needs.reset.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -190,7 +234,7 @@ jobs:
         with: { name: 'regression-android', path: test-results/, retention-days: 90, if-no-files-found: warn }
 
   evidence:
-    needs: [setup, drift, hosted-checks, web, android]
+    needs: [setup, drift, reset, hosted-checks, web, android]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -209,12 +253,38 @@ jobs:
         with: { name: 'regression-evidence-${{ needs.setup.outputs.target }}', path: evidence/, retention-days: 90 }
       - name: Fail if any suite failed
         run: |
-          r='${{ needs.drift.result }} ${{ needs['hosted-checks'].result }} ${{ needs.web.result }} ${{ needs.android.result }}'
+          r='${{ needs.drift.result }} ${{ needs.reset.result }} ${{ needs['hosted-checks'].result }} ${{ needs.web.result }} ${{ needs.android.result }}'
           echo "results: $r"; ! echo "$r" | grep -Eq 'failure|cancelled'
 
+  # S1 (dev-reset D6): deploy-dev and the dev regression share concurrency group dev-db, and GitHub keeps only ONE pending run per group (a newer
+  # pending deploy replaces an older one), so a merge during a long nightly can lose its deploy. This last job closes the gap: when the newest
+  # successful deploy-dev run is not main's head, it dispatches deploy-dev on main (queued behind this run in the same group).
+  redeploy:
+    needs: [setup, evidence]
+    if: ${{ always() && needs.setup.outputs.target == 'dev' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Dispatch deploy-dev on main when dev is behind main
+        env: { GH_TOKEN: '${{ github.token }}', REPO: '${{ github.repository }}' }
+        run: |
+          main=$(gh api "repos/$REPO/commits/main" --jq .sha)
+          deployed=$(gh api "repos/$REPO/actions/workflows/deploy-dev.yml/runs?status=success&branch=main&per_page=1" --jq '.workflow_runs[0].head_sha // ""')
+          echo "main=$main last-successful-deploy-dev=${deployed:-none}"
+          if [ "$main" != "$deployed" ]; then
+            gh api -X POST "repos/$REPO/actions/workflows/deploy-dev.yml/dispatches" -f ref=main
+            echo "dispatched deploy-dev on main"
+          else
+            echo "dev already deployed from main's head"
+          fi
+
   notify:
-    needs: [evidence]
-    if: failure() && github.event_name == 'schedule'
+    needs: [setup, evidence]
+    # a scheduled run that failed OR was cancelled (evidence is always() and fails when any suite is cancelled)
+    if: ${{ always() && github.event_name == 'schedule' && (needs.evidence.result == 'failure' || needs.evidence.result == 'cancelled') }}
     runs-on: ubuntu-latest
     steps:
       - name: Open or update "Nightly regression failing" issue
@@ -223,5 +293,5 @@ jobs:
           run="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           n=$(gh issue list -R "${{ github.repository }}" --state open --search 'in:title "Nightly regression failing"' --json number --jq '.[0].number')
           if [ -n "$n" ]; then gh issue comment "$n" -R "${{ github.repository }}" --body "Failed again: $run"
-          else gh issue create -R "${{ github.repository }}" --title "Nightly regression failing" --assignee "${{ github.repository_owner }}" --body "Nightly regression against dev failed: $run. Fixing this is the top priority for the next session (AI-native SDLC Stage 6)." || \
-               gh issue create -R "${{ github.repository }}" --title "Nightly regression failing" --body "Nightly regression against dev failed: $run"; fi
+          else gh issue create -R "${{ github.repository }}" --title "Nightly regression failing" --assignee "${{ github.repository_owner }}" --body "Nightly regression against dev failed or was cancelled: $run. Fixing this is the top priority for the next session (AI-native SDLC Stage 6)." || \
+               gh issue create -R "${{ github.repository }}" --title "Nightly regression failing" --body "Nightly regression against dev failed or was cancelled: $run"; fi
