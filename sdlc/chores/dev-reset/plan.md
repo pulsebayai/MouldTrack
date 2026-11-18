@@ -1,5 +1,5 @@
 # Plan: chore/dev-reset — hosted dev is rebuilt clean before every run
-Status: draft · Owner approval of approach: 2026-11-18 ("Yes I approve") · Author: Opus · Executor: Sonnet
+Status: approved 2026-11-18 (owner: approach "Yes I approve"; demo tenant option (a) "yes let us go with a") · Author: Opus · Executor: Sonnet
 Holds: architecture lock (docs only). No migrations. No test from 01–07 or 006 is edited.
 
 ## Why
@@ -29,6 +29,19 @@ timeouts seen in 06's and 07's hosted proofs. Owner: "clean the test data and do
 - **D7 Hosted proofs on feature branches** use the same workflow, so they reset dev to the **branch's** migrations; the
   next nightly resets it back to main's. This also ends the "nightly drift red while an unmerged migration sits on dev"
   problem (drift may still be red on the first nightly after an unmerged proof — documented, expected).
+- **D9 Demo tenant (owner option a, 2026-11-18).** After every reset, `scripts/dev-demo-seed` rebuilds one tenant
+  **"Demo Plastics (fixture)"** for the owner's manual testing: 1 site (Asia/Kolkata), 2 lines, ~10 machines (mix of pieces/shots,
+  one with a counter maximum, one with cavities), ~4 products with targets, Day + Night (overnight) shifts, 1 UA + 2 supervisors
+  on **unused canonical fixture phones** (+91 90000 000xx, listed in the plan), invented names, password = the fixture password.
+  History dated **relative to the reset date** (last 7 plant days): readings incl. some Late, Early, Rollover, Needs review and
+  UA-entered; summaries; 5–8 issues incl. one open Critical "machine stopped", one awaiting verification, some closed; no photos.
+  Rules: dev only (runs only inside `dev-reset.ts` after its guard; also runnable on the local stack for tests); never in seed.sql
+  for CI, never staging/prod. Past-dated rows can't go through the RPCs (they use `now()`), so the seed inserts as the DB owner
+  **through the same internal helpers where they exist** (e.g. `app._rd_compute_summary`) and must satisfy every CHECK, FK and
+  append-only trigger without disabling them. If a rule blocks past-dated inserts (e.g. no-backdating of targets), stop and log
+  `Blocked - needs Opus` — do not disable triggers or add a bypass to the schema. Audit rows: the seed writes none, except
+  through helpers that already write them. The size check (D5) includes the demo tenant's exact counts.
+  Login details for the owner go in `sdlc/releases/README.md` (phones only; never the password).
 - **D8 Out of scope (flag only):** policy item 2(b) seeded-volume speed check is not implemented today; recorded as known
   debt for the R1 gate, not built here.
 
@@ -39,6 +52,9 @@ timeouts seen in 06's and 07's hosted proofs. Owner: "clean the test data and do
 - [ ] 2. Tests first: Jest for `dev-reset.ts` guard (wrong ref, missing env, non-fixture phone → refuse; no secret in output)
   and `dev-size-check.ts` (baseline from fixture lists; mismatch → non-zero with a readable diff).
 - [ ] 3. Implement `scripts/dev-reset.ts` (D3, D4) and `scripts/dev-size-check.ts` (D5); `npm run dev:reset`, `dev:size-check`.
+- [ ] 3a. Demo tenant (D9): tests first — a pgTAP or Jest test that loads the demo seed on the local stack and asserts it is
+  internally consistent (every summary matches `_rd_compute_summary`, issues pass `issue_can_verify` rules, UA sees it, other
+  tenants and SAs don't), then the seed; `dev-reset.ts` runs it after `fixtures:reset`.
 - [ ] 4. Workflows: `reset` job per D2 (TAP output + artifact like drift), size check after fixtures in the reset job,
   `web`/`android` need `reset`; concurrency group `dev-db` in both workflows (D6).
 - [ ] 5. Docs (architecture lock): policy item 2 (nightly reset order, size check, D7), remove the five "accumulates on dev"
@@ -52,6 +68,10 @@ timeouts seen in 06's and 07's hosted proofs. Owner: "clean the test data and do
 - AC-2 Two consecutive dev runs report identical counts (no growth).
 - AC-3 The reset refuses any non-dev project and any non-fixture phone on dev (unit tests + guard in CI).
 - AC-4 Drift still proves deploy-dev's incremental apply (drift runs before reset).
+- AC-6 After every dev run the owner can sign in to the demo tenant and see 7 recent plant days of readings and issues; its counts are identical across runs.
 - AC-5 Full suite green, no 01–07/006 test edited.
 
 ## Session log
+
+### 2026-11-18 (Opus)
+- Plan drafted; owner approved approach and chose option (a) demo tenant (D9). Next: step 1 spike (Sonnet).
