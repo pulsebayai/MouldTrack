@@ -3,7 +3,7 @@
 // append-only history and stay (known debt, like 04/05/07); every machine and product code is unique per run so a persistent dev database never collides.
 import { expect, test } from '@playwright/test';
 import {
-  FIXTURE_PASSWORD, SA_FIXTURES, TINY_JPEG, anon, auditRows, customOrg, provisionSuperAdmin, requireApi, setupIssueWorld, sha256Hex, signIn, teardownIssueWorld, uuid,
+  FIXTURE_PASSWORD, SA_FIXTURES, TINY_JPEG, anon, auditRows, customOrg, requireApi, setupIssueWorld, sha256Hex, signIn, teardownIssueWorld, uuid,
   type IssueWorld, type Session,
 } from './helpers';
 
@@ -13,7 +13,10 @@ const DENIED = { ok: false, code: 'not_allowed' };
 
 let w: IssueWorld;
 let uaOther: Session;
+// A Super Admin session is signed in right before it is used and the shared fixture SA is never re-provisioned here: platform.spec re-provisions
+// it, and doing so concurrently invalidates the other spec's session (the two api files may run on different workers).
 let sa: Session;
+const saNow = async () => (sa = await signIn(SA_FIXTURES.sa2.phone, FIXTURE_PASSWORD));
 let shiftId: string;
 let productId: string;
 let productCode: string;
@@ -33,8 +36,6 @@ test.beforeAll(async () => {
   w = await setupIssueWorld(ORG, 'E2E Readings Plant');
   shiftId = w.running.session === w.sup2 ? w.shiftPm : w.shiftAm;
   uaOther = await signIn(FIXTURE_UA_U, FIXTURE_PASSWORD);
-  await provisionSuperAdmin(SA_FIXTURES.sa1);
-  sa = await signIn(SA_FIXTURES.sa1.phone, FIXTURE_PASSWORD);
   productCode = `E2E-${run}`;
   const p = await w.ua.client.rpc('pm_save_product', { p_request_id: uuid(), p_id: null, p_code: productCode, p_description: 'E2E readings part', p_uom: 'pcs' });
   expect(p.data).toMatchObject({ ok: true });
@@ -44,6 +45,9 @@ test.beforeAll(async () => {
   // The counter counts shots, 4 cavities per shot (so pieces = shots x 4), set before the first reading (the unit locks with it).
   expect((await w.ua.client.rpc('rd_set_machine_counter', { p_request_id: uuid(), p_machine_id: w.machine.id, p_unit: 'shots', p_max: null })).data).toMatchObject({ ok: true });
   expect((await w.ua.client.rpc('rd_set_cavities', { p_request_id: uuid(), p_machine_id: w.machine.id, p_product_id: productId, p_cavities: 4, p_effective_from: w.today })).data).toMatchObject({ ok: true });
+});
+test.beforeEach(async () => {
+  await saNow();
 });
 test.afterAll(() => teardownIssueWorld(w));
 

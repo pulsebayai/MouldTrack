@@ -116,8 +116,10 @@ test('the Unit Admin sees the machine on the Today board and reads its occurrenc
 test('the Counter panel: a locked unit is refused, rollover value and cavities follow the unit (D3)', async ({ page }) => {
   test.setTimeout(180_000);
   await signIn(page, w.org.users.ua1.phone, FIXTURE_PASSWORD);
-  await page.goto(`/plant/machines/${w.machine.id}`);
-  await expect(tid(page, 'counter-panel')).toBeVisible();
+  await tid(page, 'plant-link').click();
+  await tid(page, 'machines-search').fill(w.machine.code);
+  await tid(page, `machine-open-${w.machine.id}`).click();
+  await expect(tid(page, 'counter-panel')).toBeVisible({ timeout: 15_000 });
   await expect(tid(page, 'cavities-section')).toHaveCount(0); // a pieces counter has no cavities
   await tid(page, 'counter-max').fill('5');
   await tid(page, 'counter-save').click();
