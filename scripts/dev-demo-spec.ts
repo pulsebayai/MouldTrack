@@ -289,11 +289,30 @@ export function buildIssues(today: string): DemoIssue[] {
   ];
 }
 
+// ---- handover (08) ----
+export type DemoDeclaration = { supervisor: DemoUserKey; shift: DemoShift['name']; date: string; at: string };
+/**
+ * 08: the demo tenant is enforced, and every occurrence a supervisor opened themselves has the supervisor's handover declaration made 10 minutes
+ * before the first of their openings of that occurrence (a Unit Admin's on-behalf entries have none: the occurrence then reads "No declaration").
+ * The demo issues are not acknowledged: they are history from before the handover feature, so there are no acknowledgement rows.
+ */
+export function buildDeclarations(today: string): DemoDeclaration[] {
+  const first = new Map<string, DemoDeclaration>();
+  for (const o of buildOccurrences(today)) {
+    if (o.actor === 'ua') continue;
+    const k = `${o.actor}|${o.shift}|${o.date}`;
+    const at = new Date(Date.parse(o.openingAt) - 10 * 60000).toISOString();
+    const cur = first.get(k);
+    if (!cur || at < cur.at) first.set(k, { supervisor: o.actor, shift: o.shift, date: o.date, at });
+  }
+  return [...first.values()];
+}
+
 // ---- counts the size check expects ----
 export type DemoCounts = {
   tenant: number; site: number; line: number; machine: number; product: number; target_version: number; cavity_version: number; shift: number;
   assignment_version: number; production_reading: number; production_summary: number; machine_issue: number; issue_action: number;
-  issue_ownership_history: number; membership: number; authUsers: number;
+  issue_ownership_history: number; membership: number; authUsers: number; handover_setting: number; handover_declaration: number;
 };
 export function demoCounts(today: string): DemoCounts {
   const occ = buildOccurrences(today);
@@ -303,6 +322,6 @@ export function demoCounts(today: string): DemoCounts {
     cavity_version: DEMO_MACHINES.filter((x) => x.cavities !== null).length, shift: DEMO_SHIFTS.length, assignment_version: DEMO_ASSIGNMENTS.length,
     production_reading: occ.length * 2, production_summary: occ.length, machine_issue: issues.length,
     issue_action: issues.reduce((n, i) => n + i.events.length, 0), issue_ownership_history: issues.length,
-    membership: DEMO_USERS.length, authUsers: DEMO_USERS.length,
+    membership: DEMO_USERS.length, authUsers: DEMO_USERS.length, handover_setting: 1, handover_declaration: buildDeclarations(today).length,
   };
 }

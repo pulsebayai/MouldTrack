@@ -10,7 +10,7 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import {
   DEMO_ASSIGNMENTS, DEMO_LINES, DEMO_MACHINES, DEMO_PLAN_FROM, DEMO_PRODUCTS, DEMO_SHIFTS, DEMO_SITE_NAME, DEMO_TENANT_NAME, DEMO_USERS,
-  buildIssues, buildOccurrences, plantToday, type DemoUserKey,
+  buildDeclarations, buildIssues, buildOccurrences, plantToday, type DemoUserKey,
 } from './dev-demo-spec';
 import { assertResetTarget, redact } from './dev-guard';
 
@@ -40,6 +40,8 @@ export async function seedDemo(admin: SupabaseClient, password: string, today: s
   // Tenant (the starter issue categories come from the tenant trigger).
   const tenantId = one('create tenant', await admin.from('tenant').insert({ name: DEMO_TENANT_NAME, status: 'active' }).select('id').single()).id as string;
   must('plan label', await admin.from('tenant').update({ plan_label: 'active' }).eq('id', tenantId).select('id'));
+  // 08 (D1): the demo tenant is enforced like a tenant registered through the Console.
+  must('handover setting', await admin.from('handover_setting').insert({ tenant_id: tenantId, overdue_minutes: 60, required: true }).select('tenant_id'));
 
   // People: Auth users with the reserved .invalid addresses, then memberships.
   const uid = new Map<DemoUserKey, string>();
@@ -104,6 +106,11 @@ export async function seedDemo(admin: SupabaseClient, password: string, today: s
       early_closing: o.earlyClosing, entered_by_ua: o.enteredByUa, recorded_by: uid.get(o.actor)!, recorded_at: o.closingAt,
     };
   }));
+
+  // Handover declarations for the occurrences the supervisors opened themselves (08).
+  await insertAll(admin, 'handover_declaration', buildDeclarations(today).map((d) => ({
+    tenant_id: tenantId, shift_id: shiftId.get(d.shift)!, shift_date: d.date, supervisor_id: uid.get(d.supervisor)!, text_version: 1, covered_issue_ids: [], at: d.at,
+  })));
 
   // Issues with their append-only actions and ownership rows.
   const categories = must('categories', await admin.from('issue_category').select('id, name').eq('tenant_id', tenantId)) ?? [];
