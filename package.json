@@ -55,7 +55,10 @@
     "build": "expo export -p web --output-dir ${WEB_DIST:-dist} && bash scripts/android-prebuild-check.sh",
     "fixtures:reset": "tsx scripts/fixtures-reset.ts",
     "serve:web": "serve ${WEB_DIST:-dist} -s -l 8081",
-    "test:api": "playwright test --project=api"
+    "test:api": "playwright test --project=api",
+    "dev:reset": "tsx scripts/dev-reset.ts",
+    "dev:size-check": "tsx scripts/dev-size-check.ts",
+    "dev:demo-seed": "tsx scripts/dev-demo-seed.ts"
   },
   "private": true,
   "engines": {
