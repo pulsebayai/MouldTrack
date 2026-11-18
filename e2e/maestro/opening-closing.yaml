@@ -1,0 +1,47 @@
+# 06 (Android): a supervisor records the opening and the closing reading of the machine they own in the running shift, without a photo (D8 of 07:
+# emulator camera/gallery automation is unreliable; the photo path is proven by the API and web e2e and on a real phone at the R1 gate).
+# Fixture org A: supA owns FX-MA1 on both fixture shifts, so one occurrence is always running. Readings are append-only history, so a re-run on
+# the same day finds them done: each step runs only when the server offers it (the screens render what reading_state allows).
+appId: com.pulsebayai.mouldtrack
+name: opening-closing
+---
+- launchApp: { clearState: true }
+- tapOn: { id: "phone" }
+- inputText: "9000000002"
+- tapOn: { id: "password" }
+- inputText: ${PASSWORD}
+- hideKeyboard
+- tapOn: { id: "sign-in-submit" }
+- extendedWaitUntil: { visible: { id: "readings-link" }, timeout: 15000 }
+- tapOn: { id: "readings-link" }
+- extendedWaitUntil: { visible: { id: "readings" }, timeout: 15000 }
+- extendedWaitUntil: { visible: { id: "reading-state-.*" }, timeout: 15000 }
+- runFlow:
+    when: { visible: { id: "reading-open-.*" } }
+    commands:
+      - tapOn: { id: "reading-open-.*" }
+      - extendedWaitUntil: { visible: { id: "record-opening-screen" }, timeout: 15000 }
+      - extendedWaitUntil: { visible: { id: "record-counter" }, timeout: 15000 }
+      - tapOn: { id: "record-product-.*" }
+      - tapOn: { id: "record-counter" }
+      - inputText: "1000"
+      - hideKeyboard
+      - scrollUntilVisible: { element: { id: "record-submit" } }
+      - tapOn: { id: "record-submit" }
+      - extendedWaitUntil: { visible: { id: "readings" }, timeout: 15000 }
+- runFlow:
+    when: { visible: { id: "reading-close-.*" } }
+    commands:
+      - tapOn: { id: "reading-close-.*" }
+      - extendedWaitUntil: { visible: { id: "record-closing-screen" }, timeout: 15000 }
+      - tapOn: { id: "record-counter" }
+      - inputText: "1250"
+      - tapOn: { id: "record-good" }
+      - inputText: "240"
+      - tapOn: { id: "record-reject" }
+      - inputText: "5"
+      - hideKeyboard
+      - scrollUntilVisible: { element: { id: "record-submit" } }
+      - tapOn: { id: "record-submit" }
+      - extendedWaitUntil: { visible: { id: "readings" }, timeout: 15000 }
+- assertVisible: "Both readings recorded"
