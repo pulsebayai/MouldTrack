@@ -346,3 +346,35 @@ export async function seedResolvedIssue(w: IssueWorld, priority: 'high' | 'criti
   await ins('issue_ownership_history', { tenant_id: w.org.id, issue_id: id, new_owner: resolver, source: 'report', actor_id: resolver, at: reportedAt });
   return id;
 }
+
+/**
+ * 08: turns the handover gate on for the world's tenant (a tenant inserted directly has no handover_setting row and is not gated). Service role, like the
+ * issue seeds; a tenant registered through the Console gets the row from the registration hook.
+ */
+export async function enforceHandover(w: IssueWorld, overdueMinutes = 60): Promise<void> {
+  const r = await service().from('handover_setting').upsert({ tenant_id: w.org.id, overdue_minutes: overdueMinutes, required: true }, { onConflict: 'tenant_id' }).select('tenant_id');
+  if (r.error) throw new Error(`handover_setting: ${r.error.message}`);
+}
+
+/**
+ * 08: an issue that is open on the world's machine, reported by the idle supervisor two hours before the last shift boundary and owned by them, so the
+ * running supervisor (who owns the machine in the shift that started at that boundary) inherits it at their handover. Service-role insert (like
+ * seedResolvedIssue); returns the issue id.
+ */
+export async function seedInheritedIssue(w: IssueWorld, priority: 'low' | 'medium' | 'high' | 'critical', description: string): Promise<string> {
+  const sb = service();
+  const id = uuid();
+  const owner = w.idle.session.userId;
+  const reportedAt = new Date(w.lastBoundary.getTime() - 2 * 3600_000).toISOString();
+  const ins = async (table: string, row: Record<string, unknown>) => {
+    const r = await sb.from(table).insert(row).select('*');
+    if (r.error) throw new Error(`${table}: ${r.error.message}`);
+  };
+  await ins('machine_issue', {
+    id, tenant_id: w.org.id, machine_id: w.machine.id, category_id: w.categoryId, priority, description, machine_stopped: false, status: 'open',
+    accountable_owner_id: owner, reported_by: owner, reported_at: reportedAt,
+  });
+  await ins('issue_action', { tenant_id: w.org.id, issue_id: id, actor_id: owner, actor_role: 'supervisor', type: 'report', status_after: 'open', at: reportedAt });
+  await ins('issue_ownership_history', { tenant_id: w.org.id, issue_id: id, new_owner: owner, source: 'report', actor_id: owner, at: reportedAt });
+  return id;
+}
