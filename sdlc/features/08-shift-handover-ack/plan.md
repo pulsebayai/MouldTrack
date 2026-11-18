@@ -42,6 +42,10 @@ Branch: feat/08-shift-handover-ack, rebased on main 9978d02 (06 + dev reset merg
   `/(app)/handover`; My shift / Readings opening actions show "Complete your handover checklist first" and are disabled when
   the server says so. UA: Handover section in 07's alerts card + Issues → Alerts tab; exception dialog; overdue setting in
   Plant → Site & lines. Server-driven `allowed_actions` only.
+- **D10 (accepted for R1, deviates from AC-9 "Issues alerts tab").** Handover alerts are a separate `HandoverAlertsCard` on UA Home (web), so 07's pinned rpc tests (`IssueAlertsCard`, the Issues screen) stay untouched. Each list shows 5 with "Show all" (the server's 50).
+- **D11.** "Keep with the refusing supervisor" = choosing the current owner, preselected: `ho_exception` always takes an active supervisor id and records `kept = true` when it equals the current owner.
+- **D12.** Org H phones are `+91 90000 00015` (UA), `00016`, `00017` (supervisors): `orgDef(n)` in the API helpers uses `00{n}{i}`, and `account.spec.ts` (`orgDef(2)`) would re-provision 00021-00024 into another tenant.
+- **D13.** The Console "Handover: enforced" label is dropped (03's reads stay unchanged); hosted check 10 covers enforcement, and Plant -> Site shows "Handover: enforced" to the tenant's Unit Admin.
 
 ## Steps (tests first in each)
 - [x] 1. Migration part 1: tables, RLS, append-only triggers, registry, `handover_setting` backfill + registration hook (D1, D8);
@@ -56,7 +60,7 @@ Branch: feat/08-shift-handover-ack, rebased on main 9978d02 (06 + dev reset merg
 - [x] 6. Client lib + screens (D9) with Jest/RNTL; axe on web (axe runs with the web e2e in step 7, which waits for the H decision).
 - [x] 7. Web e2e `handover.spec.ts` (SUP checklist → declare → opening; refuse → UA exception; cover re-declare; note shown)
   + API e2e (SUP opening refused before declaring; other SUP denied). Maestro `handover.yaml`.
-- [ ] 8. Docs under the locks: architecture (handover model, cross-feature gate rule, compliance = metric 2, D1 enforcement,
+- [x] 8. Docs under the locks: architecture (handover model, cross-feature gate rule, compliance = metric 2, D1 enforcement,
   the read that writes `handover_session`), known debt.
 - [ ] 9. Rebase on chore/test-reliability, full PR CI, hosted dev proof (dispatch, after the reset), Opus review, AC table, PR.
 
@@ -139,4 +143,7 @@ lines, Console tenant detail (label), Jest tests, `e2e/web/handover.spec.ts`, `e
 - Covered: banner, checklist, blocked opening, acknowledge/refuse (reason required), declare, opening offered, UA alert + exception reassigning the owner (ownership rows report, reassign), overdue setting 15-480 and `Handover: enforced`, axe on checklist, UA Home alerts and Site tab (serious/critical = 0); API: denials (other supervisor, UA, SA, cross-tenant org H, with audit rows), idempotent replay and request id tied to its RPC, items_pending, already_declared, gate handover_pending then accepted opening, notes limit, exception guards, setting bounds, append-only.
 - Not run locally (no Supabase stack in the sandbox): these run in PR CI (e2e-web, which includes the `api` project) and Maestro in the nightly. The cover-re-declare flow of the step list (cover after the handover makes the earlier declaration stale) is proven by pgTAP 061/062 only; a clock-independent e2e needs a cover recorded during the running occurrence and is left for Opus to decide (listed in the report).
 - CI fixes after the first step 7 run: (1) phones moved from 00020-22 to 00015-17 (collision above); (2) `ReadingsCard` now also refreshes on focus (the opening stayed disabled after declaring on the checklist until the next 60 s poll: a real defect found by the web e2e).
+
+### Session log - step 8 (Sonnet, 2026-11-18)
+- Docs under 08's architecture lock: `architecture.md` gained the handover model, the cross-feature gate rule, compliance = product metric 2, D1 enforcement, the read that writes `handover_session`, the dev backfill note, the Core-entities line, decision-log rows and known debt (cover-stale e2e gap, alerts placement, **open R1 staging-gate item**). D10-D13 recorded above. `readings.spec.ts:111` goes to chore/test-reliability (their list). Step 9 not started.
 
