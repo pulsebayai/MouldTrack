@@ -135,8 +135,10 @@ jobs:
           fi
           cat test-results/size-check-before.err
           grep -q 'auth_users: expected' test-results/size-check-before.err && grep -q 'storage_objects: expected' test-results/size-check-before.err
-      - name: dev-reset (local mode)
-        run: npm run dev:reset 2>&1 | tee test-results/dev-reset-1.log
+      - name: dev-reset (local mode, 127.0.0.1 = the CLI's local-database path)
+        run: |
+          npm run dev:reset 2>&1 | tee test-results/dev-reset-1.log
+          grep -q 'Resetting local database' test-results/dev-reset-1.log
       - name: Size check after reset = exact one-run baseline (0 throwaway Auth users, 0 Storage objects)
         run: |
           npm run -s dev:size-check > test-results/counts-1.txt
@@ -146,10 +148,11 @@ jobs:
         run: |
           command -v psql >/dev/null || { sudo apt-get update -y && sudo apt-get install -y postgresql-client; }
           psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -f scripts/demo-checks.sql 2>&1 | tee test-results/demo-checks.log
-      - name: Round 2 - throwaway data again, reset again, identical counts (no growth)
+      - name: Round 2 - throwaway data again, reset again through 0.0.0.0 (the CLI's remote-database path, as hosted dev), identical counts (no growth)
         run: |
           npx tsx scripts/ci-reset-pollute.ts
-          npm run dev:reset 2>&1 | tee test-results/dev-reset-2.log
+          SUPABASE_DB_URL="${SUPABASE_DB_URL/127.0.0.1/0.0.0.0}" npm run dev:reset 2>&1 | tee test-results/dev-reset-2.log
+          grep -q 'Resetting remote database' test-results/dev-reset-2.log
           npm run -s dev:size-check > test-results/counts-2.txt
           diff test-results/counts-1.txt test-results/counts-2.txt && echo "counts identical across resets"
           psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -f scripts/demo-checks.sql

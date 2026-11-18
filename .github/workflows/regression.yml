@@ -21,8 +21,9 @@ permissions:
   contents: read
   issues: write
 
+# One writer at a time on hosted dev (dev-reset D6): the dev regression (which rebuilds the database) and deploy-dev (which migrates it) share this group.
 concurrency:
-  group: regression-${{ inputs.target || 'dev' }}
+  group: ${{ (inputs.target || 'dev') == 'dev' && 'dev-db' || format('regression-{0}', inputs.target) }}
   cancel-in-progress: false
 
 env:
@@ -71,8 +72,46 @@ jobs:
         uses: actions/upload-artifact@v4
         with: { name: 'regression-drift', path: test-results/, retention-days: 90, if-no-files-found: warn }
 
+  # dev-reset D2: runs AFTER drift (so drift still proves deploy-dev's incremental apply on the un-reset database) and BEFORE everything that
+  # reads or writes data. Dev only: the job condition and the script's own guard both refuse any other project.
+  reset:
+    needs: [setup, drift]
+    if: always() && needs.setup.outputs.target == 'dev'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      APP_ENV: development
+      SUPABASE_URL: ${{ secrets.DEV_SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.DEV_SUPABASE_SERVICE_ROLE_KEY }}
+      SUPABASE_DB_URL: ${{ secrets.DEV_SUPABASE_DB_URL }}
+      DEV_SUPABASE_PROJECT_REF: ${{ secrets.DEV_SUPABASE_PROJECT_REF }}
+      E2E_FIXTURE_PASSWORD: ${{ secrets.E2E_FIXTURE_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '${{ env.NODE_VERSION }}', cache: npm }
+      - run: npm ci
+      - name: Rebuild dev (migrations + canonical fixtures + demo tenant), then check it holds exactly one run's data
+        run: |
+          mkdir -p test-results
+          reset=1; size=1
+          if npm run -s dev:reset > test-results/dev-reset.log 2>&1; then reset=0; fi
+          cat test-results/dev-reset.log
+          if [ $reset = 0 ]; then
+            if npm run -s dev:size-check > test-results/counts.txt 2> test-results/size-check.err; then size=0; fi
+            cat test-results/counts.txt test-results/size-check.err
+          fi
+          tap() { [ "$1" = 0 ] && echo "ok $2 - $3" || echo "not ok $2 - $3"; }
+          { echo 'TAP version 13'; tap $reset 1 'dev rebuilt from migrations + fixtures + demo tenant'; tap $size 2 'dev holds exactly the one-run baseline'; echo '1..2'; } > test-results/reset.tap
+          [ $reset = 0 ] && [ $size = 0 ]
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: 'regression-reset', path: test-results/, retention-days: 90, if-no-files-found: warn }
+
   web:
-    needs: setup
+    needs: [setup, reset]
+    # reset is skipped for staging/prod; for dev a failed reset stops the run before anything touches the data
+    if: always() && needs.setup.result == 'success' && (needs.reset.result == 'success' || needs.reset.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -89,14 +128,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: '${{ env.NODE_VERSION }}', cache: npm }
       - run: npm ci
-      - name: Reset fixtures (dev only; script refuses any other project)
-        if: needs.setup.outputs.target == 'dev'
-        env:
-          APP_ENV: development
-          SUPABASE_URL: ${{ secrets.DEV_SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.DEV_SUPABASE_SERVICE_ROLE_KEY }}
-          DEV_SUPABASE_PROJECT_REF: ${{ secrets.DEV_SUPABASE_PROJECT_REF }}
-        run: npm run fixtures:reset
+      # Dev fixtures were recreated by the `reset` job (dev-reset); no separate fixtures step is needed here.
       - run: npx playwright install --with-deps chromium
       - name: Playwright (full on dev/staging, smoke only on prod)
         run: |
@@ -139,7 +171,7 @@ jobs:
 
   android:
     needs: [setup, web] # web resets the fixtures first
-    if: always() && needs.setup.outputs.full == 'true'
+    if: always() && needs.setup.outputs.full == 'true' && needs.web.result != 'skipped'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -190,7 +222,7 @@ jobs:
         with: { name: 'regression-android', path: test-results/, retention-days: 90, if-no-files-found: warn }
 
   evidence:
-    needs: [setup, drift, hosted-checks, web, android]
+    needs: [setup, drift, reset, hosted-checks, web, android]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -209,7 +241,7 @@ jobs:
         with: { name: 'regression-evidence-${{ needs.setup.outputs.target }}', path: evidence/, retention-days: 90 }
       - name: Fail if any suite failed
         run: |
-          r='${{ needs.drift.result }} ${{ needs['hosted-checks'].result }} ${{ needs.web.result }} ${{ needs.android.result }}'
+          r='${{ needs.drift.result }} ${{ needs.reset.result }} ${{ needs['hosted-checks'].result }} ${{ needs.web.result }} ${{ needs.android.result }}'
           echo "results: $r"; ! echo "$r" | grep -Eq 'failure|cancelled'
 
   notify:

@@ -10,8 +10,9 @@ on:
 permissions:
   contents: read
 
+# One writer at a time on hosted dev (dev-reset D6): shared with the dev regression, which rebuilds the database.
 concurrency:
-  group: deploy-dev
+  group: dev-db
   cancel-in-progress: false
 
 env:

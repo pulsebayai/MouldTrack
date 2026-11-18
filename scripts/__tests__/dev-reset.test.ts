@@ -19,6 +19,8 @@ const local = {
 describe('dev-reset guard (D4)', () => {
   it('accepts the exact dev project', () => expect(assertResetTarget(dev).mode).toBe('dev'));
   it('accepts the local stack only with APP_ENV=local', () => expect(assertResetTarget(local).mode).toBe('local'));
+  it('accepts 0.0.0.0 as the local database host (CLI remote code path in CI)', () =>
+    expect(assertResetTarget({ ...local, SUPABASE_DB_URL: 'postgresql://postgres:postgres@0.0.0.0:15322/postgres' }).mode).toBe('local'));
   it('accepts a direct db host of the dev project', () =>
     expect(assertResetTarget({ ...dev, SUPABASE_DB_URL: `postgresql://postgres:x@db.${REF}.supabase.co:5432/postgres` }).mode).toBe('dev'));
 
@@ -39,6 +41,7 @@ describe('dev-reset guard (D4)', () => {
     ['development APP_ENV with the local URL', { ...local, APP_ENV: 'development', DEV_SUPABASE_PROJECT_REF: REF }],
     ['local with a hosted db url', { ...local, SUPABASE_DB_URL: dev.SUPABASE_DB_URL }],
     ['local url on another host', { ...local, SUPABASE_URL: 'http://10.0.0.5:15321' }],
+    ['0.0.0.0 as the API URL', { ...local, SUPABASE_URL: 'http://0.0.0.0:15321' }],
     ['https url for local', { ...local, SUPABASE_URL: 'https://127.0.0.1:15321' }],
   ])('refuses: %s', (_name, env) => {
     expect(() => assertResetTarget(env as Record<string, string | undefined>)).toThrow(/^Refusing/);

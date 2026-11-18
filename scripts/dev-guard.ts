@@ -9,6 +9,8 @@ export type ResetEnv = Record<string, string | undefined>;
 export type ResetTarget = { mode: 'local' | 'dev'; supabaseUrl: string; dbUrl: string | null };
 
 const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost']);
+// 0.0.0.0 reaches the same local Postgres on Linux, and makes the Supabase CLI take its remote-database code path (the one hosted dev uses): CI proves both.
+const LOCAL_DB_HOSTS = new Set([...LOCAL_HOSTS, '0.0.0.0']);
 const refuse = (why: string): never => {
   throw new Error(`Refusing: ${why}`);
 };
@@ -36,7 +38,7 @@ export function assertResetTarget(env: ResetEnv, opts: { needDb?: boolean } = {}
 
   if (appEnv === 'local') {
     if (url.protocol !== 'http:' || !LOCAL_HOSTS.has(url.hostname)) refuse('local mode requires a loopback API URL');
-    if (db && !LOCAL_HOSTS.has(db.hostname)) refuse('local mode requires a loopback database URL');
+    if (db && !LOCAL_DB_HOSTS.has(db.hostname)) refuse('local mode requires a loopback database URL');
     return { mode: 'local', supabaseUrl: url.origin, dbUrl: db ? env.SUPABASE_DB_URL! : null };
   }
   const ref = env.DEV_SUPABASE_PROJECT_REF ?? '';
