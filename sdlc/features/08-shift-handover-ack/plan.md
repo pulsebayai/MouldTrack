@@ -62,6 +62,7 @@ Branch: feat/08-shift-handover-ack, rebased on main 9978d02 (06 + dev reset merg
   + API e2e (SUP opening refused before declaring; other SUP denied). Maestro `handover.yaml`.
 - [x] 8. Docs under the locks: architecture (handover model, cross-feature gate rule, compliance = metric 2, D1 enforcement,
   the read that writes `handover_session`), known debt.
+- [x] 8b. Opus final-review fixes S1 (snapshot at first interaction of any kind) and S2 (no-op cover is not a handover change) in `20261118510000_handover_review_fixes.sql`; pgTAP 061 (+8) and new 064 (22).
 - [ ] 9. Rebase on chore/test-reliability, full PR CI, hosted dev proof (dispatch, after the reset), Opus review, AC table, PR.
 
 ## Files that change
@@ -147,3 +148,7 @@ lines, Console tenant detail (label), Jest tests, `e2e/web/handover.spec.ts`, `e
 ### Session log - step 8 (Sonnet, 2026-11-18)
 - Docs under 08's architecture lock: `architecture.md` gained the handover model, the cross-feature gate rule, compliance = product metric 2, D1 enforcement, the read that writes `handover_session`, the dev backfill note, the Core-entities line, decision-log rows and known debt (cover-stale e2e gap, alerts placement, **open R1 staging-gate item**). D10-D13 recorded above. `readings.spec.ts:111` goes to chore/test-reliability (their list). Step 9 not started.
 
+### Session log - step 8b (Sonnet, 2026-11-18)
+- New additive migration `20261118510000_handover_review_fixes.sql` (20261118500000 untouched, already on dev). S1: `app._ho_snapshot` (the same `insert ... on conflict do nothing` rows as the checklist read) is called by `ho_acknowledge`, `ho_refuse`, `ho_declare` and the `rd_opening` gate path; documented rule: snapshot = the value at the supervisor's first interaction with the occurrence; fallback to the current setting only when no interaction exists. S2: `app._ho_owners` sets `since` only when the cover's supervisor differs from the owner before the run (previous cover, else plan owner), using the first cover of the run.
+- Tests first: 061 +8 (plan 51 -> 59; no earlier assertion changed), new 064 (22: declare/ack/refuse/gate without a checklist read, setting changed afterwards, compliance unchanged; no-op cover keeps declaration and `rd_opening`). Run in PR CI only (no local Supabase).
+- Docs: architecture.md handover paragraph updated (snapshot wording, no-op cover rule).

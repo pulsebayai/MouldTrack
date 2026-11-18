@@ -4,7 +4,7 @@
 -- reported before / during the occurrence, closed and resolved issues. Self-contained; rolled back. Phones +91 90000 28xxx.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(51);
+select plan(59);
 
 create temp table ids (k text primary key, v uuid);
 create function pg_temp.id(k text) returns uuid language sql as $$ select v from ids where k = $1 $$;
@@ -156,6 +156,31 @@ select is(pg_temp.items('s2', 'night', date '2026-03-10', pg_temp.ts(date '2026-
 select throws_ok($$ select * from app._ho_owners('50000000-0000-4000-c801-00000000000a', date '2026-03-01', date '2026-06-30') $$, 'P0001', null, 'the date range is bounded (at most 93 days)');
 select is(app._ho_declared_at(null, null, null, now()), false, 'null arguments are not declared');
 select is((select count(*)::int from app.handover_items_at(pg_temp.id('s1'), pg_temp.id('day'), date '2026-03-10', now())), 0, 'asked with the current moment the history rows (inserted with past timestamps) simply do not match: no error');
+
+-- 8b (S2): a cover to the supervisor who already owns the machine just before it is a no-op and does not restart the handover ----------------------
+-- Day 2026-03-14: M1 (plan s1) covered to s1 at 08:00 (no-op); M2 (plan s1) covered to s2 at 07:00 and again to s2 at 08:00 (the first cover of the run counts);
+-- M3 (plan s2) covered to s3 at 07:00 (a real change). Run after the 8b migration; before it the no-op cover set since = 08:00.
+select pg_temp.mk_issue('i8', 'm1', pg_temp.ts(date '2026-03-11', '10:00'), 'open');
+insert into public.assignment_cover (tenant_id, shift_id, shift_date, machine_id, supervisor_id, reason, recorded_by, recorded_at) values
+  (pg_temp.id('tx'), pg_temp.id('day'), date '2026-03-14', pg_temp.id('m1'), pg_temp.id('s1'), 'Confirmed', pg_temp.id('uax'), pg_temp.ts(date '2026-03-14', '08:00')),
+  (pg_temp.id('tx'), pg_temp.id('day'), date '2026-03-14', pg_temp.id('m2'), pg_temp.id('s2'), 'Sup One away', pg_temp.id('uax'), pg_temp.ts(date '2026-03-14', '07:00')),
+  (pg_temp.id('tx'), pg_temp.id('day'), date '2026-03-14', pg_temp.id('m2'), pg_temp.id('s2'), 'Still away', pg_temp.id('uax'), pg_temp.ts(date '2026-03-14', '08:00')),
+  (pg_temp.id('tx'), pg_temp.id('day'), date '2026-03-14', pg_temp.id('m3'), pg_temp.id('s3'), 'Swap', pg_temp.id('uax'), pg_temp.ts(date '2026-03-14', '07:00'));
+create temp table pins2 as select o.* from app._ho_owners(pg_temp.id('tx'), date '2026-03-14', date '2026-03-14', pg_temp.id('day')) o;
+select is((select since from pins2 where machine_id = pg_temp.id('m1')), null, 'S2: a cover to the machine''s current owner leaves since null');
+select is((select handover_start from pins2 where machine_id = pg_temp.id('m1')), pg_temp.ts(date '2026-03-14', '06:00'), 'S2: and the handover start stays the shift start');
+select is((select since from pins2 where machine_id = pg_temp.id('m2')), pg_temp.ts(date '2026-03-14', '07:00'), 'S2: a repeated cover to the same new owner keeps the time of the first cover of the run');
+select is((select since from pins2 where machine_id = pg_temp.id('m3')), pg_temp.ts(date '2026-03-14', '07:00'), 'S2: a real change of supervisor still sets since');
+insert into public.issue_acknowledgement (tenant_id, issue_id, shift_id, shift_date, supervisor_id, kind, remark, at) values
+  (pg_temp.id('tx'), pg_temp.id('i8'), pg_temp.id('day'), date '2026-03-14', pg_temp.id('s1'), 'acknowledged', null, pg_temp.ts(date '2026-03-14', '06:10'));
+select is((pg_temp.item('s1', 'day', date '2026-03-14', pg_temp.ts(date '2026-03-14', '09:00'), 'i8') ->> 'state'), 'acknowledged', 'S2: the no-op cover leaves the earlier acknowledgement valid');
+insert into public.handover_declaration (tenant_id, shift_id, shift_date, supervisor_id, covered_issue_ids, at) values
+  (pg_temp.id('tx'), pg_temp.id('day'), date '2026-03-14', pg_temp.id('s1'), array[pg_temp.id('i8')], pg_temp.ts(date '2026-03-14', '06:20')),
+  (pg_temp.id('tx'), pg_temp.id('day'), date '2026-03-14', pg_temp.id('s2'), '{}', pg_temp.ts(date '2026-03-14', '06:20')),
+  (pg_temp.id('tx'), pg_temp.id('day'), date '2026-03-14', pg_temp.id('s3'), '{}', pg_temp.ts(date '2026-03-14', '06:20'));
+select is(app._ho_declared_at(pg_temp.id('s1'), pg_temp.id('day'), date '2026-03-14', pg_temp.ts(date '2026-03-14', '09:00')), true, 'S2: the no-op cover leaves the declaration valid');
+select is(app._ho_declared_at(pg_temp.id('s3'), pg_temp.id('day'), date '2026-03-14', pg_temp.ts(date '2026-03-14', '09:00')), false, 'S2: a real cover to a different supervisor still makes the declaration stale (s3)');
+select is(app._ho_declared_at(pg_temp.id('s2'), pg_temp.id('day'), date '2026-03-14', pg_temp.ts(date '2026-03-14', '09:00')), false, 'S2: and so does the first cover of a repeated run (s2)');
 
 select * from finish();
 rollback;
