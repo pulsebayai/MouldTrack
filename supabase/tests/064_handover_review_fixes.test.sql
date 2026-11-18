@@ -3,7 +3,7 @@
 -- current owner) does not make the declaration stale for rd_opening. Self-contained; rolled back. Phones +91 90000 28400-28409.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(22);
+select plan(23);
 
 create temp table ids (k text primary key, v uuid);
 create temp table dates (k text primary key, d date);
@@ -84,7 +84,7 @@ grant select on ids, dates to authenticated, anon;
 create function pg_temp.sessions(k text) returns text language sql as $$
   select coalesce(string_agg(overdue_minutes::text, ',' order by handover_start), '-') from public.handover_session where shift_id = pg_temp.id('sh_' || k) $$;
 create function pg_temp.comp(k text) returns text language sql as $$
-  select coalesce((select c.reason || '/' || c.compliant::text from app.handover_compliance_at(pg_temp.id('tx'), pg_temp.d(k), pg_temp.d(k), now()) c where c.shift_id = pg_temp.id('sh_' || k)), '-') $$;
+  select coalesce((select coalesce(c.reason, 'ok') || '/' || c.compliant::text || '/' || c.overdue_acks::text from app.handover_compliance_at(pg_temp.id('tx'), pg_temp.d(k), pg_temp.d(k), now()) c where c.shift_id = pg_temp.id('sh_' || k)), '-') $$;
 
 -- Shifts that started 5 h ago and ended 4 h ago (so the 60-minute deadline has long passed and compliance counts them).
 select pg_temp.mk('d1', -300, 1, 's1');                                     -- declare, no checklist read, no issues
@@ -108,16 +108,17 @@ select is(public.rd_opening(pg_temp.rq(4), pg_temp.id('m_g1'), pg_temp.id('sh_g1
 select is(pg_temp.sessions('g1'), '60', 'S1: the rd_opening gate path froze the overdue minutes');
 select is(public.ho_declare(pg_temp.rq(1), pg_temp.id('sh_d1'), pg_temp.d('d1')) ->> 'already', 'true', 'a replay of the declare returns the first outcome');
 select is(pg_temp.sessions('d1'), '60', 'and writes no second session');
-select is(pg_temp.comp('d1'), 'late/false', 'S1: declared 4 h after the start against 60 minutes: late');
+select is(pg_temp.comp('d1'), 'late/false/0', 'S1: declared 4 h after the start against 60 minutes: late');
+select is(pg_temp.comp('a1'), 'no_declaration/false/1', 'S1: the acknowledgement made 4 h after the start is overdue against 60 minutes');
 
 -- the owner relaxes the setting afterwards
 select pg_temp.as_user('uax');
 select is(public.ho_set_overdue(pg_temp.rq(5), 480) ->> 'ok', 'true', 'the Unit Admin raises the overdue minutes to 480');
-select is(pg_temp.comp('d1'), 'late/false', 'S1: compliance is unchanged (the first interaction froze 60)');
-select is(pg_temp.comp('a1'), 'late/false', 'S1: also for the acknowledged occurrence');
+select is(pg_temp.comp('d1'), 'late/false/0', 'S1: compliance is unchanged (the first interaction froze 60)');
+select is(pg_temp.comp('a1'), 'no_declaration/false/1', 'S1: also for the acknowledged occurrence (still one overdue acknowledgement)');
 select is(pg_temp.sessions('r1'), '60', 'S1: the session still holds 60');
 select is(pg_temp.sessions('z1'), '-', 'an occurrence with no interaction has no session (it is no_declaration whatever the minutes)');
-select is(pg_temp.comp('z1'), 'no_declaration/false', 'and reads as no declaration');
+select is(pg_temp.comp('z1'), 'no_declaration/false/0', 'and reads as no declaration');
 
 -- S2: a cover to the machine's current owner keeps the declaration valid for rd_opening
 select pg_temp.as_user('s1');
