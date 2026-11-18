@@ -53,6 +53,7 @@ create table public.production_reading (
   reject integer check (reject between 0 and 10000000),
   remarks text check (remarks = btrim(remarks) and length(remarks) between 1 and 500),
   late boolean not null,
+  early boolean not null default false, -- 8a R5: a closing submitted more than 30 minutes before the occurrence ends (stored, like late)
   entered_by_ua boolean not null default false,
   supersedes_id uuid,
   correction_reason text check (correction_reason = btrim(correction_reason) and length(correction_reason) between 1 and 200),
@@ -68,6 +69,7 @@ create table public.production_reading (
   constraint production_reading_shape check (
     (kind = 'opening' and product_id is not null and good is null and reject is null)
     or (kind = 'closing' and product_id is null and good is not null and reject is not null)),
+  constraint production_reading_early_closing_only check (not early or kind = 'closing'),
   constraint production_reading_correction_reason check ((supersedes_id is null) = (correction_reason is null))
 );
 -- One original reading per kind and machine-occurrence, and every reading is superseded at most once: the chain of corrections is linear.
@@ -106,6 +108,7 @@ create table public.production_summary (
   over_reported boolean not null,
   late_opening boolean not null,
   late_closing boolean not null,
+  early_closing boolean not null default false,
   entered_by_ua boolean not null,
   recorded_by uuid,
   recorded_at timestamptz not null default clock_timestamp(),
@@ -497,6 +500,14 @@ begin
 end
 $$;
 
+-- 8a R5: a closing is Early when submitted more than 30 minutes before the occurrence ends (accepted and flagged, never refused).
+create function app._rd_is_early(p_end timestamptz, p_at timestamptz)
+returns boolean
+language sql
+immutable
+set search_path = ''
+as $$ select p_at < p_end - interval '30 minutes' $$;
+
 create function app._rd_counter_ok(p_value bigint, p_field text, p_label text)
 returns void
 language plpgsql
@@ -595,11 +606,11 @@ begin
   insert into public.production_summary (
     tenant_id, machine_id, shift_id, shift_date, calc_version, product_id, counter_unit, cavities, counter_max, opening_reading_id, closing_reading_id,
     opening_counter, closing_counter, good, reject, target, movement_units, movement_pieces, unaccounted, attainment_pct,
-    rollover, needs_review, over_reported, late_opening, late_closing, entered_by_ua, recorded_by, request_id)
+    rollover, needs_review, over_reported, late_opening, late_closing, early_closing, entered_by_ua, recorded_by, request_id)
   values (
     p_tenant, p_machine, p_shift, p_date, c_version, o.product_id, m.counter_unit, v_cav, m.counter_max, o.id, c.id,
     o.counter_value, c.counter_value, c.good, c.reject, v_target, v_units, v_pieces, v_unacc, v_att,
-    v_rollover, v_review, coalesce(c.good + c.reject > v_pieces, false), o.late, c.late, (o.entered_by_ua or c.entered_by_ua), p_actor, p_request)
+    v_rollover, v_review, coalesce(c.good + c.reject > v_pieces, false), o.late, c.late, c.early, (o.entered_by_ua or c.entered_by_ua), p_actor, p_request)
   returning id into v_id;
   return v_id;
 end
@@ -641,6 +652,7 @@ begin
 
   v_deny := app._rd_check(a, p_machine_id, p_shift_id, p_shift_date, c_src);
   if v_deny is not null then return v_deny; end if;
+  if p_product_id is null then perform app._pm_fail('validation', 'Choose the product', 'product_id'); end if;
   v_own := app._pm_owned('product', p_product_id, v_tenant);
   if v_own <> 'ok' then return app._pm_deny(a, v_own, 'product', p_product_id, c_src); end if;
   perform app._rd_counter_ok(p_counter, 'counter', 'Counter');
@@ -653,13 +665,13 @@ begin
   if p.retired_at is not null then perform app._pm_fail('guard', 'This product is retired', 'product_id'); end if;
   if s.retired_at is not null then perform app._pm_fail('guard', 'This shift is retired', 'shift_retired'); end if;
 
-  -- D5: allowed from 30 minutes before the occurrence starts until it ends.
+  -- D5 (8a R4): allowed from 30 minutes before the occurrence starts until 12 hours after it ends (late readings are accepted and flagged Late).
   v_w := app.shift_window(p_shift_id, p_shift_date);
   if now() < lower(v_w) - interval '30 minutes' then
     perform app._pm_fail('guard', 'The opening reading opens 30 minutes before the shift starts', 'window_not_open');
   end if;
-  if now() >= upper(v_w) then
-    perform app._pm_fail('guard', 'This shift has ended; ask a Unit Admin to record the opening', 'window_closed');
+  if now() > upper(v_w) + interval '12 hours' then
+    perform app._pm_fail('guard', 'The opening window (12 hours after the shift) has passed', 'window_closed');
   end if;
   select * into cur from app._rd_current(p_machine_id, p_shift_id, p_shift_date, 'opening');
   if cur.id is not null then
@@ -696,7 +708,9 @@ declare
   v_w tstzrange;
   o public.production_reading;
   cur public.production_reading;
+  s public.shift;
   v_late boolean;
+  v_early boolean;
   v_ua boolean;
   v_id uuid;
   v_summary uuid;
@@ -717,6 +731,9 @@ begin
   v_remarks := app._rd_remarks(p_remarks);
 
   select * into m from public.machine x where x.id = p_machine_id;
+  select * into s from public.shift x where x.id = p_shift_id;
+  if m.retired_at is not null then perform app._pm_fail('guard', 'This machine is retired', 'machine_retired'); end if;
+  if s.retired_at is not null then perform app._pm_fail('guard', 'This shift is retired', 'shift_retired'); end if;
   select * into o from app._rd_current(p_machine_id, p_shift_id, p_shift_date, 'opening');
   if o.id is null then perform app._pm_fail('guard', 'Record the opening reading first', 'no_opening'); end if;
   -- D5: allowed from the opening until 12 hours after the occurrence ends.
@@ -730,16 +747,17 @@ begin
   end if;
 
   v_late := app._rd_is_late(upper(v_w), now());
+  v_early := app._rd_is_early(upper(v_w), now());
   v_ua := a->>'role' = 'unit_admin';
-  insert into public.production_reading (tenant_id, machine_id, shift_id, shift_date, kind, counter_value, good, reject, remarks, late, entered_by_ua, recorded_by, recorded_at, request_id)
-  values (v_tenant, p_machine_id, p_shift_id, p_shift_date, 'closing', p_counter, p_good, p_reject, v_remarks, v_late, v_ua, (a->>'actor')::uuid, now(), p_request_id)
+  insert into public.production_reading (tenant_id, machine_id, shift_id, shift_date, kind, counter_value, good, reject, remarks, late, early, entered_by_ua, recorded_by, recorded_at, request_id)
+  values (v_tenant, p_machine_id, p_shift_id, p_shift_date, 'closing', p_counter, p_good, p_reject, v_remarks, v_late, v_early, v_ua, (a->>'actor')::uuid, now(), p_request_id)
   returning id into v_id;
   v_summary := app._rd_compute_summary(v_tenant, (a->>'actor')::uuid, p_machine_id, p_shift_id, p_shift_date, p_request_id);
   perform app._pm_audit(a, 'reading.closing', 'production_reading', v_id, null,
     jsonb_build_object('machine_code', m.code, 'shift_id', p_shift_id, 'shift_date', p_shift_date, 'counter', p_counter, 'good', p_good, 'reject', p_reject,
-                       'late', v_late, 'entered_by_ua', v_ua, 'summary_id', v_summary),
+                       'late', v_late, 'early', v_early, 'entered_by_ua', v_ua, 'summary_id', v_summary),
     p_request_id, c_src);
-  return jsonb_build_object('ok', true, 'id', v_id, 'late', v_late, 'entered_by_ua', v_ua, 'summary_id', v_summary);
+  return jsonb_build_object('ok', true, 'id', v_id, 'late', v_late, 'early', v_early, 'entered_by_ua', v_ua, 'summary_id', v_summary);
 end
 $$;
 
@@ -764,6 +782,7 @@ declare
   cur public.production_reading;
   m public.machine;
   p public.product;
+  s public.shift;
   v_ua boolean;
   v_id uuid;
   v_summary uuid;
@@ -788,6 +807,7 @@ begin
   v_remarks := app._rd_remarks(p_remarks);
   if old.kind = 'opening' then
     if p_good is not null or p_reject is not null then perform app._pm_fail('validation', 'An opening reading has no good or reject quantity', 'good'); end if;
+    if p_product_id is null then perform app._pm_fail('validation', 'Choose the product', 'product_id'); end if;
     v_own := app._pm_owned('product', p_product_id, v_tenant);
     if v_own <> 'ok' then return app._pm_deny(a, v_own, 'product', p_product_id, c_src); end if;
     select * into p from public.product x where x.id = p_product_id;
@@ -808,10 +828,13 @@ begin
   end if;
 
   select * into m from public.machine x where x.id = old.machine_id;
+  select * into s from public.shift x where x.id = old.shift_id;
+  if m.retired_at is not null then perform app._pm_fail('guard', 'This machine is retired', 'machine_retired'); end if;
+  if s.retired_at is not null then perform app._pm_fail('guard', 'This shift is retired', 'shift_retired'); end if;
   v_ua := a->>'role' = 'unit_admin';
-  insert into public.production_reading (tenant_id, machine_id, shift_id, shift_date, kind, product_id, counter_value, good, reject, remarks, late, entered_by_ua,
+  insert into public.production_reading (tenant_id, machine_id, shift_id, shift_date, kind, product_id, counter_value, good, reject, remarks, late, early, entered_by_ua,
                                          supersedes_id, correction_reason, recorded_by, recorded_at, request_id)
-  values (v_tenant, old.machine_id, old.shift_id, old.shift_date, old.kind, p_product_id, p_counter, p_good, p_reject, v_remarks, old.late, v_ua,
+  values (v_tenant, old.machine_id, old.shift_id, old.shift_date, old.kind, p_product_id, p_counter, p_good, p_reject, v_remarks, old.late, old.early, v_ua,
           old.id, v_reason, (a->>'actor')::uuid, now(), p_request_id)
   returning id into v_id;
   v_summary := app._rd_compute_summary(v_tenant, (a->>'actor')::uuid, old.machine_id, old.shift_id, old.shift_date, p_request_id);
@@ -895,9 +918,9 @@ begin
   ), rd as (
     select mi.*, o.id as o_id, o.counter_value as o_counter, o.product_id as o_product, op.code as o_product_code, o.recorded_at as o_at, o.late as o_late,
            o.entered_by_ua as o_ua, o.remarks as o_remarks,
-           c.id as c_id, c.counter_value as c_counter, c.good as c_good, c.reject as c_reject, c.recorded_at as c_at, c.late as c_late, c.entered_by_ua as c_ua, c.remarks as c_remarks,
+           c.id as c_id, c.counter_value as c_counter, c.good as c_good, c.reject as c_reject, c.recorded_at as c_at, c.late as c_late, c.early as c_early, c.entered_by_ua as c_ua, c.remarks as c_remarks,
            sm.id as s_id, sm.target as s_target, sm.movement_pieces as s_pieces, sm.good as s_good, sm.reject as s_reject, sm.unaccounted as s_unacc, sm.attainment_pct as s_att,
-           sm.rollover as s_roll, sm.needs_review as s_review, sm.over_reported as s_over,
+           sm.rollover as s_roll, sm.needs_review as s_review, sm.over_reported as s_over, sm.early_closing as s_early,
            dp.product_id as default_product,
            lower(app._rd_window(mi.start_time, mi.end_time, mi.shift_date + 1, mi.tz)) as next_start
       from mine mi
@@ -912,7 +935,9 @@ begin
                           where x.machine_id = mi.machine_id and x.shift_id = mi.shift_id and x.shift_date = mi.shift_date
                           order by x.recorded_at desc, x.id desc limit 1) sm on true
       left join lateral (select r.product_id from public.production_reading r join public.product p on p.id = r.product_id and p.retired_at is null
-                          where r.machine_id = mi.machine_id and r.kind = 'opening' order by r.recorded_at desc, r.id desc limit 1) dp on true
+                          join public.shift hs on hs.id = r.shift_id
+                          where r.machine_id = mi.machine_id and r.kind = 'opening' and not exists (select 1 from public.production_reading n where n.supersedes_id = r.id)
+                          order by r.shift_date desc, hs.start_time desc, r.recorded_at desc, r.id desc limit 1) dp on true
   ), mach as (
     select x.shift_id, x.name, x.start_time, x.end_time, x.shift_date, x.w, x.running,
            jsonb_build_object(
@@ -921,16 +946,16 @@ begin
                            when x.o_id is not null then case when p_at >= upper(x.w) then 'closing_due' else 'opening_done' end
                            when p_at >= upper(x.w) then 'opening_missed'
                            else 'opening_due' end,
-             'can_open', (x.o_id is null and p_at >= lower(x.w) - interval '30 minutes' and p_at < upper(x.w)),
+             'can_open', (x.o_id is null and p_at >= lower(x.w) - interval '30 minutes' and p_at <= upper(x.w) + interval '12 hours'),
              'can_close', (x.o_id is not null and x.c_id is null and p_at <= upper(x.w) + interval '12 hours'),
              'can_correct', ((x.o_id is not null or x.c_id is not null) and p_at < x.next_start),
              'default_product_id', x.default_product,
              'opening', case when x.o_id is null then null else jsonb_build_object('id', x.o_id, 'counter', x.o_counter, 'product_id', x.o_product, 'product_code', x.o_product_code,
                           'recorded_at', x.o_at, 'late', x.o_late, 'entered_by_ua', x.o_ua, 'remarks', x.o_remarks) end,
              'closing', case when x.c_id is null then null else jsonb_build_object('id', x.c_id, 'counter', x.c_counter, 'good', x.c_good, 'reject', x.c_reject,
-                          'recorded_at', x.c_at, 'late', x.c_late, 'entered_by_ua', x.c_ua, 'remarks', x.c_remarks) end,
+                          'recorded_at', x.c_at, 'late', x.c_late, 'early', x.c_early, 'entered_by_ua', x.c_ua, 'remarks', x.c_remarks) end,
              'summary', case when x.s_id is null then null else jsonb_build_object('id', x.s_id, 'target', x.s_target, 'movement_pieces', x.s_pieces, 'good', x.s_good,
-                          'reject', x.s_reject, 'unaccounted', x.s_unacc, 'attainment_pct', x.s_att, 'rollover', x.s_roll, 'needs_review', x.s_review, 'over_reported', x.s_over) end
+                          'reject', x.s_reject, 'unaccounted', x.s_unacc, 'attainment_pct', x.s_att, 'rollover', x.s_roll, 'needs_review', x.s_review, 'over_reported', x.s_over, 'early_closing', x.s_early) end
            ) as j, x.code
       from rd x
   ), occ as (
@@ -997,7 +1022,7 @@ begin
   select count(*)::int into v_n from public.production_summary x where x.machine_id = p_machine and x.shift_id = p_shift and x.shift_date = p_date;
   select coalesce(jsonb_agg(jsonb_build_object(
            'id', r.id, 'kind', r.kind, 'counter', r.counter_value, 'product_id', r.product_id, 'product_code', p.code, 'good', r.good, 'reject', r.reject,
-           'remarks', r.remarks, 'late', r.late, 'entered_by_ua', r.entered_by_ua, 'supersedes_id', r.supersedes_id, 'correction_reason', r.correction_reason,
+           'remarks', r.remarks, 'late', r.late, 'early', r.early, 'entered_by_ua', r.entered_by_ua, 'supersedes_id', r.supersedes_id, 'correction_reason', r.correction_reason,
            'recorded_by', r.recorded_by, 'recorded_by_name', mem.full_name, 'recorded_at', r.recorded_at,
            'current', not exists (select 1 from public.production_reading n where n.supersedes_id = r.id)) order by r.kind desc, r.recorded_at, r.id), '[]'::jsonb)
     into v_hist
@@ -1023,7 +1048,7 @@ begin
                  where t.entity_type = 'production_reading' and t.status = 'ready' and t.tenant_id = v_tenant
                    and t.entity_id in (select (e.x ->> 'id')::uuid from jsonb_array_elements(v_hist) e(x))),
     'allowed', jsonb_build_object(
-      'can_open', (o.id is null and p_at >= lower(v_w) - interval '30 minutes' and p_at < upper(v_w) and m.retired_at is null and s.retired_at is null),
+      'can_open', (o.id is null and p_at >= lower(v_w) - interval '30 minutes' and p_at <= upper(v_w) + interval '12 hours' and m.retired_at is null and s.retired_at is null),
       'can_close', (o.id is not null and c.id is null and p_at <= upper(v_w) + interval '12 hours'),
       'can_correct', ((o.id is not null or c.id is not null) and (a->>'role' = 'unit_admin' or p_at < v_next))));
 end
@@ -1082,7 +1107,7 @@ begin
   ), rd as (
     select x.*, mem.full_name as owner_name,
            o.id as o_id, o.product_id as o_product, op.code as o_product_code, o.late as o_late, o.entered_by_ua as o_ua, o.counter_value as o_counter,
-           c.id as c_id, c.late as c_late, c.entered_by_ua as c_ua, c.counter_value as c_counter,
+           c.id as c_id, c.late as c_late, c.early as c_early, c.entered_by_ua as c_ua, c.counter_value as c_counter,
            sm.id as s_id, sm.target as s_target, sm.movement_pieces as s_pieces, sm.good as s_good, sm.reject as s_reject, sm.unaccounted as s_unacc,
            sm.attainment_pct as s_att, sm.rollover as s_roll, sm.needs_review as s_review, sm.over_reported as s_over,
            dp.product_id as default_product
@@ -1099,24 +1124,26 @@ begin
                           where y.machine_id = x.machine_id and y.shift_id = x.shift_id and y.shift_date = x.shift_date
                           order by y.recorded_at desc, y.id desc limit 1) sm on true
       left join lateral (select r.product_id from public.production_reading r join public.product p on p.id = r.product_id and p.retired_at is null
-                          where o.id is null and r.machine_id = x.machine_id and r.kind = 'opening' order by r.recorded_at desc, r.id desc limit 1) dp on true
+                          join public.shift hs on hs.id = r.shift_id
+                          where o.id is null and r.machine_id = x.machine_id and r.kind = 'opening' and not exists (select 1 from public.production_reading n where n.supersedes_id = r.id)
+                          order by r.shift_date desc, hs.start_time desc, r.recorded_at desc, r.id desc limit 1) dp on true
   ), calc as (
     select r.*,
            coalesce(r.s_target, case when coalesce(r.o_product, r.default_product) is not null
                                      then app.effective_target(r.machine_id, coalesce(r.o_product, r.default_product), r.shift_id, r.shift_date) end) as target,
            (r.s_target is null and r.o_id is null and r.default_product is not null) as target_assumed,
            case when r.o_id is null then 'missing' when r.o_late then 'late' else 'on_time' end as o_status,
-           case when r.c_id is null then 'missing' when r.c_late then 'late' else 'on_time' end as c_status
+           case when r.c_id is null then 'missing' when r.c_late then 'late' when r.c_early then 'early' else 'on_time' end as c_status
       from rd r
   ), shaped as (
-    select k.shift_id, k.name, k.start_time, k.end_time, k.shift_date, k.w, k.rn, k.code, k.target, k.o_status, k.c_status, k.c_id, k.s_good,
+    select k.shift_id, k.name, k.start_time, k.end_time, k.shift_date, k.w, k.rn, k.code, k.target, k.target_assumed, k.o_status, k.c_status, k.c_id, k.s_good,
            jsonb_build_object(
              'machine_id', k.machine_id, 'code', k.code, 'name', k.machine_name, 'counter_unit', k.counter_unit, 'owner_id', k.owner_id, 'owner_name', k.owner_name,
              'product_id', k.o_product, 'product_code', k.o_product_code, 'target', k.target, 'target_assumed', k.target_assumed,
              'opening_status', k.o_status, 'closing_status', k.c_status, 'opening_counter', k.o_counter, 'closing_counter', k.c_counter,
              'movement_pieces', k.s_pieces, 'good', k.s_good, 'reject', k.s_reject, 'unaccounted', k.s_unacc, 'attainment_pct', k.s_att,
              'flags', to_jsonb(array_remove(array[
-                case when k.o_late then 'late_opening' end, case when k.c_late then 'late_closing' end, case when k.s_roll then 'rollover' end,
+                case when k.o_late then 'late_opening' end, case when k.c_late then 'late_closing' end, case when k.c_early then 'early_closing' end, case when k.s_roll then 'rollover' end,
                 case when k.s_review then 'needs_review' end, case when k.s_over then 'over_reported' end,
                 case when coalesce(k.o_ua, false) or coalesce(k.c_ua, false) then 'entered_by_ua' end], null))) as j
       from calc k
@@ -1128,6 +1155,7 @@ begin
            count(*) filter (where h.c_status = 'on_time') as closings_on_time,
            count(*) filter (where h.o_status = 'on_time' and h.c_status = 'on_time') as both_on_time,
            coalesce(sum(h.target) filter (where h.target is not null), 0) as t_all,
+           coalesce(sum(h.target) filter (where h.target is not null and h.target_assumed), 0) as t_assumed,
            coalesce(sum(h.target) filter (where h.target is not null and h.c_id is not null), 0) as t_closed,
            coalesce(sum(h.s_good) filter (where h.c_id is not null), 0) as g_closed,
            coalesce(sum(h.s_good) filter (where h.c_id is not null and h.target is not null), 0) as g_closed_t
@@ -1135,7 +1163,7 @@ begin
   )
   select coalesce(jsonb_agg(jsonb_build_object(
            'shift', jsonb_build_object('id', g.shift_id, 'name', g.name, 'start_time', to_char(g.start_time, 'HH24:MI'), 'end_time', to_char(g.end_time, 'HH24:MI')),
-           'shift_date', g.shift_date, 'starts_at', lower(g.w), 'ends_at', upper(g.w), 'running', (g.w @> p_at), 'current', (g.rn = 1), 'machines', g.machines,
+           'shift_date', g.shift_date, 'starts_at', lower(g.w), 'ends_at', upper(g.w), 'running', (g.w @> p_at), 'current', (g.rn = 1), 'machines', g.machines, 'assumed_target', g.t_assumed,
            'totals', jsonb_build_object('machines_expected', g.expected, 'openings_on_time', g.openings_on_time, 'closings_on_time', g.closings_on_time,
                                         'both_on_time', g.both_on_time, 'target', g.t_all, 'target_closed', g.t_closed, 'good', g.g_closed,
                                         'attainment_pct', case when g.t_closed > 0 then round(g.g_closed_t * 100.0 / g.t_closed, 2) end))
@@ -1213,7 +1241,7 @@ begin
       cross join lateral (select (p_from + g.n) as d from generate_series(0, p_to - p_from) as g(n)) d
      where s.tenant_id = p_tenant
   ), ended as (
-    select o.* from occ o where upper(o.w) <= p_at and (o.s_retired is null or o.s_retired >= upper(o.w))
+    select o.* from occ o where upper(o.w) + interval '30 minutes' <= p_at and (o.s_retired is null or o.s_retired >= upper(o.w))
   ), owned as (
     select e.shift_id, e.shift_date, m.id as machine_id
       from ended e
@@ -1227,12 +1255,12 @@ begin
      where (case when cv.found then cv.supervisor_id else pv.supervisor_id end) is not null
   )
   select count(*)::bigint,
-         count(*) filter (where o.id is not null and not o.late and c.id is not null and not c.late)::bigint
+         count(*) filter (where o.id is not null and not o.late and c.id is not null and not c.late and not c.early)::bigint
     from owned w
     left join lateral (select r.id, r.late from public.production_reading r
                         where r.machine_id = w.machine_id and r.shift_id = w.shift_id and r.shift_date = w.shift_date and r.kind = 'opening'
                           and not exists (select 1 from public.production_reading n where n.supersedes_id = r.id) limit 1) o on true
-    left join lateral (select r.id, r.late from public.production_reading r
+    left join lateral (select r.id, r.late, r.early from public.production_reading r
                         where r.machine_id = w.machine_id and r.shift_id = w.shift_id and r.shift_date = w.shift_date and r.kind = 'closing'
                           and not exists (select 1 from public.production_reading n where n.supersedes_id = r.id) limit 1) c on true;
 end
@@ -1322,6 +1350,10 @@ begin
     return app._pm_deny(a, 'not_owner', 'production_reading', p_reading_id, c_src);
   end if;
 
+  if exists (select 1 from public.production_reading n where n.supersedes_id = p_reading_id) then
+    perform app._pm_fail('guard', 'This reading was corrected; attach the photo to the latest reading', 'not_current');
+  end if;
+
   v_ext := case lower(btrim(p_mime)) when 'image/jpeg' then 'jpg' when 'image/png' then 'png' when 'image/webp' then 'webp' end;
   if v_ext is null then perform app._pm_fail('validation', 'Photos must be JPEG, PNG or WebP', 'mime'); end if;
   if p_size is null or p_size < 1 or p_size > 5242880 then perform app._pm_fail('validation', 'A photo must be 5 MB or smaller', 'size'); end if;
@@ -1389,6 +1421,12 @@ begin
   end if;
 
   select * into r from public.production_reading x where x.id = att.parent_id;
+  if exists (select 1 from public.production_reading n where n.supersedes_id = r.id) then
+    perform app._pm_fail('guard', 'This reading was corrected; attach the photo to the latest reading', 'not_current');
+  end if;
+  if (select count(*) from public.attachment x where x.parent_id = r.id and x.entity_type = 'production_reading' and x.status = 'ready') >= 3 then
+    perform app._pm_fail('guard', 'This reading already has 3 photos', 'photo_limit');
+  end if;
   update public.attachment x set status = 'ready', ready_at = now() where x.id = att.id;
   perform app._pm_audit(a, 'attachment.added', 'attachment', att.id, null,
     jsonb_build_object('reading_id', r.id, 'kind', r.kind, 'mime', att.mime, 'size_bytes', att.size_bytes, 'sha256', att.sha256), p_request_id, c_src);

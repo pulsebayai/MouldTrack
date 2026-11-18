@@ -183,7 +183,7 @@ select set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-ba00-0000000
 -- D14 (06): pages 0..9 of pa_audit (bounded) instead of page 0 only, so adding client RPCs cannot overflow one page of 50; the condition is unchanged.
 select is((select count(*)::int from generate_series(0, 9) pg(n) cross join lateral public.pa_audit(pg.n) a where a.action = 'access.denied' and a.source in (select 'rpc:' || proname from public.tap22_rpcs())), (select count(*)::int from public.tap22_rpcs()) + 1,
   'the platform audit lists them: one per discovered RPC plus the inactive SA''s (pa_audit, pages 0..9)');
-select is((select count(*)::int from public.pa_audit(0) where action = 'access.denied' and source in (select 'rpc:' || proname from public.tap22_rpcs()) and tenant_name is not null), 0, 'and they carry no tenant (an SA has none)');
+select is((select count(*)::int from generate_series(0, 9) pg(n) cross join lateral public.pa_audit(pg.n) a where a.action = 'access.denied' and a.source in (select 'rpc:' || proname from public.tap22_rpcs()) and a.tenant_name is not null), 0, 'and they carry no tenant (an SA has none)');
 reset role;
 select is(
   (select count(*)::int from public.audit_event where action = 'access.denied' and reason = 'no_membership' and actor_user_id = '00000000-0000-4000-ba00-0000000000a1'), 0,
@@ -198,7 +198,7 @@ select set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-ba00-0000000
 select is((select count(*)::int from public.audit_event where action = 'tenant.updated'), 0, 'a supervisor does not');
 select set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-ba00-0000000000a1","role":"authenticated"}', true);
 select ok((select count(*) from public.pa_audit(0) where action = 'access.denied' and actor_name = 'SA') >= 3, 'the platform audit lists the SA''s own denials (AC-12)');
-select is((select count(*)::int from public.pa_audit(0) where action = 'user.deactivated'), 0, 'the platform audit never lists tenant users'' own events');
+select is((select count(*)::int from generate_series(0, 9) pg(n) cross join lateral public.pa_audit(pg.n) a where a.action = 'user.deactivated'), 0, 'the platform audit never lists tenant users'' own events');
 reset role;
 
 select * from finish();

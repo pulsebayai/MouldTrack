@@ -5,7 +5,7 @@
 -- on fixed past dates (the readings are fixtures inserted as the table owner). Self-contained; rolled back.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(117);
+select plan(129);
 
 create temp table ids (k text primary key, v uuid);
 create function pg_temp.id(k text) returns uuid language sql as $$ select v from ids where k = $1 $$;
@@ -29,11 +29,11 @@ begin
   values (v, pg_temp.id('tx'), pg_temp.id(mach), pg_temp.id(shft), dd, 'opening', pg_temp.id(prod), counter, late, pg_temp.id(by), at_ts, case when supersedes is not null then pg_temp.id(supersedes) end, case when supersedes is not null then 'fix' end);
   insert into ids values (label, v);
 end $$;
-create function pg_temp.pc(label text, mach text, shft text, dd date, counter bigint, good int, reject int, at_ts timestamptz, late boolean default false, by text default 's1') returns void language plpgsql as $$
+create function pg_temp.pc(label text, mach text, shft text, dd date, counter bigint, good int, reject int, at_ts timestamptz, late boolean default false, by text default 's1', early boolean default false) returns void language plpgsql as $$
 declare v uuid := gen_random_uuid();
 begin
-  insert into public.production_reading (id, tenant_id, machine_id, shift_id, shift_date, kind, counter_value, good, reject, late, recorded_by, recorded_at)
-  values (v, pg_temp.id('tx'), pg_temp.id(mach), pg_temp.id(shft), dd, 'closing', counter, good, reject, late, pg_temp.id(by), at_ts);
+  insert into public.production_reading (id, tenant_id, machine_id, shift_id, shift_date, kind, counter_value, good, reject, late, early, recorded_by, recorded_at)
+  values (v, pg_temp.id('tx'), pg_temp.id(mach), pg_temp.id(shft), dd, 'closing', counter, good, reject, late, early, pg_temp.id(by), at_ts);
   insert into ids values (label, v);
 end $$;
 create function pg_temp.summ(mach text, shft text, dd date) returns uuid language sql as $$
@@ -135,8 +135,16 @@ select pg_temp.po('o8_pp', 'm8', 'day', date '2026-03-08', 1, 'p1', pg_temp.ts(d
 select pg_temp.po('o8_p', 'm8', 'day', date '2026-03-09', 2, 'pret', pg_temp.ts(date '2026-03-09', '06:05'), false, 's2');
 select pg_temp.po('on1_p', 'm1', 'night', date '2026-03-09', 20000, 'p1', pg_temp.ts(date '2026-03-09', '22:05'));
 select pg_temp.pc('cn1_p', 'm1', 'night', date '2026-03-09', 20300, 280, 10, pg_temp.ts(date '2026-03-10', '07:00'), true);
+-- 8a: an older occurrence entered later (N-1), and an early closing on a day of its own (R5)
+select pg_temp.po('o8_q', 'm8', 'day', date '2026-03-07', 3, 'p2', pg_temp.ts(date '2026-03-12', '10:00'), false, 's2');
+select pg_temp.po('o3_e', 'm3', 'day', date '2026-03-24', 5, 'p2', pg_temp.ts(date '2026-03-24', '06:05'), false, 's2');
+select pg_temp.pc('c3_e', 'm3', 'day', date '2026-03-24', 105, 90, 5, pg_temp.ts(date '2026-03-24', '13:45'), false, 's2');
+select pg_temp.po('o8_e', 'm8', 'day', date '2026-03-24', 5, 'p1', pg_temp.ts(date '2026-03-24', '06:05'), false, 's2');
+select pg_temp.pc('c8_e', 'm8', 'day', date '2026-03-24', 105, 90, 5, pg_temp.ts(date '2026-03-24', '12:00'), false, 's2', true);
 select pg_temp.as_user('uax');
 select pg_temp.summ('m1', 'day', date '2026-03-10');
+select pg_temp.summ('m3', 'day', date '2026-03-24');
+select pg_temp.summ('m8', 'day', date '2026-03-24');
 select pg_temp.summ('m1', 'night', date '2026-03-09');
 
 -- Pins to 05 ---------------------------------------------------------------------------------------------------------------------------------------------
@@ -175,7 +183,10 @@ select is(pg_temp.ms(pg_temp.ts(date '2026-03-10', '08:00'), 'day', date '2026-0
 select is(pg_temp.ms(pg_temp.ts(date '2026-03-10', '08:00'), 'day', date '2026-03-10', 'M1') #>> '{closing,good}', '240', 'and the closing''s good quantity');
 select is((pg_temp.ms(pg_temp.ts(date '2026-03-10', '14:10'), 'day', date '2026-03-10', 'M1') ->> 'can_correct')::boolean, true, 'a closed machine can be corrected until the next occurrence starts');
 select is(pg_temp.ms(pg_temp.ts(date '2026-03-10', '14:10'), 'day', date '2026-03-10', 'M2') ->> 'state', 'opening_missed', 'after the end, a machine with no opening is opening_missed');
-select is((pg_temp.ms(pg_temp.ts(date '2026-03-10', '14:10'), 'day', date '2026-03-10', 'M2') ->> 'can_open')::boolean, false, 'and cannot be opened by the supervisor any more');
+select is((pg_temp.ms(pg_temp.ts(date '2026-03-10', '14:10'), 'day', date '2026-03-10', 'M2') ->> 'can_open')::boolean, true, 'R4: but it can still be opened (Late) until 12 hours after the end');
+select is((pg_temp.ms(pg_temp.ts(date '2026-03-11', '02:00'), 'day', date '2026-03-10', 'M2') ->> 'can_open')::boolean, true, 'R4: exactly 12 hours after the end it can still be opened');
+select is((app.reading_detail_at(pg_temp.id('m2'), pg_temp.id('day'), date '2026-03-10', pg_temp.ts(date '2026-03-10', '14:10')) -> 'allowed' ->> 'can_open')::boolean, true, 'R4: the detail agrees after the end');
+select is((app.reading_detail_at(pg_temp.id('m2'), pg_temp.id('day'), date '2026-03-10', pg_temp.ts(date '2026-03-11', '02:00') + interval '1 second') -> 'allowed' ->> 'can_open')::boolean, false, 'R4: and not one second after the 12 hours');
 select pg_temp.as_user('s2');
 select is(pg_temp.codes(pg_temp.ts(date '2026-03-10', '08:00'), 'day', date '2026-03-10'), 'M3,M8', 'the other supervisor sees only their machines');
 select is(pg_temp.ms(pg_temp.ts(date '2026-03-10', '08:00'), 'day', date '2026-03-10', 'M3') ->> 'state', 'opening_done', 'M3: opening done');
@@ -184,6 +195,8 @@ select is((pg_temp.ms(pg_temp.ts(date '2026-03-10', '08:00'), 'day', date '2026-
 select is(pg_temp.ms(pg_temp.ts(date '2026-03-10', '14:10'), 'day', date '2026-03-10', 'M3') ->> 'state', 'closing_due', 'after the end an opening without closing is closing_due');
 select is(pg_temp.ms(pg_temp.ts(date '2026-03-10', '08:00'), 'day', date '2026-03-10', 'M8') ->> 'default_product_id', pg_temp.id('p1')::text, 'a retired product is skipped for the default (P-3 is retired, the older P-1 is used)');
 select is(pg_temp.ms(pg_temp.ts(date '2026-03-10', '08:00'), 'day', date '2026-03-10', 'M3') ->> 'default_product_id', pg_temp.id('p2')::text, 'and the latest opening wins otherwise (P-2 on the 10th)');
+select is(pg_temp.ms(pg_temp.ts(date '2026-03-10', '08:00'), 'day', date '2026-03-10', 'M8') ->> 'default_product_id', pg_temp.id('p1')::text,
+  'N-1: the default follows the occurrence order, not the entry order (an older occurrence entered later, with P-2, does not win)');
 select is(pg_temp.codes(pg_temp.ts(date '2026-03-11', '02:00'), 'day', date '2026-03-10'), 'M3,M8', '12 hours after the end the occurrence is still listed (closing window)');
 select is(pg_temp.codes(pg_temp.ts(date '2026-03-11', '02:00') + interval '1 second', 'day', date '2026-03-10'), '-', 'and one second later it is gone');
 select is(pg_temp.codes(pg_temp.ts(date '2026-03-10', '14:10'), 'night', date '2026-03-10'), '-', 'a supervisor with no machine in the night shift sees nothing for it');
@@ -287,6 +300,12 @@ select is(pg_temp.bm(pg_temp.ts(date '2026-03-10', '15:00'), 'day', date '2026-0
 select is(pg_temp.bm(pg_temp.ts(date '2026-03-10', '15:00'), 'day', date '2026-03-10', 'M5') ->> 'product_code', 'P-1', 'M5 (retired later) shows because it has a reading in the occurrence');
 select is(pg_temp.bm(pg_temp.ts(date '2026-03-10', '15:00'), 'day', date '2026-03-10', 'M8') ->> 'closing_status', 'missing', 'M8 has no closing');
 select is(pg_temp.bm(pg_temp.ts(date '2026-03-10', '15:00'), 'night', date '2026-03-09', 'M1') -> 'flags', '["late_closing"]'::jsonb, 'the night occurrence''s late closing is flagged');
+select is(pg_temp.bm(pg_temp.ts(date '2026-03-24', '15:00'), 'day', date '2026-03-24', 'M8') -> 'flags', '["early_closing"]'::jsonb, 'R5: an early closing is flagged early_closing');
+select is(pg_temp.bm(pg_temp.ts(date '2026-03-24', '15:00'), 'day', date '2026-03-24', 'M8') ->> 'closing_status', 'early', 'R5: with the closing status early');
+select is(pg_temp.bm(pg_temp.ts(date '2026-03-24', '15:00'), 'day', date '2026-03-24', 'M3') ->> 'closing_status', 'on_time', 'R5: 13:45 (15 minutes before the end) is on time');
+select is(pg_temp.bo(pg_temp.ts(date '2026-03-24', '15:00'), 'day', date '2026-03-24') #>> '{totals,closings_on_time}', '1', 'R5: an early closing is not counted as on time in the totals');
+select is(pg_temp.bo(pg_temp.ts(date '2026-03-10', '15:00'), 'day', date '2026-03-10') ->> 'assumed_target', '1200', 'R3 (N-2): the occurrence reports the part of its target that is assumed (M2''s default product), next to totals');
+select is(pg_temp.bo(pg_temp.ts(date '2026-03-10', '15:00'), 'day', date '2026-03-09') ->> 'assumed_target', '0', 'R3: and 0 when none is assumed');
 select is(pg_temp.bo(pg_temp.ts(date '2026-03-10', '15:00'), 'day', date '2026-03-10') -> 'totals', jsonb_build_object('machines_expected', 5, 'openings_on_time', 2, 'closings_on_time', 1, 'both_on_time', 1,
   'target', 2700, 'target_closed', 1000, 'good', 240, 'attainment_pct', 24.00), 'totals: 5 expected, 2 openings and 1 closing on time, target 2700, closed target 1000, good 240, attainment 24.00');
 select is(pg_temp.bo(pg_temp.ts(date '2026-03-10', '15:00'), 'day', date '2026-03-09') #>> '{totals,machines_expected}', '4', 'the previous occurrence has its own totals (M5 is retired and has no reading that day, so 4)');
@@ -314,7 +333,10 @@ select ok((select extract(epoch from t1 - t0) < 10 from vol), 'and the board is 
 select is((select expected || '/' || on_time from app.reading_capture_at(pg_temp.id('tx'), date '2026-03-09', date '2026-03-10', pg_temp.ts(date '2026-03-11', '00:00'))), '11/2',
   'capture 9th..10th at midnight: 11 assigned machine-occurrences ended (day 5 + 5, night of the 9th 1), 2 with both readings on time (M1 day 10th, M3 day 9th)');
 select is((select expected from app.reading_capture_at(pg_temp.id('tx'), date '2026-03-10', date '2026-03-10', pg_temp.ts(date '2026-03-10', '10:00'))), 0::bigint, 'an occurrence that has not ended is not expected yet (and the night of the 9th is outside the range)');
-select is((select expected from app.reading_capture_at(pg_temp.id('tx'), date '2026-03-10', date '2026-03-10', pg_temp.ts(date '2026-03-10', '14:00'))), 5::bigint, 'one that ends exactly at the moment is expected');
+select is((select expected from app.reading_capture_at(pg_temp.id('tx'), date '2026-03-10', date '2026-03-10', pg_temp.ts(date '2026-03-10', '14:29'))), 0::bigint, 'N-4: an occurrence is expected only 30 minutes after its end (14:29 is too early)');
+select is((select expected from app.reading_capture_at(pg_temp.id('tx'), date '2026-03-10', date '2026-03-10', pg_temp.ts(date '2026-03-10', '14:30'))), 5::bigint, 'N-4: and at end + 30 minutes it is expected');
+select is((select expected || '/' || on_time from app.reading_capture_at(pg_temp.id('tx'), date '2026-03-24', date '2026-03-24', pg_temp.ts(date '2026-03-25', '00:00'))), '5/1',
+  'R5: a closing before end - 30 minutes (M8 at 12:00) is not on time although it is not late; M3 closing at 13:45 is');
 select is((select expected from app.reading_capture_at(pg_temp.id('tx'), date '2026-03-17', date '2026-03-17', pg_temp.ts(date '2026-03-18', '00:00'))), 4::bigint,
   'covers apply: on the 17th M1 (covered by S2) and M3, M5, M8 count, M2 (explicitly unassigned) does not; M4 never does; M7 (retired before) does not');
 select is((select on_time from app.reading_capture_at(pg_temp.id('tx'), date '2026-03-09', date '2026-03-09', pg_temp.ts(date '2026-03-11', '00:00'))), 1::bigint, 'on time needs both readings on time: M3 yes; M1''s night closing was late and M2/M8 have no closing');

@@ -5,7 +5,7 @@
 -- calculation is driven on fixed past dates (no clock involved). Self-contained; rolled back.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(60);
+select plan(63);
 
 create temp table ids (k text primary key, v uuid);
 create temp table sums (k text primary key, r jsonb);
@@ -13,7 +13,7 @@ create function pg_temp.id(k text) returns uuid language sql as $$ select v from
 create function pg_temp.as_user(k text) returns void language sql as $$
   select set_config('request.jwt.claims', json_build_object('sub', (select v from ids where ids.k = $1), 'role', 'authenticated')::text, true) $$;
 -- Inserts an opening + a closing for a machine on a shift date and calculates; remembers the summary row under `label`.
-create function pg_temp.run(label text, mach text, dd date, oc bigint, cc bigint, good int, reject int, prod text default 'p1', olate boolean default false, clate boolean default false, ua boolean default false)
+create function pg_temp.run(label text, mach text, dd date, oc bigint, cc bigint, good int, reject int, prod text default 'p1', olate boolean default false, clate boolean default false, ua boolean default false, early boolean default false)
 returns jsonb language plpgsql as $$
 declare
   o uuid := gen_random_uuid();
@@ -23,8 +23,8 @@ declare
 begin
   insert into public.production_reading (id, tenant_id, machine_id, shift_id, shift_date, kind, product_id, counter_value, late, entered_by_ua, recorded_by)
   values (o, pg_temp.id('tx'), pg_temp.id(mach), pg_temp.id('day'), dd, 'opening', pg_temp.id(prod), oc, olate, false, pg_temp.id('uax'));
-  insert into public.production_reading (id, tenant_id, machine_id, shift_id, shift_date, kind, counter_value, good, reject, late, entered_by_ua, recorded_by)
-  values (c, pg_temp.id('tx'), pg_temp.id(mach), pg_temp.id('day'), dd, 'closing', cc, good, reject, clate, ua, pg_temp.id('uax'));
+  insert into public.production_reading (id, tenant_id, machine_id, shift_id, shift_date, kind, counter_value, good, reject, late, early, entered_by_ua, recorded_by)
+  values (c, pg_temp.id('tx'), pg_temp.id(mach), pg_temp.id('day'), dd, 'closing', cc, good, reject, clate, early, ua, pg_temp.id('uax'));
   insert into ids values ('o_' || label, o), ('c_' || label, c);
   sid := app._rd_compute_summary(pg_temp.id('tx'), pg_temp.id('uax'), pg_temp.id(mach), pg_temp.id('day'), dd, null);
   select to_jsonb(s) into r from public.production_summary s where s.id = sid;
@@ -177,6 +177,13 @@ select is(pg_temp.s('shots', 'movement_pieces') || '/' || pg_temp.s('shots', 'un
   'fixture FX-MU1 (shots, 4 cavities, opening 1000, closing 1250, good 950, reject 30, target 1200): 1000 pieces, unaccounted 20, 79.17 %');
 select is(pg_temp.s('roll', 'movement_units') || '/' || pg_temp.s('roll', 'unaccounted') || '/' || pg_temp.s('roll', 'attainment_pct') || '/' || pg_temp.s('roll', 'target') || '/' || pg_temp.s('roll', 'rollover'), '200/40/18.75/800/true',
   'fixture FX-MU2 (pieces, maximum 999999, opening 999900, closing 100, good 150, reject 10, target 800): rollover, 200 units, unaccounted 40, 18.75 %');
+
+-- R5: early closing flag ---------------------------------------------------------------------------------------------------------------------------------------------
+select pg_temp.run('early', 'mn', date '2026-03-26', 0, 100, 90, 0, 'p1', false, false, false, true);
+select is(pg_temp.s('early', 'early_closing'), 'true', 'R5: a closing flagged Early gives a summary with early_closing');
+select pg_temp.run('noearly', 'mn', date '2026-03-27', 0, 100, 90, 0);
+select is(pg_temp.s('noearly', 'early_closing'), 'false', 'and a normal closing does not');
+select is(pg_temp.s('early', 'late_closing'), 'false', 'Early is independent of Late');
 
 -- Append-only and tenancy -------------------------------------------------------------------------------------------------------------------------------------------
 select throws_ok($$ update public.production_summary set good = 0 $$, 'P0001', null, 'a summary cannot be changed');

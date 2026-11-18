@@ -6,7 +6,7 @@
 -- shift times live on, so the tests do not depend on the time of day.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(132);
+select plan(151);
 
 create temp table ids (k text primary key, v uuid);
 create temp table dates (k text primary key, d date);
@@ -122,6 +122,12 @@ select pg_temp.mk('val', 0, 8, 's1');
 select pg_temp.mk('corr', -180, 8, 's1');
 select pg_temp.mk('long', -60, 20, 's1');
 select pg_temp.mk('oth', 0, 8, 's1');
+select pg_temp.mk('lateopen', -180, 2, 's1');
+select pg_temp.mk('lateopen2', -180, 2, 's1');
+select pg_temp.mk('nearend', -450, 8, 's1');
+select pg_temp.mk('retc', -30, 8, 's1', true);
+select pg_temp.mk('retsh', -30, 8, 's1');
+select pg_temp.mk('retcorr', -30, 8, 's1');
 insert into public.assignment_cover (tenant_id, shift_id, shift_date, machine_id, supervisor_id, reason, recorded_by) values
   (pg_temp.id('tx'), pg_temp.id('sh_cover'), pg_temp.d('cover'), pg_temp.id('m_cover'), pg_temp.id('s2'), 'sick', pg_temp.id('uax')),
   (pg_temp.id('tx'), pg_temp.id('sh_uncov'), pg_temp.d('uncov'), pg_temp.id('m_uncov'), null, 'nobody', pg_temp.id('uax'));
@@ -152,9 +158,9 @@ select is(public.rd_opening(pg_temp.rq(3), pg_temp.id('m_late'), pg_temp.id('sh_
 select is((select late from public.production_reading where machine_id = pg_temp.id('m_late')), true, 'the flag is stored with the reading');
 select is(public.rd_opening(pg_temp.rq(4), pg_temp.id('m_pre'), pg_temp.id('sh_pre'), pg_temp.d('pre'), pg_temp.id('p1'), 1000000000000) ->> 'late', 'false', 'an opening up to 30 minutes before the start is allowed (and not late); the counter may be 10^12');
 select is(pg_temp.err($$ select public.rd_opening(pg_temp.rq(5), pg_temp.id('m_early'), pg_temp.id('sh_early'), pg_temp.d('early'), pg_temp.id('p1'), 1) $$) ->> 'field', 'window_not_open', 'earlier than that it is refused');
-select is(pg_temp.err($$ select public.rd_opening(pg_temp.rq(6), pg_temp.id('m_ended'), pg_temp.id('sh_ended'), pg_temp.d('ended'), pg_temp.id('p1'), 1) $$) ->> 'field', 'window_closed', 'after the occurrence ended it is refused');
+select is(pg_temp.err($$ select public.rd_opening(pg_temp.rq(6), pg_temp.id('m_expired'), pg_temp.id('sh_expired'), pg_temp.d('expired'), pg_temp.id('p1'), 1) $$) ->> 'field', 'window_closed', 'more than 12 hours after the occurrence ended an opening is refused (R4)');
 select pg_temp.as_user('uax');
-select is(pg_temp.err($$ select public.rd_opening(pg_temp.rq(7), pg_temp.id('m_ended'), pg_temp.id('sh_ended'), pg_temp.d('ended'), pg_temp.id('p1'), 1) $$) ->> 'field', 'window_closed', 'also for a Unit Admin');
+select is(pg_temp.err($$ select public.rd_opening(pg_temp.rq(7), pg_temp.id('m_expired'), pg_temp.id('sh_expired'), pg_temp.d('expired'), pg_temp.id('p1'), 1) $$) ->> 'field', 'window_closed', 'also for a Unit Admin');
 select is(pg_temp.err($$ select public.rd_opening(pg_temp.rq(8), pg_temp.id('m_early'), pg_temp.id('sh_early'), pg_temp.d('early'), pg_temp.id('p1'), 1) $$) ->> 'field', 'window_not_open', 'and too early');
 
 -- Validation -------------------------------------------------------------------------------------------------------------------------------------------
@@ -329,6 +335,45 @@ select pg_temp.as_user('sfresh');
 select is(public.rd_correct(pg_temp.rq(77), pg_temp.id('o_long'), 1, pg_temp.id('p1'), null, null, null, 'x'), '{"ok": false, "code": "not_allowed"}'::jsonb, 'nor one with a temporary password');
 select pg_temp.as_user('uas');
 select is(public.rd_closing(pg_temp.rq(78), pg_temp.id('m_long'), pg_temp.id('sh_long'), pg_temp.d('long'), 1, 1, 1), '{"ok": false, "code": "not_allowed"}'::jsonb, 'a suspended tenant''s Unit Admin cannot close');
+
+-- 8a review fixes: R4 late opening, R5 early closing, R8 nits ---------------------------------------------------------------------------------------------
+select pg_temp.as_user('s1');
+select is(public.rd_opening(pg_temp.rq(201), pg_temp.id('m_lateopen'), pg_temp.id('sh_lateopen'), pg_temp.d('lateopen'), pg_temp.id('p1'), 10) ->> 'late', 'true',
+  'R4: an opening after the shift ended (within 12 hours) is accepted and flagged Late');
+select is(pg_temp.err($$ select public.rd_opening(pg_temp.rq(202), pg_temp.id('m_expired'), pg_temp.id('sh_expired'), pg_temp.d('expired'), pg_temp.id('p1'), 1) $$) ->> 'message', 'The opening window (12 hours after the shift) has passed',
+  'R4: the refusal message names the 12-hour window');
+select is(pg_temp.err($$ select public.rd_closing(pg_temp.rq(203), pg_temp.id('m_noopen'), pg_temp.id('sh_noopen'), pg_temp.d('noopen'), 5, 1, 1) $$) ->> 'field', 'no_opening', 'R4: a closing still needs an opening');
+select pg_temp.as_user('uax');
+select results_eq($$ select (r ->> 'late')::boolean, (r ->> 'entered_by_ua')::boolean from (select public.rd_opening(pg_temp.rq(204), pg_temp.id('m_lateopen2'), pg_temp.id('sh_lateopen2'), pg_temp.d('lateopen2'), pg_temp.id('p1'), 10) as r) q $$,
+  $$ values (true, true) $$, 'R4: a Unit Admin may also record a late opening (entered by a Unit Admin, Late)');
+select is(app.reading_state_at(now()) ->> 'ok', 'true', 'R4: the read still answers');
+
+-- R5: early closing
+select is((select early from public.production_reading where id = pg_temp.id('c_run')), true, 'R5: the closing of a running shift (more than 30 minutes before its end) is stored as Early');
+select is((select early_closing from public.production_summary where machine_id = pg_temp.id('m_run') order by recorded_at, id limit 1), true, 'R5: the summary carries early_closing');
+select is((select late from public.production_reading where id = pg_temp.id('c_run')), false, 'R5: Early is not Late');
+select is((select early from app._rd_current(pg_temp.id('m_run'), pg_temp.id('sh_run'), pg_temp.d('run'), 'closing') ) , true, 'R5: a correction carries the Early flag of the occurrence');
+select is((select early from public.production_reading where kind = 'opening' and machine_id = pg_temp.id('m_run') limit 1), false, 'R5: an opening is never Early');
+select pg_temp.put_open('nearend', 10);
+select is(public.rd_closing(pg_temp.rq(205), pg_temp.id('m_nearend'), pg_temp.id('sh_nearend'), pg_temp.d('nearend'), 20, 9, 1) ->> 'early', 'false', 'R5: a closing within 30 minutes before the end is not Early');
+select is((select early_closing from public.production_summary where machine_id = pg_temp.id('m_nearend')), false, 'and its summary is not flagged');
+select is((select (after ->> 'early')::boolean from public.audit_event where action = 'reading.closing' and entity_id = pg_temp.id('c_run')), true, 'R5: the audit row carries the early flag');
+
+-- R8 N-5: a missing product is a validation error, not a denial
+select set_config('t.nf', pg_temp.n_denied('rpc:rd_opening', 'not_found')::text, true);
+select is(pg_temp.err($$ select public.rd_opening(pg_temp.rq(206), pg_temp.id('m_val'), pg_temp.id('sh_val'), pg_temp.d('val'), null, 5) $$) ->> 'field', 'product_id', 'N-5: opening without a product is a validation error');
+select is(pg_temp.n_denied('rpc:rd_opening', 'not_found'), current_setting('t.nf')::int, 'and is not audited as a denial');
+-- R8 N-6: retired machine / shift in closing and correction
+select pg_temp.put_open('retc', 10);
+select is(pg_temp.err($$ select public.rd_closing(pg_temp.rq(207), pg_temp.id('m_retc'), pg_temp.id('sh_retc'), pg_temp.d('retc'), 20, 1, 1) $$) ->> 'field', 'machine_retired', 'N-6: a retired machine cannot be closed');
+select pg_temp.put_open('retsh', 10);
+update public.shift set retired_at = now() where id = pg_temp.id('sh_retsh');
+select is(pg_temp.err($$ select public.rd_closing(pg_temp.rq(208), pg_temp.id('m_retsh'), pg_temp.id('sh_retsh'), pg_temp.d('retsh'), 20, 1, 1) $$) ->> 'field', 'shift_retired', 'N-6: a retired shift cannot be closed');
+select set_config('t.o_retc', (select id::text from public.production_reading where machine_id = pg_temp.id('m_retc') and kind = 'opening'), true);
+select is(pg_temp.err(format($q$ select public.rd_correct(pg_temp.rq(209), %L, 11, pg_temp.id('p1'), null, null, null, 'fix') $q$, current_setting('t.o_retc'))) ->> 'field', 'machine_retired', 'N-6: nor corrected');
+select pg_temp.put_open('retcorr', 10);
+select is(pg_temp.err(format($q$ select public.rd_correct(pg_temp.rq(210), %L, 11, null, null, null, null, 'fix') $q$, (select id::text from public.production_reading where machine_id = pg_temp.id('m_retcorr') and kind = 'opening'))) ->> 'field', 'product_id',
+  'N-5: correcting an opening without a product is a validation error');
 
 -- Append-only: the RPCs never changed or removed a reading
 select is((select count(*)::int from public.production_reading where id in (pg_temp.id('o_run'), pg_temp.id('c_run')) and counter_value in (1000, 1250)), 2, 'the first readings are unchanged after all the corrections');

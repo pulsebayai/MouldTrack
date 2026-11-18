@@ -3,7 +3,7 @@
 -- the additive redefinition of app_policy.can_see_attachment keeping 07's issue branch. Self-contained; rolled back. Objects are metadata-only rows.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(44);
+select plan(48);
 
 create temp table ids (k text primary key, v uuid);
 create function pg_temp.id(k text) returns uuid language sql as $$ select v from ids where k = $1 $$;
@@ -158,6 +158,24 @@ select pg_temp.png('a3'); select pg_temp.commit_('s2', 'a3');
 select pg_temp.keep('a4', pg_temp.begin_('s2', 'r1'));
 select pg_temp.png('a4'); select pg_temp.commit_('s2', 'a4');
 select is(pg_temp.begin_('s2', 'r1')->>'field', 'photo_limit', 'a reading holds at most 3 photos');
+
+-- N-7: only a current reading takes photos; the cap of 3 is re-checked at commit
+insert into public.production_reading (id, tenant_id, machine_id, shift_id, shift_date, kind, product_id, counter_value, late, recorded_by) values
+  ('56000000-0000-4000-c654-0000000000c1', pg_temp.id('tx'), pg_temp.id('m2'), pg_temp.id('day'), date '2026-03-11', 'opening', pg_temp.id('p1'), 1, false, pg_temp.id('uax')),
+  ('56000000-0000-4000-c654-0000000000d1', pg_temp.id('tx'), pg_temp.id('m2'), pg_temp.id('day'), date '2026-03-12', 'opening', pg_temp.id('p1'), 1, false, pg_temp.id('uax'));
+insert into public.production_reading (id, tenant_id, machine_id, shift_id, shift_date, kind, product_id, counter_value, late, recorded_by, supersedes_id, correction_reason) values
+  ('56000000-0000-4000-c654-0000000000c2', pg_temp.id('tx'), pg_temp.id('m2'), pg_temp.id('day'), date '2026-03-11', 'opening', pg_temp.id('p1'), 2, false, pg_temp.id('uax'),
+   '56000000-0000-4000-c654-0000000000c1', 'fix');
+insert into ids values ('rold', '56000000-0000-4000-c654-0000000000c1'), ('rnew', '56000000-0000-4000-c654-0000000000c2'), ('rcap', '56000000-0000-4000-c654-0000000000d1');
+select is(pg_temp.begin_('uax', 'rold')->>'field', 'not_current', 'N-7: a superseded reading takes no photo');
+select is(pg_temp.begin_('uax', 'rnew')->>'ok', 'true', 'N-7: its current correction does');
+select pg_temp.keep('x1', pg_temp.begin_('uax', 'rcap')); select pg_temp.keep('x2', pg_temp.begin_('uax', 'rcap')); select pg_temp.keep('x3', pg_temp.begin_('uax', 'rcap'));
+select pg_temp.png('x1'); select pg_temp.png('x2'); select pg_temp.png('x3');
+select pg_temp.commit_('uax', 'x1'); select pg_temp.commit_('uax', 'x2');
+select pg_temp.keep('x4', pg_temp.begin_('uax', 'rcap'));
+select pg_temp.png('x4');
+select is(pg_temp.commit_('uax', 'x3')->>'ok', 'true', 'N-7: the third photo commits');
+select is(pg_temp.commit_('uax', 'x4')->>'field', 'photo_limit', 'N-7: a fourth, begun while only two were ready, is refused at commit');
 
 select pg_temp.as_user('uax');
 select is(jsonb_array_length(app.reading_detail_at(pg_temp.id('m1'), pg_temp.id('day'), date '2026-03-10', now()) -> 'photos'), 3, 'reading_detail lists the ready photos of the occurrence''s readings (a1, a3, a4)');
