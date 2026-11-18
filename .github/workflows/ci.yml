@@ -109,8 +109,8 @@ jobs:
     env:
       SUPABASE_EXCLUDE: studio,imgproxy,edge-runtime,logflare,vector,realtime,postgres-meta
       APP_ENV: local
-      MAX_AUDIT_LOG_ROWS: '1000000'
-      MAX_DB_MB: '1000'
+      MAX_AUDIT_LOG_ROWS: '50' # local round-trip: 0 after dev-reset (it clears the log at its end)
+      MAX_DB_MB: '60' # local round-trip: 14-15 MB
       E2E_FIXTURE_PASSWORD: local-e2e-Passw0rd!   # the public local literal (same as supabase/seed.sql), not a secret
     steps:
       - uses: actions/checkout@v4

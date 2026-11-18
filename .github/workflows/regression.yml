@@ -90,7 +90,7 @@ jobs:
       STAGING_SUPABASE_PROJECT_REF: ${{ secrets.STAGING_SUPABASE_PROJECT_REF }}
       E2E_FIXTURE_PASSWORD: ${{ secrets.E2E_FIXTURE_PASSWORD }}
       # S6: bounds on the database after a reset (provisional until the first hosted numbers are in; see plan.md)
-      MAX_AUDIT_LOG_ROWS: '500'
+      MAX_AUDIT_LOG_ROWS: '100'
       MAX_DB_MB: '300'
     steps:
       - uses: actions/checkout@v4

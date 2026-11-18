@@ -25,10 +25,14 @@ timeouts seen in 06's and 07's hosted proofs. Owner: "clean the test data and do
   creates; Storage objects = 0). The baseline lives in the script, computed from `fixtures-reset.ts`'s fixture lists.
   A non-baseline count = red run, so growth can't come back silently.
 - **D6 One writer at a time on dev:** `deploy-dev.yml` and `regression.yml` (dev) share concurrency group `dev-db`
-  (cancel-in-progress false). Cost: a merge during a nightly waits for it (≈ 1 h worst case).
+  (cancel-in-progress false). Cost: a deploy triggered by a merge during a nightly queues behind it (≈ 1 h worst case). GitHub keeps only
+  ONE pending run per group (a newer pending run replaces an older one), so a deploy can be lost: the regression's last job `redeploy` (S1) dispatches
+  deploy-dev on main when the newest successful deploy-dev run is not main's head.
 - **D7 Hosted proofs on feature branches** use the same workflow, so they reset dev to the **branch's** migrations; the
   next nightly resets it back to main's. This also ends the "nightly drift red while an unmerged migration sits on dev"
   problem (drift may still be red on the first nightly after an unmerged proof — documented, expected).
+- **S8 (Opus review) deploy-dev after an unmerged proof:** before `db push`, deploy-dev compares `supabase migration list`; if dev holds a version main
+  lacks it runs `npm run dev:reset` (fixtures + demo included) first, so a merge never fails on remote-only migrations.
 - **D9 Demo tenant (owner option a, 2026-11-18).** After every reset, `scripts/dev-demo-seed` rebuilds one tenant
   **"Demo Plastics (fixture)"** for the owner's manual testing: 1 site (Asia/Kolkata), 2 lines, ~10 machines (mix of pieces/shots,
   one with a counter maximum, one with cavities), ~4 products with targets, Day + Night (overnight) shifts, 1 UA + 2 supervisors
@@ -66,9 +70,15 @@ timeouts seen in 06's and 07's hosted proofs. Owner: "clean the test data and do
   `web`/`android` need `reset`; concurrency group `dev-db` in both workflows (D6).
 - [x] 5. Docs (architecture lock): policy item 2 (nightly reset order, size check, D7), remove the five "accumulates on dev"
   known-debt items (03 console tenants, 04 target history, 05/07 append-only, 06 readings), add D8 debt, decision-log row.
-- [ ] 6. Proof on dev: dispatch `regression` (target dev) on this branch **twice**; both green on the first attempt;
+- [x] 6. Proof on dev (run by Opus, see log): dispatch `regression` (target dev) on this branch **twice**; both green on the first attempt;
   size-check counts identical in both; record run ids. Any web failure → diagnose, no blind re-run.
 - [ ] 7. Review (Opus) → PR with AC table → owner merge.
+
+## Files that change (N7)
+- Workflows: `.github/workflows/ci.yml` (job `reset-roundtrip`), `regression.yml` (jobs `reset`, `redeploy`, gating of `web`/`android`/`hosted-checks`, `notify`), `deploy-dev.yml` (group `dev-db`, rebuild when dev holds remote-only migrations).
+- Scripts (new): `scripts/dev-guard.ts`, `dev-reset.ts`, `dev-size-check.ts`, `dev-demo-spec.ts`, `dev-demo-seed.ts`, `ci-reset-pollute.ts`, `demo-checks.sql`, `dev-bounds.sql`; (edited, additive) `scripts/drift-check.sh` (`--remote-only`), `package.json` (`dev:reset`, `dev:size-check`, `dev:demo-seed`).
+- Tests (new only): `scripts/__tests__/dev-reset.test.ts`, `dev-size-check.test.ts`, `dev-demo-spec.test.ts`, `drift-remote-only.test.ts`. No test from 01-07 or 006 is touched.
+- Docs: `sdlc/product/architecture.md` (policy item 2, environments, known debt, decision log), `sdlc/releases/README.md` (demo logins), this plan. Not touched: `roadmap.md`, `supabase/migrations`, `supabase/seed.sql`, app code.
 
 ## Acceptance
 - AC-1 After any dev run, the next run starts from migrations + canonical fixtures only (size check green with baseline counts).
