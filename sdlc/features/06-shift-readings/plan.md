@@ -74,6 +74,8 @@ AC-1–16 → tests (spec table); full suite green after rebase on 07; dev regre
 - **8a design notes:** `production_reading.early` and `production_summary.early_closing` (default false, `early` only on closings by CHECK) are part of the single migration (unmerged); a correction carries `early` like `late`. `reading_detail` gained `default_product_id` so the form needs no `reading_state` (R1); `today_board` occurrences gained `assumed_target` next to `totals` (totals unchanged: N-2); board `closing_status` gained `early`. `reading_capture_at` counts an occurrence only once `end + 30 min <= p_at` and a closing is on time only when neither late nor early. Default product follows occurrence order over current openings (N-1). Photos: `not_current` refused at begin and commit, 3-photo cap re-checked at commit (N-7). N-6 guards (`machine_retired`, `shift_retired`) in `rd_closing` / `rd_correct`.
 - **N-12 extra files changed by 8a (beyond the Files list):** `src/components/readings/{summary-block,today-board,readings-card,occurrence-view,record-form}.tsx`, `src/components/plant/counter-panel.tsx`, `src/lib/readings.ts`, `src/lib/__tests__/readings.test.ts`, `e2e/maestro/opening-closing.yaml`, `supabase/tests/022_platform_boundary.test.sql` (R6 lines), `supabase/tests/05{1,2,3,4}_*.test.sql`.
 
+- 626bcc9 (Opus docs commit) also contains part of step 8a's client changes (R1–R3, R7, N-8, N-10) by accident; content is correct, message is not.
+
 ## Session log
 ### 2026-11-17
 - Done: intent + spec approved (counter unit per machine, optional max, rollover recorded, good + reject only, photo optional, late accepted + flagged, UA may enter on behalf, SUP correction window until the next occurrence).
