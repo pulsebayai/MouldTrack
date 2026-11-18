@@ -47,7 +47,8 @@ function CorrectForm({ d, entry, onDone, onCancel }: { d: ReadingDetail; entry: 
   const [picked, setPicked] = useState<string | null>(null);
   // N7: the original product stays selected only while it is still active; a retired one starts with nothing chosen and the usual validation message.
   const originalActive = !!entry.product_id && (products.data ?? []).some((p) => p.id === entry.product_id);
-  const productId = picked ?? (originalActive ? entry.product_id : null);
+  // While the product list is still loading the original product stays chosen (a quick save must not fail on latency); once loaded, a retired original is dropped.
+  const productId = picked ?? (entry.kind === 'opening' && products.state === 'ready' && !originalActive ? null : entry.product_id);
   const retiredOriginal = entry.kind === 'opening' && products.state === 'ready' && !originalActive && picked === null;
   const [counter, setCounter] = useState(String(entry.counter));
   const [good, setGood] = useState(entry.good === null ? '' : String(entry.good));

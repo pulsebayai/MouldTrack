@@ -22,7 +22,10 @@ export default class FailureReporter implements Reporter {
             body = '(error-context file unreadable)';
           }
         }
-        parts.push({ name: 'error-context.md (page snapshot)', body: (body ?? '').slice(0, 6000) });
+        // error-context.md lists the test source before the page snapshot: print the snapshot section first, then anything left, bounded.
+        const text = body ?? '';
+        const at = text.indexOf('# Page snapshot');
+        parts.push({ name: 'error-context.md (page snapshot)', body: (at >= 0 ? text.slice(at) : text).slice(0, 7000) });
       }
     }
     const errs = result.errors.map((e) => (e.message ?? '').split('\n').slice(0, 12).join('\n')).join('\n');

@@ -207,6 +207,20 @@ describe('Occurrence detail and correction (AC-6, AC-15)', () => {
     await waitFor(() => expect(rpc).toHaveBeenCalledWith('rd_correct', expect.objectContaining({ p_reading_id: 'r-1', p_product_id: 'p-1' })));
   });
 
+  it('test-reliability: the original product stays chosen while the product list is still loading, so a quick save sends the correction (hosted latency)', async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    const t = shiftClient({ product: () => gate.then(() => ok(P)) }, { reading_detail: rpcOk(detail()), rd_correct: rpcOk({ ok: true, id: 'r-3' }) });
+    await renderWithSession(<OccurrenceView machineId="m-1" shiftId="sh-1" shiftDate="2026-11-18" />, { ctx: sup, client: t.client });
+    await fireEvent.press(await screen.findByTestId('correct-opening'));
+    await fireEvent.changeText(screen.getByTestId('correct-counter'), '12');
+    await fireEvent.changeText(screen.getByTestId('correct-reason'), 'typo');
+    await fireEvent.press(screen.getByTestId('correct-submit')); // the product request has not answered yet
+    await waitFor(() => expect(t.rpc).toHaveBeenCalledWith('rd_correct', expect.objectContaining({ p_reading_id: 'r-1', p_product_id: 'p-1', p_counter: 12 })));
+    expect(screen.queryByTestId('correct-product-error')).toBeNull();
+    release();
+  });
+
   it('offers a correction only when the server allows it', async () => {
     await view(detail({ allowed: { can_open: false, can_close: false, can_correct: false } })).ui;
     await screen.findByTestId('reading-entry-r-1');
