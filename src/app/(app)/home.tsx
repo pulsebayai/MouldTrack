@@ -44,8 +44,10 @@ export default function Home() {
       </Text>
       <Text style={{ fontSize: 15, color: colors.muted }}>{phone ? formatPhone(phone) : ctx.user.email}</Text>
       {ctx.role === 'supervisor' ? <MyShiftCard /> : null}
+      {ctx.role === 'supervisor' ? <Button title="Readings" testID="readings-link" onPress={() => router.push('/readings')} /> : null}
       {ctx.role === 'supervisor' ? <Button title="My issues" testID="issues-link" variant="secondary" onPress={() => router.push('/issues')} /> : null}
       {ctx.role === 'unit_admin' && Platform.OS === 'web' ? <IssueAlertsCard /> : null}
+      {ctx.role === 'unit_admin' && Platform.OS === 'web' ? <Button title="Today" testID="today-link" onPress={() => router.push('/today')} /> : null}
       {ctx.role === 'unit_admin' && Platform.OS === 'web' ? (
         <Button title="Users" testID="users-link" onPress={() => router.push('/users')} />
       ) : null}

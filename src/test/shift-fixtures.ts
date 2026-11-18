@@ -1,4 +1,5 @@
 import type { BoardMachine, MyShift, MyShiftOccurrence, Shift, ShiftBoard, Supervisor } from '@/lib/plant';
+import type { ReadingDetail, ReadingState, StateMachine, TodayBoard } from '@/lib/readings';
 import { ok, plantClient, type Tables } from './plant-fixtures';
 
 export const shift = (i: number, over: Partial<Shift> = {}): Shift => ({
@@ -44,3 +45,19 @@ export function shiftClient(tables: Tables, rpcs: Record<string, RpcHandler> = {
 }
 export const rpcOk = (data: unknown) => ({ data, error: null, status: 200 });
 export { ok };
+
+// ---- 06 readings fixtures ------------------------------------------------------------------------------------------------------------------
+export const stateMachine = (over: Partial<StateMachine> = {}): StateMachine => ({
+  machine_id: 'm-1', code: 'M-1', name: 'Press 1', line: null, counter_unit: 'pieces', counter_max: null, state: 'opening_due', can_open: true, can_close: false, can_correct: false,
+  default_product_id: 'p-1', opening: null, closing: null, summary: null, ...over,
+});
+export const readingState = (machines: StateMachine[]): ReadingState => ({
+  ok: true, state: 'active',
+  occurrences: [{ shift: { id: 'sh-1', name: 'Morning', start_time: '06:00', end_time: '14:00' }, shift_date: '2026-11-18', starts_at: '2026-11-18T00:30:00Z', ends_at: '2026-11-18T08:30:00Z', running: true, machines }],
+});
+export const readingDetail = (over: Partial<ReadingDetail> = {}): ReadingDetail => ({
+  ok: true, machine: { id: 'm-1', code: 'M-1', name: 'Press 1', counter_unit: 'pieces', counter_max: null }, shift: { id: 'sh-1', name: 'Morning', start_time: '06:00', end_time: '14:00' },
+  shift_date: '2026-11-18', starts_at: '2026-11-18T00:30:00Z', ends_at: '2026-11-18T08:30:00Z', owner_id: 's-1', owner_name: 'Sup 1',
+  readings: [], opening: null, closing: null, summary: null, summary_count: 0, photos: [], allowed: { can_open: false, can_close: false, can_correct: false }, ...over,
+});
+export const todayBoard = (over: Partial<TodayBoard> = {}): TodayBoard => ({ ok: true, as_of: '2026-11-18T05:00:00Z', occurrences: [], ...over });

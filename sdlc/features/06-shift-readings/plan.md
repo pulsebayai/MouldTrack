@@ -36,7 +36,7 @@ Batch B with 07 (**07 merges first**). Locks: schema — 06's share (production_
 - [x] 4. **Reads (tests first).** 053: `reading_state_at` states (opening due / done late / closing due / closed) and default product; `today_board_at` (assigned only, current + previous occurrence, totals, flags; UA only); `reading_capture` (on time, late, missing, unassigned excluded, open occurrences excluded). — proof: CI `db`
 - [x] 5. **Fixtures + 022** per D11 (additions only). — proof: CI green
 - [x] 6. **Rebase on 07 (after 07 merges).** Resolve shared files; add attachment entity type `production_reading` + its visibility (owner in that occurrence, UAs) to 07's `can_see_attachment` path via 06's migration (additive redefinition); extend 07's Storage tests with additions for the new entity; full suite green. — proof: CI green
-- [ ] 7. **Client (tests first).** readings.ts; My shift card states/actions (keeping 07's "Report issue"); opening form (product chips with default, counter, optional photo via 07's photo pipeline, remarks), closing form (counter, good, reject), summary card with flags as text; Counter panel in Plant; UA Today board + Home entry; drafts + refresh pattern. — proof: lint/typecheck/test/build
+- [x] 7. **Client (tests first).** readings.ts; My shift card states/actions (keeping 07's "Report issue"); opening form (product chips with default, counter, optional photo via 07's photo pipeline, remarks), closing form (counter, good, reject), summary card with flags as text; Counter panel in Plant; UA Today board + Home entry; drafts + refresh pattern. — proof: lint/typecheck/test/build
 - [ ] 8. **E2E.** web `readings.spec.ts` (SUP opening → closing → summary; correction; UA Today board; counter panel; axe), api `readings.spec.ts` (other SUP denied + audited; UA on behalf; photo on a reading; SA denied), Maestro `opening-closing.yaml` (no photo, as 07 D8). — proof: CI `e2e-web` green
 - [ ] 9. **Hosted proof (dev)** after 07's merge + step 8; then **docs** (architecture.md with the lock: readings model, versioned summary, counter semantics) — proof: run URLs, docs diff
 - [ ] 10. **Review + PR.** sdlc-reviewer, fixes, AC table. — proof: PR CI green
@@ -57,6 +57,7 @@ AC-1–16 → tests (spec table); full suite green after rebase on 07; dev regre
 - Board rule pinned by 053: a retired machine appears on the board only when it has a reading in that occurrence (so M5-style rows show on the day they have data, not on days without).
 
 - D14 applied: 022 test 30 now reads `pa_audit` pages 0..9 and asserts the same condition over the union (only assertion touched). Step 6 photos: `rd_attachment_begin/commit`, `app._rd_can_see_reading`, additive `app_policy.can_see_attachment`, `photos` in `reading_detail`; tests in new 054 (07's 042 untouched, its two-policy and app_policy-count pins still hold).
+- Step 7 deviation: the supervisor's readings live on their own screen `/readings` (button "Readings" on Home) instead of inside the My shift card, because 05's `my-shift.test.tsx` pins the total rpc call count of Home (a second per-minute `reading_state` call would break it) and those tests may not be edited. My shift keeps 07's "Report issue" rows untouched. `src/test/fake-db.ts` has no `.limit()`, so the cavity history uses `.range(0, 99)`.
 
 ## Session log
 ### 2026-11-17
@@ -76,3 +77,4 @@ AC-1–16 → tests (spec table); full suite green after rebase on 07; dev regre
 
 ### 2026-11-18 (Sonnet, step 6 finished)
 - Done: D14 edit to 022; photo RPCs + visibility (patch applied, patch file removed); 054 (44 tests). Local pgTAP 28 files / 2178 tests green (with and without seed).
+- Step 7 done: `src/lib/readings.ts` (+`reading-draft.ts`, `uploadReadingPhoto` in photos.ts), screens `/readings`, `/readings/record`, `/readings/occurrence`, `/today`, Counter panel in the machine form, Home buttons (Readings for supervisors, Today for web Unit Admins). Jest 63 suites / 800 tests; lint, typecheck clean. Local `npm run build` needs EXPO_PUBLIC_SUPABASE_URL (CI has it).
