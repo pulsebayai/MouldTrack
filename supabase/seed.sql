@@ -26,10 +26,10 @@ begin
       ('30000000-0000-4000-a000-0000000000e2'::uuid, '9000000007'),
       ('30000000-0000-4000-a000-0000000000e3'::uuid, '9000000008'),
       ('30000000-0000-4000-a000-0000000000e4'::uuid, '9000000009'),
-      -- 08: org H (handover): one Unit Admin and two supervisors (+91 90000 00020-22)
-      ('30000000-0000-4000-a000-0000000000c2'::uuid, '9000000020'),
-      ('30000000-0000-4000-a000-0000000000c3'::uuid, '9000000021'),
-      ('30000000-0000-4000-a000-0000000000c4'::uuid, '9000000022'),
+      -- 08: org H (handover): one Unit Admin and two supervisors (+91 90000 00015-17)
+      ('30000000-0000-4000-a000-0000000000c2'::uuid, '9000000015'),
+      ('30000000-0000-4000-a000-0000000000c3'::uuid, '9000000016'),
+      ('30000000-0000-4000-a000-0000000000c4'::uuid, '9000000017'),
       -- 03: fixture Platform Super Admins (+91 90000 00098-99)
       ('30000000-0000-4000-a000-0000000000f0'::uuid, '9000000098'),
       ('30000000-0000-4000-a000-0000000000f1'::uuid, '9000000099')
@@ -59,9 +59,9 @@ begin
     ('20000000-0000-4000-a000-00000000000e', '30000000-0000-4000-a000-0000000000e2', 'unit_admin', 'Fixture Admin U2', 'FX-U2', '+919000000007', false, null),
     ('20000000-0000-4000-a000-00000000000e', '30000000-0000-4000-a000-0000000000e3', 'supervisor', 'Fixture Supervisor U3', 'FX-U3', '+919000000008', false, null),
     ('20000000-0000-4000-a000-00000000000e', '30000000-0000-4000-a000-0000000000e4', 'supervisor', 'Fixture Fresh U4', 'FX-U4', '+919000000009', true, now() + interval '30 days'),
-    ('20000000-0000-4000-a000-00000000000f', '30000000-0000-4000-a000-0000000000c2', 'unit_admin', 'Fixture Admin H1', 'FX-H1', '+919000000020', false, null),
-    ('20000000-0000-4000-a000-00000000000f', '30000000-0000-4000-a000-0000000000c3', 'supervisor', 'Fixture Supervisor H2', 'FX-H2', '+919000000021', false, null),
-    ('20000000-0000-4000-a000-00000000000f', '30000000-0000-4000-a000-0000000000c4', 'supervisor', 'Fixture Supervisor H3', 'FX-H3', '+919000000022', false, null);
+    ('20000000-0000-4000-a000-00000000000f', '30000000-0000-4000-a000-0000000000c2', 'unit_admin', 'Fixture Admin H1', 'FX-H1', '+919000000015', false, null),
+    ('20000000-0000-4000-a000-00000000000f', '30000000-0000-4000-a000-0000000000c3', 'supervisor', 'Fixture Supervisor H2', 'FX-H2', '+919000000016', false, null),
+    ('20000000-0000-4000-a000-00000000000f', '30000000-0000-4000-a000-0000000000c4', 'supervisor', 'Fixture Supervisor H3', 'FX-H3', '+919000000017', false, null);
 
   -- 03: Super Admins are not tenant members; they live in platform_admin. Plan labels on fixture tenants.
   insert into public.platform_admin (user_id, full_name, phone_e164, must_change_password, temp_password_expires_at) values

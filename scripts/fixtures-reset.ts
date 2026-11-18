@@ -217,9 +217,9 @@ export const USERS: Fixture[] = [
   fx('u3', '+919000000008', 'Fixture Supervisor U3', 'FX-U3', 'e2e org U', 'supervisor'),
   fx('u4', '+919000000009', 'Fixture Fresh U4', 'FX-U4', 'e2e org U', 'supervisor', true),
   // 08: org H (handover). Canonical block, unused elsewhere (the demo tenant uses 00010-00012).
-  fx('h1', '+919000000020', 'Fixture Admin H1', 'FX-H1', 'e2e org H', 'unit_admin'),
-  fx('h2', '+919000000021', 'Fixture Supervisor H2', 'FX-H2', 'e2e org H', 'supervisor'),
-  fx('h3', '+919000000022', 'Fixture Supervisor H3', 'FX-H3', 'e2e org H', 'supervisor'),
+  fx('h1', '+919000000015', 'Fixture Admin H1', 'FX-H1', 'e2e org H', 'unit_admin'),
+  fx('h2', '+919000000016', 'Fixture Supervisor H2', 'FX-H2', 'e2e org H', 'supervisor'),
+  fx('h3', '+919000000017', 'Fixture Supervisor H3', 'FX-H3', 'e2e org H', 'supervisor'),
 ];
 
 /** 03: plan label per fixture tenant (default trial). */

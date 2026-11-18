@@ -9,7 +9,7 @@ import {
 } from './helpers';
 
 const ORG = customOrg('20000000-0000-4000-a000-0000000000bc', 'e2e api org handover', ['+919000077771', '+919000077772', '+919000077773', '+919000077774']);
-const FIXTURE_SUP_H = '+919000000022';
+const FIXTURE_SUP_H = '+919000000017';
 const DENIED = { ok: false, code: 'not_allowed' };
 
 let w: IssueWorld;

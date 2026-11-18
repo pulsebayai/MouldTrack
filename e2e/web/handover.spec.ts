@@ -10,7 +10,7 @@ import { customOrg, enforceHandover, requireApi, seedInheritedIssue, service, se
 import { FIXTURE_PASSWORD, signIn } from './fixtures';
 
 const ORG = customOrg('20000000-0000-4000-a000-0000000000bb', 'e2e web org handover', ['+919000077761', '+919000077762', '+919000077763', '+919000077764']);
-const FIXTURE_UA_H = '+919000000020';
+const FIXTURE_UA_H = '+919000000015';
 
 async function expectNoSeriousViolations(page: Page) {
   await expect(page).toHaveTitle('MouldTrack');

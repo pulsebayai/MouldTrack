@@ -1,5 +1,5 @@
 # 08 (Android): a supervisor of the enforced fixture org H sees the Home banner for the issue handed over to them, opens the handover checklist and
-# acknowledges it with a remark. Org H: supervisor H2 (+91 90000 00021) owns FX-MH1 on both fixture shifts (which together cover the whole day) and the open
+# acknowledges it with a remark. Org H: supervisor H2 (+91 90000 00016) owns FX-MH1 on both fixture shifts (which together cover the whole day) and the open
 # fixture issue "spindle vibration on H1" was reported by the other supervisor, so a checklist is always waiting. The declaration and the blocked opening are
 # proven by the web and API e2e (their own tenants); this flow is the only one that answers org H's checklist (the dev database is rebuilt every run).
 appId: com.pulsebayai.mouldtrack
@@ -7,7 +7,7 @@ name: handover
 ---
 - launchApp: { clearState: true }
 - tapOn: { id: "phone" }
-- inputText: "9000000021"
+- inputText: "9000000016"
 - tapOn: { id: "password" }
 - inputText: ${PASSWORD}
 - hideKeyboard

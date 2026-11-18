@@ -1,5 +1,5 @@
 import { router } from 'expo-router';
-import { useEffect } from 'react';
+import { useCallback, useEffect } from 'react';
 import { AppState, Text, View } from 'react-native';
 import { Button, colors } from '@/components/ui';
 import { toUserMessage } from '@/lib/errors';
@@ -9,6 +9,7 @@ import { fetchPlantTimezone, formatPlantDateTime } from '@/lib/plant-time';
 import { STATE_LABEL, fetchReadingState, openingNote, type ReadingState } from '@/lib/readings';
 import { useSession } from '@/lib/session-provider';
 import { useLoad } from '@/lib/use-load';
+import { useRefreshOnFocus } from '@/lib/use-refresh';
 import { SummaryBlock } from './summary-block';
 
 const REFRESH_MS = 60_000;
@@ -23,6 +24,12 @@ export function ReadingsCard() {
   const handover = useLoad(() => fetchHandoverChecklist(client), []);
   const ho = handover.data ?? handover.latest;
   const handoverReload = handover.reload;
+  // Coming back from the handover checklist (declared there) must lift the gate at once, not at the next minute.
+  const reloadAll = useCallback(() => {
+    reload();
+    handoverReload();
+  }, [reload, handoverReload]);
+  useRefreshOnFocus(reloadAll);
   useEffect(() => {
     const all = () => {
       reload();
