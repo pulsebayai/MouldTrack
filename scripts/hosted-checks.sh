@@ -80,11 +80,15 @@ bucket_code="$(echo "$bucket" | tail -1)"; bucket_body="$(echo "$bucket" | head 
 echo "attachments bucket: HTTP $bucket_code"
 [ "$bucket_code" = 200 ] && echo "$bucket_body" | jq -e '.id == "attachments" and .public == false and .file_size_limit == 5242880 and ((.allowed_mime_types // []) | sort) == ["image/jpeg","image/png","image/webp"]' >/dev/null; tap $? "Storage bucket attachments exists, is private, 5 MB limit, MIME list jpeg/png/webp"
 
-# 10 (08, D1): handover is enforced for every tenant except the four fixture tenants that tests insert directly. A Console-registered tenant always gets
-# required = true (app.pa_tenant_create) and the migration backfilled the existing ones; this catches a tenant that slipped through (read-only REST call).
+# 10 (08, D1): handover is enforced for every tenant except throwaway test tenants (names starting "e2e " / "E2E ": the fixture orgs A/B/S/U and the
+# specs' own tenants insert directly, without a setting row). A Console-registered tenant always gets required = true (app.pa_tenant_create) and the
+# migration backfilled the existing ones; this catches a real tenant that slipped through (read-only REST call). Failing names are printed.
 tenants="$(curl -s -w '\n%{http_code}' "${SUPABASE_URL%/}/rest/v1/tenant?select=name,handover_setting(required)" -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}")"
 tenants_code="$(echo "$tenants" | tail -1)"; tenants_body="$(echo "$tenants" | head -n -1)"
 echo "tenants with handover setting: HTTP $tenants_code"
-[ "$tenants_code" = 200 ] && echo "$tenants_body" | jq -e '[.[] | select(.name as $n | ["e2e org A","e2e org B","e2e org S","e2e org U"] | index($n) | not) | select((.handover_setting.required // false) | not) | .name] | length == 0' >/dev/null; tap $? "every non-fixture tenant has handover required = true"
+unenforced="$(echo "$tenants_body" | jq -c -f "$(dirname "$0")/handover-unenforced.jq" 2>/dev/null)"
+[ "$tenants_code" = 200 ] && [ "$unenforced" = "[]" ]; rc=$?
+[ "$rc" != 0 ] && echo "tenants without handover required: ${unenforced:-unreadable}"
+tap $rc "every non-test tenant has handover required = true"
 
 exit $([ "$fails" = 0 ] && echo 0 || echo 1)
