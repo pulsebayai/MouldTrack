@@ -42,11 +42,18 @@ timeouts seen in 06's and 07's hosted proofs. Owner: "clean the test data and do
   `Blocked - needs Opus` — do not disable triggers or add a bypass to the schema. Audit rows: the seed writes none, except
   through helpers that already write them. The size check (D5) includes the demo tenant's exact counts.
   Login details for the owner go in `sdlc/releases/README.md` (phones only; never the password).
+- **D10 The spike is a permanent CI test (Opus, 2026-11-18; the builder sandbox cannot pull Supabase images).** Job `reset-roundtrip` in
+  `ci.yml` (own ephemeral stack incl. Storage, no secrets): fixtures -> demo seed -> throwaway data (Auth user in the throwaway phone range, a
+  Storage object in `attachments`, an issue, a reading) -> size check must FAIL -> `dev-reset.ts` in LOCAL mode (APP_ENV=local, local URLs only;
+  the guard allows local or the exact dev ref, nothing else) -> size check exact baseline (0 throwaway Auth users, 0 Storage objects) -> repeat
+  once more and diff the printed counts (AC-2 in CI). This proves `db reset` behaviour, prompts (`--yes`) and bucket recreation. If the CLI does
+  not clear something, the script's explicit Auth/Storage clearing (D3) covers it and CI proves that too. pgTAP-style and demo-seed checks are
+  written here and run by PR CI only (not runnable in the builder sandbox: no local DB results are claimed).
 - **D8 Out of scope (flag only):** policy item 2(b) seeded-volume speed check is not implemented today; recorded as known
   debt for the R1 gate, not built here.
 
 ## Steps
-- [ ] 1. **Spike (local stack, no hosted calls):** confirm CLI 3.1.0 `supabase db reset --db-url <local>` behaviour:
+- [ ] 1. **Spike (D10: proven by the CI job `reset-roundtrip`, no local stack in the builder sandbox):** confirm CLI 3.1.0 `supabase db reset --db-url <local>` behaviour:
   are `auth.users` and `storage.objects` kept or cleared; is the `attachments` bucket row recreated by the migration;
   exit codes; any prompt. Record findings in the session log; if `--db-url` reset is unsupported → `Blocked - needs Opus`.
 - [ ] 2. Tests first: Jest for `dev-reset.ts` guard (wrong ref, missing env, non-fixture phone → refuse; no secret in output)
