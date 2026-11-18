@@ -8,6 +8,10 @@ jest.mock('expo-router', () => ({ router: { push: jest.fn(), replace: jest.fn() 
 jest.mock('@/lib/sentry', () => ({ sendTestError: jest.fn() }));
 jest.setTimeout(20_000);
 
+// Re-scoped (owner-approved 2026-11-18): these assertions are about the My shift card, so they count only
+// `my_shift` calls — other Home features may make their own calls without breaking the card's tests.
+const myShiftCalls = (rpc: jest.Mock) => rpc.mock.calls.filter((c) => c[0] === 'my_shift').length;
+
 const render = (my: unknown, ctx: typeof sup | typeof admin = sup) => {
   const t = shiftClient({}, { my_shift: typeof my === 'function' ? my : rpcOk(my) });
   return { ...t, ui: renderWithSession(<Home />, { ctx, client: t.client }) };
@@ -46,7 +50,7 @@ describe('My shift card (AC-9)', () => {
       await ui;
       expect(await screen.findByTestId('my-shift-state-0')).toBeTruthy();
       await act(async () => { jest.advanceTimersByTime(60_000); });
-      expect(rpc).toHaveBeenCalledTimes(2);
+      expect(myShiftCalls(rpc)).toBe(2);
       expect(screen.getByTestId('my-shift-state-0')).toBeTruthy();
       expect(screen.queryByTestId('my-shift-loading')).toBeNull();
       await act(async () => resolve(rpcOk({ ok: true, state: 'none', occurrences: [] })));
@@ -82,13 +86,13 @@ describe('My shift card (AC-9)', () => {
     denied = false;
     await fireEvent.press(screen.getByTestId('my-shift-refresh'));
     expect(await screen.findByTestId('my-shift-none')).toBeTruthy();
-    await waitFor(() => expect(rpc).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(myShiftCalls(rpc)).toBe(2));
   });
 
-  it('is not shown to a Unit Admin and makes no call for one', async () => {
+  it('is not shown to a Unit Admin and makes no my_shift call for one', async () => {
     const { rpc, ui } = render({ ok: true, state: 'none' }, admin);
     await ui;
     expect(screen.queryByTestId('my-shift')).toBeNull();
-    expect(rpc).not.toHaveBeenCalled();
+    expect(myShiftCalls(rpc)).toBe(0);
   });
 });
