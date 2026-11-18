@@ -31,7 +31,10 @@ const AUDIT_EVENTS_AFTER_RESET = 0;
  * Tables and views the API exposes that are deliberately NOT counted (reference or derived data that a run cannot grow). Every other
  * public-exposed relation must be in COUNT_KEYS, so a feature that adds a table (08's shift_handover, ...) fails this check until it is counted.
  */
-export const IGNORED_RELATIONS: string[] = [];
+export const IGNORED_RELATIONS: string[] = [
+  'current_target', // view over target_version (the current target per machine and product): no rows of its own; the hosted API lists it, the local one does not
+  'plant_today', // view returning today's plant date: one row, never grows
+];
 
 /** Relations named by the paths of PostgREST's OpenAPI root (`/table`; `/rpc/...` and the root itself are not relations) that are neither counted nor ignored. */
 export function unlistedRelations(paths: string[]): string[] {

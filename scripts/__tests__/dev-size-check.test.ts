@@ -61,6 +61,9 @@ describe('S6: new public relations must be counted', () => {
     const paths = ['/', ...COUNT_KEYS.filter((k) => k !== 'auth_users' && k !== 'storage_objects').map((k) => `/${k}`), '/rpc/pm_save_site', '/rpc/my_shift'];
     expect(unlistedRelations(paths)).toEqual([]);
   });
+  it('ignores the derived views the hosted API lists (first hosted run)', () => {
+    expect(unlistedRelations(['/', '/current_target', '/plant_today'])).toEqual([]);
+  });
   it('names a table a feature added (e.g. 08) until it is counted', () => {
     expect(unlistedRelations(['/', '/tenant', '/shift_handover', '/zz_view'])).toEqual(['shift_handover', 'zz_view']);
   });

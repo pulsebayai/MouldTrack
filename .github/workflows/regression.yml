@@ -89,9 +89,9 @@ jobs:
       # Neither secret exists yet (the first hosted attempt was refused for the empty staging value, as designed), so neither is passed. Add
       # `STAGING_SUPABASE_PROJECT_REF: ${{ secrets.STAGING_SUPABASE_PROJECT_REF }}` (and the prod one) here when those projects' secrets exist (R1 release).
       E2E_FIXTURE_PASSWORD: ${{ secrets.E2E_FIXTURE_PASSWORD }}
-      # S6: bounds on the database after a reset (provisional until the first hosted numbers are in; see plan.md)
-      MAX_AUDIT_LOG_ROWS: '100'
-      MAX_DB_MB: '300'
+      # S6: bounds on the database after a reset, taken from the hosted run 44299307195 (auth log 0 rows, database 15 MB) with headroom
+      MAX_AUDIT_LOG_ROWS: '50' # hosted reset job: 0 after dev-reset (run 44299307195)
+      MAX_DB_MB: '60' # hosted: 15 MB after the reset (run 44299307195)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
