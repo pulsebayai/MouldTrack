@@ -48,7 +48,7 @@ Branch: feat/08-shift-handover-ack, rebased on main 9978d02 (06 + dev reset merg
   pgTAP 060 (tables, isolation, append-only, backfill, registration enforces). 022 fixture additions.
 - [x] 2. Helpers: `app.handover_items_at`, `app._ho_declared_at`, windows (D2–D4); pgTAP 061 incl. cover time, reported during O
   excluded, closed drops out, carry-forward across day / overnight / cover (AC-11).
-- [ ] 3. Write RPCs (D5) + gate (D6); pgTAP 062: AC-2–8, AC-10, AC-13 (denials, idempotency, SA denied, cross-tenant),
+- [x] 3. Write RPCs (D5) + gate (D6); pgTAP 062: AC-2–8, AC-10, AC-13 (denials, idempotency, SA denied, cross-tenant),
   `rd_opening` refused then allowed, UA bypass, unenforced tenant unaffected.
 - [ ] 4. Reads + compliance (D7); pgTAP 063: checklist contents/order/bounds, alerts, AC-12 cases (compliant, late, no
   declaration, refusal without exception, unassigned excluded, overdue count); timing check for AC NFRs on seeded volume.
@@ -87,3 +87,9 @@ lines, Console tenant detail (label), Jest tests, `e2e/web/handover.spec.ts`, `e
 - Helpers: `app._ho_upto` (moment handling: a moment that is not in the past means "no upper bound", because rows written in the same transaction carry `clock_timestamp()` later than `now()`), `app._ho_owners` (set-based owner resolution: cover > plan, unassigned and retired excluded, `since` = cover time when recorded after the start, handover start; bounded to 93 days; copy of 05's rule pinned to `app.machine_owner` / `app.shift_window` by 061), `app._ho_status_at` (issue status as of a moment from 07's append-only actions; current row when the moment is not in the past), `app.handover_items_at`, `app._ho_declared_at`.
 - Interpretation recorded: a declaration or acknowledgement made in the 30 minutes before the start counts; only a later **cover time** makes earlier ones stale (D2/AC-6). Declaration with no inherited items is valid at any time within the windows (enforced by the RPC in step 3).
 - pgTAP 061 (51 tests): inherited set incl. before/after start, resolved included, closed drops out as of a moment, cover recorded before/after the start, overnight and cover carry-forward, stale acknowledgement/declaration, exception pending, pins to 05.
+
+### 2026-11-18 (Sonnet) step 3
+- RPCs `public.ho_acknowledge | ho_refuse | ho_declare | ho_add_note | ho_exception | ho_set_overdue`; helpers `app._ho_authorise` (supervisor | unit_admin), `_ho_scope`, `_ho_window`, `_ho_owns`, `_ho_pending_item`. `rd_opening` redefined (`create or replace`, 06's body unchanged + the `handover_pending` guard after the owner check; 06 migrations untouched).
+- Interpretations (flag for review): (1) **"keep with <refusing supervisor>"** = `ho_exception` with `owner_id` equal to the issue's current accountable owner (`kept = true`, no ownership row); any other active supervisor is a 07 reassign. The dialog should label the keep option with the current owner's name. (2) A refusal of an issue **awaiting verification** (resolved) writes the refusal and a `handover_refuse` action but does not escalate (07 only escalates open/in-progress). (3) Another supervisor / non-owner acting on an issue or occurrence gets the generic audited denial (`not_owner`); a Unit Admin gets `role`.
+- 07's `issue_action.type` rows added by 08: `handover_ack` (notes "Acknowledged at handover[: remark]"), `handover_refuse`; the refusal also appends 07's `escalate`.
+- pgTAP 062 (136 tests): AC-2..AC-8, AC-10, AC-13, windows (-30 min / +12 h; notes start..+2 h), idempotency, gate (enforced / unenforced / UA on behalf / stale declaration after a cover). Earlier suites unchanged; 022 discovers the six new RPCs automatically.
