@@ -7,7 +7,7 @@
  * Prints one `name=count` line per counter (stable order) so two runs can be diffed.
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { ISSUES, PLANT, READINGS, SHIFTS, SUPER_ADMINS, TENANTS, USERS } from './fixtures-reset';
+import { HANDOVER_ENFORCED, ISSUES, PLANT, READINGS, SHIFTS, SUPER_ADMINS, TENANTS, USERS } from './fixtures-reset';
 import { demoCounts, plantToday } from './dev-demo-spec';
 import { assertResetTarget, countStorageObjects, redact } from './dev-guard';
 
@@ -84,7 +84,7 @@ export function expectedCounts(today: string): Counts {
     issue_category: tenants * STARTER_CATEGORIES,
     attachment: 0,
     // 08: only the demo tenant is enforced after a reset (fixture tenants are inserted directly and are not gated); nothing else is written by reset + seeds.
-    handover_setting: d.handover_setting,
+    handover_setting: d.handover_setting + HANDOVER_ENFORCED.length,
     handover_session: 0,
     issue_acknowledgement: 0,
     handover_declaration: d.handover_declaration,

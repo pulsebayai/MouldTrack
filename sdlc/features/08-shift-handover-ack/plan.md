@@ -52,7 +52,7 @@ Branch: feat/08-shift-handover-ack, rebased on main 9978d02 (06 + dev reset merg
   `rd_opening` refused then allowed, UA bypass, unenforced tenant unaffected.
 - [x] 4. Reads + compliance (D7); pgTAP 063: checklist contents/order/bounds, alerts, AC-12 cases (compliant, late, no
   declaration, refusal without exception, unassigned excluded, overdue count); timing check for AC NFRs on seeded volume.
-- [ ] 5. Fixtures: `e2e org H` in seed + fixtures-reset; demo tenant declarations; size-check baseline; hosted check D1.
+- [x] 5. Fixtures: `e2e org H` in seed + fixtures-reset; demo tenant declarations; size-check baseline; hosted check D1.
 - [x] 6. Client lib + screens (D9) with Jest/RNTL; axe on web (axe runs with the web e2e in step 7, which waits for the H decision).
 - [ ] 7. Web e2e `handover.spec.ts` (SUP checklist → declare → opening; refuse → UA exception; cover re-declare; note shown)
   + API e2e (SUP opening refused before declaring; other SUP denied). Maestro `handover.yaml`.
@@ -124,4 +124,12 @@ lines, Console tenant detail (label), Jest tests, `e2e/web/handover.spec.ts`, `e
   4. **Overdue setting** is its own card (`OverdueSetting`) at the bottom of Plant -> Site & lines; it reads `handover_setting` under RLS (no rpc on load) so 04's site tests are unchanged.
 - Not done here: axe checks and the e2e/Maestro flows (step 7, after the H decision); the Console tenant-detail "Handover: enforced" label from D1 is not built (03's Console screens and tests are
   untouched; needs a `pa_*` read change in a later step, ask Opus whether it is still wanted).
+
+### Session log - step 5 finished, option A (Sonnet, 2026-11-18)
+- Owner decision (via Opus): option A. `e2e org H` added; **edited earlier-test lines (additions to expected fixture lists only, each carries the comment "owner-approved 2026-11-18 (08 option A): e2e org H added")**:
+  - `scripts/__tests__/fixtures-reset.test.ts`: the `TENANTS` name list (was line 48); the PLANT tenants list (test title also now reads "orgs A, B, U and H"); the SHIFTS tenants list (title "orgs A, U and H"); the seed plan-row regex recorded_by group `(a1|e1)` -> `(a1|e1|c2)` (H's plan is recorded by its UA c2).
+  - `scripts/__tests__/fixtures-reset-issues.test.ts`: the sorted `tenant:priority:status` list gained `e2e org H:high:open`, `e2e org H:medium:open`.
+  - `scripts/__tests__/dev-size-check.test.ts`: no edit needed (formula-driven from the lists; the `handover_setting` baseline is in `dev-size-check.ts`: demo + `HANDOVER_ENFORCED.length`).
+- H: tenant `e2e org H` (id ...00f); UA `+91 90000 00020` (Fixture Admin H1, FX-H1), supervisors `...00021` (Fixture Supervisor H2) and `...00022` (Fixture Supervisor H3); site Fixture Plant H; machines FX-MH1, FX-MH2; product FX-PH1; targets 900/700; shifts Fixture Shift H1 00:00-12:00 and H2 12:00-00:00 (24 h, like org A); h2 owns FX-MH1 and h3 owns FX-MH2 on both shifts; two open issues (High on FX-MH1 reported by h3, Medium on FX-MH2 reported by h2), so each supervisor always has an inherited issue. `handover_setting` (required true, 60 min) is inserted by `seed.sql` and `fixtures-reset.ts` (`HANDOVER_ENFORCED`). Hosted-check D1 already covers it.
+- CI note: the first CI run on step 6 failed once, twice on re-run, then passed on attempt 3 in `readings.spec.ts:111` (06's Today board test takes `.first()` of the target rows, and `today_board` orders occurrences by shift name, which the throwaway world makes random: roughly a coin flip). Pre-existing, not touched; flagged for chore/test-reliability.
 
