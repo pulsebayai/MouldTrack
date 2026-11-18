@@ -2,6 +2,8 @@ import Constants from 'expo-constants';
 import { router } from 'expo-router';
 import { useState } from 'react';
 import { Platform, ScrollView, Text, View } from 'react-native';
+import { HandoverAlertsCard } from '@/components/handover/handover-alerts-card';
+import { HandoverBanner } from '@/components/handover/handover-banner';
 import { IssueAlertsCard } from '@/components/issue-alerts-card';
 import { MyShiftCard } from '@/components/my-shift-card';
 import { SignOutButton } from '@/components/sign-out-button';
@@ -43,9 +45,11 @@ export default function Home() {
         Role: {roleLabel(ctx.role)}
       </Text>
       <Text style={{ fontSize: 15, color: colors.muted }}>{phone ? formatPhone(phone) : ctx.user.email}</Text>
+      {ctx.role === 'supervisor' ? <HandoverBanner /> : null}
       {ctx.role === 'supervisor' ? <MyShiftCard /> : null}
       {ctx.role === 'supervisor' ? <Button title="Readings" testID="readings-link" onPress={() => router.push('/readings')} /> : null}
       {ctx.role === 'supervisor' ? <Button title="My issues" testID="issues-link" variant="secondary" onPress={() => router.push('/issues')} /> : null}
+      {ctx.role === 'unit_admin' && Platform.OS === 'web' ? <HandoverAlertsCard /> : null}
       {ctx.role === 'unit_admin' && Platform.OS === 'web' ? <IssueAlertsCard /> : null}
       {ctx.role === 'unit_admin' && Platform.OS === 'web' ? <Button title="Today" testID="today-link" onPress={() => router.push('/today')} /> : null}
       {ctx.role === 'unit_admin' && Platform.OS === 'web' ? (

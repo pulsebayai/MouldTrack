@@ -53,7 +53,7 @@ Branch: feat/08-shift-handover-ack, rebased on main 9978d02 (06 + dev reset merg
 - [x] 4. Reads + compliance (D7); pgTAP 063: checklist contents/order/bounds, alerts, AC-12 cases (compliant, late, no
   declaration, refusal without exception, unassigned excluded, overdue count); timing check for AC NFRs on seeded volume.
 - [ ] 5. Fixtures: `e2e org H` in seed + fixtures-reset; demo tenant declarations; size-check baseline; hosted check D1.
-- [ ] 6. Client lib + screens (D9) with Jest/RNTL; axe on web.
+- [x] 6. Client lib + screens (D9) with Jest/RNTL; axe on web (axe runs with the web e2e in step 7, which waits for the H decision).
 - [ ] 7. Web e2e `handover.spec.ts` (SUP checklist → declare → opening; refuse → UA exception; cover re-declare; note shown)
   + API e2e (SUP opening refused before declaring; other SUP denied). Maestro `handover.yaml`.
 - [ ] 8. Docs under the locks: architecture (handover model, cross-feature gate rule, compliance = metric 2, D1 enforcement,
@@ -106,3 +106,22 @@ lines, Console tenant detail (label), Jest tests, `e2e/web/handover.spec.ts`, `e
 - **Blocked - needs Opus: `e2e org H` cannot be added without breaking pinned earlier tests.** The reset chore's and 04/05's Jest tests pin the fixture lists exactly: `fixtures-reset.test.ts:48` `TENANTS.map(name)` equals the four names; the 04/05 tests pin `PLANT` tenants to A, B, U and `SHIFTS` tenants to A, U; `dev-size-check.test.ts` pins `tenant = TENANTS.length + 1`, `site = PLANT.length + 1`, `shift = SHIFTS.length + d.shift`, `machine`, `product`, `target_version`, `membership` and `auth_users` to the same arrays. Putting H in the arrays breaks the first group; keeping H outside them and counting it breaks the second group. I did not touch those tests, `seed.sql` or `fixtures-reset.ts` for H.
   Options: (A) approve editing exactly those pinned assertions (add H to `TENANTS` / `PLANT` / `SHIFTS` / `USERS`, list updated) - the fixture lists stay the single source for seed, reset and baseline; (B) H lives in its own export `HANDOVER_FIXTURE` (like `READINGS`) outside the arrays, and `expectedCounts` adds it - needs the size-check assertions edited anyway; (C) no fixture tenant: 08's web/API e2e and Maestro register their own enforced tenant through the Console (SA + `platform` Edge Function: registration always enforces, D1) and create UA/SUPs, accumulating like the `e2e t3` tenants (known debt, suspended after the run); (D) enforce org U (breaks 06's e2e openings: rejected). Recommendation: (A), the smallest edit and the baseline keeps working; phones +91 90000 00020 (UA), 00021, 00022 (supervisors) are free.
 - Hosted note: `deploy-dev` applies the migration to a dev that still holds tenants, so the backfill makes org A/B/U enforced until the next `dev-reset` (every nightly and hosted proof starts with one; `db reset` re-applies the migrations on an empty database, so afterwards only registered tenants and the demo tenant are enforced).
+
+### Session log - step 6 (Sonnet, 2026-11-18)
+- Environment: replaced the shared node_modules symlink with this branch's `npm ci` (expo-image-* now resolve). One more trap: `expo lint` keeps a cache in `.expo/cache/eslint/` that held stale
+  unresolved-import results; deleting it fixed lint. Local result: lint 0, typecheck 0, Jest 70 suites / 949 tests green (was 897; +52 for step 6).
+- Added `src/lib/handover.ts` (types, labels, validation equal to the server limits: remark 200, refusal/exception reason 200, note 300, overdue 15-480; `bannerText`, `openingBlocked`,
+  reads that tolerate missing arrays, `handoverApi`), `src/components/handover/{checklist,handover-banner,handover-alerts-card,overdue-setting}.tsx`, route `(app)/handover.tsx`.
+  `handover_checklist` is called through supabase-js `rpc`, which is a POST, so the read that writes the session snapshot never runs as a GET.
+- Interpretations, flag for review:
+  1. **No handover calls inside existing screens' pinned paths.** 07's `IssueAlertsCard` and the Issues screen have tests that pin their exact rpc calls (count and last call), so the handover
+     alerts are a separate `HandoverAlertsCard` on UA Home (web) beside the issue alerts, not a section inside 07's card or the Issues -> Alerts tab as D9 words it. Each list shows 5 with
+     "Show all" expanding to the server's 50, instead of a link to a tab. No earlier test touched.
+  2. **Opening gate in the UI** is in `ReadingsCard` only (the list that offers "Record opening"): it also reads the checklist and replaces the button by a disabled one plus "Complete your handover
+     checklist first" and a link to the checklist when the server says the occurrence is enforced and not declared. 06's `reading_state` is unchanged, so the client cannot know this from it;
+     if the checklist read fails the button stays and the server (D6) decides. My shift has no opening action, so it only got the Home banner.
+  3. **Exception owner**: `ho_exception` requires an active supervisor (p_owner_id is never null), so "keep" = choose the current owner (preselected, labelled "current owner"); the server records kept = true.
+  4. **Overdue setting** is its own card (`OverdueSetting`) at the bottom of Plant -> Site & lines; it reads `handover_setting` under RLS (no rpc on load) so 04's site tests are unchanged.
+- Not done here: axe checks and the e2e/Maestro flows (step 7, after the H decision); the Console tenant-detail "Handover: enforced" label from D1 is not built (03's Console screens and tests are
+  untouched; needs a `pa_*` read change in a later step, ask Opus whether it is still wanted).
+
