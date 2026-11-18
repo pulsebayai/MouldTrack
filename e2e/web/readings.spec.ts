@@ -24,6 +24,8 @@ let productId: string;
 let machine2: { id: string; code: string };
 const run = Math.random().toString(36).slice(2, 8).toUpperCase();
 const productCode = `E2E-${run}`;
+// With late openings accepted (R4) the list also offers the neighbouring occurrence, so the supervisor test addresses the running occurrence by key.
+const key = () => `${w.running.session === w.sup2 ? w.shiftPm : w.shiftAm}-${w.machine.id}-${w.today}`;
 
 test.describe.configure({ mode: 'serial' });
 test.beforeAll(async () => {
@@ -54,7 +56,7 @@ test('a supervisor records an opening with a photo and a closing, sees the summa
   await expectNoSeriousViolations(page);
 
   // Opening: client validation first, then the numbers.
-  await prefix(page, 'reading-open-').filter({ hasText: w.machine.code }).first().click();
+  await tid(page, `reading-open-${key()}`).click();
   await expect(tid(page, 'record-opening-screen')).toBeVisible();
   await expect(tid(page, 'record-machine')).toContainText(w.machine.code);
   await expect(tid(page, 'record-unit')).toHaveText('Counter counts: Pieces');
@@ -72,23 +74,23 @@ test('a supervisor records an opening with a photo and a closing, sees the summa
   await tid(page, 'record-submit').click();
 
   await expect(tid(page, 'readings')).toBeVisible();
-  await expect(prefix(page, 'reading-state-').first()).toContainText('Opening recorded');
-  await expect(prefix(page, 'reading-open-')).toHaveCount(0);
+  await expect(tid(page, `reading-state-${key()}`)).toContainText('Opening recorded');
+  await expect(tid(page, `reading-open-${key()}`)).toHaveCount(0);
 
   // Closing: good + reject.
-  await prefix(page, 'reading-close-').filter({ hasText: w.machine.code }).first().click();
+  await tid(page, `reading-close-${key()}`).click();
   await expect(tid(page, 'record-closing-screen')).toBeVisible();
   await tid(page, 'record-counter').fill('1250');
   await tid(page, 'record-good').fill('240');
   await tid(page, 'record-reject').fill('5');
   await tid(page, 'record-submit').click();
-  await expect(prefix(page, 'reading-state-').first()).toContainText('Both readings recorded');
+  await expect(tid(page, `reading-state-${key()}`)).toContainText('Both readings recorded');
   await expect(page.locator('[data-testid$="-attainment"]:visible').first()).toContainText('Attainment: 24.00%');
   await expect(page.locator('[data-testid$="-target"]:visible').first()).toContainText('Target: 1,000');
   await expect(page.locator('[data-testid$="-unaccounted"]:visible').first()).toContainText('Unaccounted: 5');
 
   // Details: history, photo, and a correction with a reason.
-  await prefix(page, 'reading-details-').first().click();
+  await tid(page, `reading-details-${key()}`).click();
   await expect(tid(page, 'occurrence-screen')).toBeVisible();
   await expect(prefix(page, 'reading-entry-')).toHaveCount(2);
   await expect(prefix(page, 'reading-photo-').first()).toBeVisible();
