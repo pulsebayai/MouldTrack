@@ -192,6 +192,21 @@ describe('Occurrence detail and correction (AC-6, AC-15)', () => {
     expect(screen.getByTestId('occurrence-summary-flags-early_closing')).toHaveTextContent(/Early closing/);
   });
 
+  it('N7: when the original product is retired, nothing is preselected and the validation message shows', async () => {
+    const retired = { ...entry, product_id: 'p-retired', product_code: 'P-OLD' };
+    const { rpc, ui } = view(detail({ readings: [retired], opening: retired }));
+    await ui;
+    await fireEvent.press(await screen.findByTestId('correct-opening'));
+    expect(await screen.findByTestId('correct-product-error')).toHaveTextContent('Choose the product');
+    expect(screen.getByTestId('correct-product-p-1')).not.toHaveTextContent(/✓/);
+    await fireEvent.changeText(screen.getByTestId('correct-reason'), 'new part');
+    await fireEvent.press(screen.getByTestId('correct-submit'));
+    expect(rpc).not.toHaveBeenCalledWith('rd_correct', expect.anything());
+    await fireEvent.press(screen.getByTestId('correct-product-p-1'));
+    await fireEvent.press(screen.getByTestId('correct-submit'));
+    await waitFor(() => expect(rpc).toHaveBeenCalledWith('rd_correct', expect.objectContaining({ p_reading_id: 'r-1', p_product_id: 'p-1' })));
+  });
+
   it('offers a correction only when the server allows it', async () => {
     await view(detail({ allowed: { can_open: false, can_close: false, can_correct: false } })).ui;
     await screen.findByTestId('reading-entry-r-1');

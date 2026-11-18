@@ -482,7 +482,7 @@ async function resetReadings(admin: Admin, tenantIds: Map<string, string>) {
       must(await admin.from('production_reading').insert({ id: o.openingId, ...key, kind: 'opening', product_id: pid, counter_value: o.opening, late: false, recorded_by: sup.user_id, recorded_at: recorded('06:05') }).select('id'));
     }
     if (!(await has('production_reading', o.closingId))) {
-      must(await admin.from('production_reading').insert({ id: o.closingId, ...key, kind: 'closing', counter_value: o.closing, good: o.good, reject: o.reject, late: false, recorded_by: sup.user_id, recorded_at: recorded('14:05') }).select('id'));
+      must(await admin.from('production_reading').insert({ id: o.closingId, ...key, kind: 'closing', counter_value: o.closing, good: o.good, reject: o.reject, late: false, counter_max: o.max, recorded_by: sup.user_id, recorded_at: recorded('14:05') }).select('id'));
     }
     if (!(await has('production_summary', o.summaryId))) {
       must(await admin.from('production_summary').insert({

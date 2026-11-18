@@ -3,7 +3,7 @@
 -- the additive redefinition of app_policy.can_see_attachment keeping 07's issue branch. Self-contained; rolled back. Objects are metadata-only rows.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(48);
+select plan(51);
 
 create temp table ids (k text primary key, v uuid);
 create function pg_temp.id(k text) returns uuid language sql as $$ select v from ids where k = $1 $$;
@@ -26,6 +26,8 @@ begin
   return r;
 end $f$;
 create function pg_temp.path(k text) returns text language sql as $$ select storage_path from public.attachment where id = pg_temp.id(k) $$;
+-- N2 (8b): a supervisor may attach photos only while they can still correct the reading, so the fixture readings sit on today's plant date.
+create function pg_temp.today() returns date language sql stable as $$ select (now() at time zone 'Asia/Kolkata')::date $$;
 create function pg_temp.sha() returns text language sql as $$ select repeat('cd', 32) $$;
 create function pg_temp.try(u text, q text) returns text language plpgsql as $f$
 begin
@@ -88,9 +90,9 @@ insert into public.assignment_version (tenant_id, shift_id, machine_id, supervis
   (pg_temp.id('ty'), pg_temp.id('shy'), pg_temp.id('my'), pg_temp.id('sy'), date '2026-01-01', pg_temp.id('uay'));
 -- readings: r1 (M1, owned by s1), r2 (M2, unassigned), ry (tenant Y); on a fixed past date (the photo RPCs do not depend on the clock)
 insert into public.production_reading (id, tenant_id, machine_id, shift_id, shift_date, kind, product_id, counter_value, late, recorded_by) values
-  ('56000000-0000-4000-c654-0000000000a1', pg_temp.id('tx'), pg_temp.id('m1'), pg_temp.id('day'), date '2026-03-10', 'opening', pg_temp.id('p1'), 10, false, pg_temp.id('s1')),
-  ('56000000-0000-4000-c654-0000000000a2', pg_temp.id('tx'), pg_temp.id('m2'), pg_temp.id('day'), date '2026-03-10', 'opening', pg_temp.id('p1'), 20, false, pg_temp.id('uax')),
-  ('56000000-0000-4000-c654-0000000000b1', pg_temp.id('ty'), pg_temp.id('my'), pg_temp.id('shy'), date '2026-03-10', 'opening', pg_temp.id('py'), 30, false, pg_temp.id('sy'));
+  ('56000000-0000-4000-c654-0000000000a1', pg_temp.id('tx'), pg_temp.id('m1'), pg_temp.id('day'), pg_temp.today(), 'opening', pg_temp.id('p1'), 10, false, pg_temp.id('s1')),
+  ('56000000-0000-4000-c654-0000000000a2', pg_temp.id('tx'), pg_temp.id('m2'), pg_temp.id('day'), pg_temp.today(), 'opening', pg_temp.id('p1'), 20, false, pg_temp.id('uax')),
+  ('56000000-0000-4000-c654-0000000000b1', pg_temp.id('ty'), pg_temp.id('my'), pg_temp.id('shy'), pg_temp.today(), 'opening', pg_temp.id('py'), 30, false, pg_temp.id('sy'));
 insert into ids values ('r1', '56000000-0000-4000-c654-0000000000a1'), ('r2', '56000000-0000-4000-c654-0000000000a2'), ('ry', '56000000-0000-4000-c654-0000000000b1');
 
 -- Contract ---------------------------------------------------------------------------------------------------------------------------------------------------
@@ -150,7 +152,7 @@ select is(pg_temp.seen('uay'), 0, 'another tenant''s Unit Admin does not');
 select is(pg_temp.seen('sy'), 0, 'another tenant''s supervisor does not');
 select is(pg_temp.seen('sa'), 0, 'a Super Admin reads 0 objects (although the object exists)');
 insert into public.assignment_cover (tenant_id, shift_id, shift_date, machine_id, supervisor_id, reason, recorded_by) values
-  (pg_temp.id('tx'), pg_temp.id('day'), date '2026-03-10', pg_temp.id('m1'), pg_temp.id('s2'), 'sick', pg_temp.id('uax'));
+  (pg_temp.id('tx'), pg_temp.id('day'), pg_temp.today(), pg_temp.id('m1'), pg_temp.id('s2'), 'sick', pg_temp.id('uax'));
 select is(pg_temp.seen('s2') || '/' || pg_temp.seen('s1'), '1/0', 'a cover moves the visibility: the covering supervisor sees the photo, the planned owner no longer does');
 -- limits
 select pg_temp.keep('a3', pg_temp.begin_('s2', 'r1'));
@@ -158,6 +160,19 @@ select pg_temp.png('a3'); select pg_temp.commit_('s2', 'a3');
 select pg_temp.keep('a4', pg_temp.begin_('s2', 'r1'));
 select pg_temp.png('a4'); select pg_temp.commit_('s2', 'a4');
 select is(pg_temp.begin_('s2', 'r1')->>'field', 'photo_limit', 'a reading holds at most 3 photos');
+
+-- N2: photos only while the caller could still correct the reading (rd_correct's window and role rule), in begin and in commit
+insert into public.production_reading (id, tenant_id, machine_id, shift_id, shift_date, kind, product_id, counter_value, late, recorded_by) values
+  ('56000000-0000-4000-c654-0000000000e1', pg_temp.id('tx'), pg_temp.id('m1'), pg_temp.id('day'), date '2026-03-09', 'opening', pg_temp.id('p1'), 5, false, pg_temp.id('s1'));
+insert into ids values ('rpast', '56000000-0000-4000-c654-0000000000e1');
+select is(pg_temp.begin_('s1', 'rpast')->>'field', 'correction_window_closed', 'N2: the owner cannot attach a photo once the next shift has started (the correction window is closed)');
+select is(pg_temp.begin_('uax', 'rpast')->>'ok', 'true', 'N2: a Unit Admin still can, at any time');
+insert into public.attachment (id, tenant_id, entity_type, entity_id, storage_path, mime, size_bytes, sha256, uploaded_by, parent_id, begin_request_id) values
+  ('57000000-0000-4000-c654-0000000000e1', pg_temp.id('tx'), 'production_reading', pg_temp.id('rpast'),
+   'tenant/' || pg_temp.id('tx') || '/reading/' || pg_temp.id('rpast') || '/57000000-0000-4000-c654-0000000000e1.png', 'image/png', 100, pg_temp.sha(), pg_temp.id('s1'), pg_temp.id('rpast'), gen_random_uuid());
+insert into ids values ('apast', '57000000-0000-4000-c654-0000000000e1');
+select pg_temp.png('apast');
+select is(pg_temp.commit_('s1', 'apast')->>'field', 'correction_window_closed', 'N2: and a pending upload of the owner cannot be committed after the window closed');
 
 -- N-7: only a current reading takes photos; the cap of 3 is re-checked at commit
 insert into public.production_reading (id, tenant_id, machine_id, shift_id, shift_date, kind, product_id, counter_value, late, recorded_by) values
@@ -178,7 +193,7 @@ select is(pg_temp.commit_('uax', 'x3')->>'ok', 'true', 'N-7: the third photo com
 select is(pg_temp.commit_('uax', 'x4')->>'field', 'photo_limit', 'N-7: a fourth, begun while only two were ready, is refused at commit');
 
 select pg_temp.as_user('uax');
-select is(jsonb_array_length(app.reading_detail_at(pg_temp.id('m1'), pg_temp.id('day'), date '2026-03-10', now()) -> 'photos'), 3, 'reading_detail lists the ready photos of the occurrence''s readings (a1, a3, a4)');
+select is(jsonb_array_length(app.reading_detail_at(pg_temp.id('m1'), pg_temp.id('day'), pg_temp.today(), now()) -> 'photos'), 3, 'reading_detail lists the ready photos of the occurrence''s readings (a1, a3, a4)');
 
 select * from finish();
 rollback;

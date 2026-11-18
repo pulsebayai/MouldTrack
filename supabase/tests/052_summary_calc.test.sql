@@ -5,7 +5,7 @@
 -- calculation is driven on fixed past dates (no clock involved). Self-contained; rolled back.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(63);
+select plan(67);
 
 create temp table ids (k text primary key, v uuid);
 create temp table sums (k text primary key, r jsonb);
@@ -23,8 +23,9 @@ declare
 begin
   insert into public.production_reading (id, tenant_id, machine_id, shift_id, shift_date, kind, product_id, counter_value, late, entered_by_ua, recorded_by)
   values (o, pg_temp.id('tx'), pg_temp.id(mach), pg_temp.id('day'), dd, 'opening', pg_temp.id(prod), oc, olate, false, pg_temp.id('uax'));
-  insert into public.production_reading (id, tenant_id, machine_id, shift_id, shift_date, kind, counter_value, good, reject, late, early, entered_by_ua, recorded_by)
-  values (c, pg_temp.id('tx'), pg_temp.id(mach), pg_temp.id('day'), dd, 'closing', cc, good, reject, clate, early, ua, pg_temp.id('uax'));
+  insert into public.production_reading (id, tenant_id, machine_id, shift_id, shift_date, kind, counter_value, good, reject, late, early, entered_by_ua, recorded_by, counter_max)
+  values (c, pg_temp.id('tx'), pg_temp.id(mach), pg_temp.id('day'), dd, 'closing', cc, good, reject, clate, early, ua, pg_temp.id('uax'),
+          (select m.counter_max from public.machine m where m.id = pg_temp.id(mach))); -- 8b S1: the maximum in force is stored with the closing, as rd_closing does
   insert into ids values ('o_' || label, o), ('c_' || label, c);
   sid := app._rd_compute_summary(pg_temp.id('tx'), pg_temp.id('uax'), pg_temp.id(mach), pg_temp.id('day'), dd, null);
   select to_jsonb(s) into r from public.production_summary s where s.id = sid;
@@ -157,7 +158,7 @@ select is((select (r ->> 'opening_reading_id')::uuid = pg_temp.id('o_roll') and 
   'the summary names the readings and the product it used');
 select is(pg_temp.s('roll', 'opening_counter') || '/' || pg_temp.s('roll', 'closing_counter') || '/' || pg_temp.s('roll', 'good') || '/' || pg_temp.s('roll', 'reject'), '999900/100/150/10', 'and the counters and quantities');
 update public.machine set counter_max = 500 where id = pg_temp.id('mr');
-select pg_temp.run('roll4', 'mr', date '2026-03-12', 400, 10, 1, 0);
+select pg_temp.run('roll4', 'mr', date '2026-03-28', 400, 10, 1, 0);
 select is(pg_temp.s('roll4', 'counter_max') || '/' || pg_temp.s('roll4', 'movement_units'), '500/111', 'a changed maximum applies to later calculations (500 + 1 - 400 + 10)');
 select is((select counter_max::text from public.production_summary where id = (pg_temp.s('roll', 'id'))::uuid), '999999', 'and earlier summaries keep the maximum they used');
 select is(pg_temp.s('shots', 'cavities'), '4', 'cavity snapshots do not change when the setting later does (the 2026-03-02 row stays 4)');
@@ -184,6 +185,18 @@ select is(pg_temp.s('early', 'early_closing'), 'true', 'R5: a closing flagged Ea
 select pg_temp.run('noearly', 'mn', date '2026-03-27', 0, 100, 90, 0);
 select is(pg_temp.s('noearly', 'early_closing'), 'false', 'and a normal closing does not');
 select is(pg_temp.s('early', 'late_closing'), 'false', 'Early is independent of Late');
+
+-- 8b S1: the maximum is the one stored with the closing, never the machine's current one ----------------------------------------------------------------------
+update public.machine set counter_max = 999999 where id = pg_temp.id('mr');
+select pg_temp.run('s1', 'mr', date '2026-06-05', 999900, 100, 150, 10);
+select is(pg_temp.s('s1', 'movement_units') || '/' || pg_temp.s('s1', 'rollover'), '200/true', 'S1: rollover with the maximum in force (999999)');
+select is((select public.rd_set_machine_counter(gen_random_uuid(), pg_temp.id('mr'), 'pieces', 5000) ->> 'ok'), 'true', 'the Unit Admin changes the maximum afterwards');
+insert into public.production_reading (id, tenant_id, machine_id, shift_id, shift_date, kind, counter_value, good, reject, late, early, recorded_by, supersedes_id, correction_reason, counter_max)
+  select gen_random_uuid(), tenant_id, machine_id, shift_id, shift_date, 'closing', 120, 160, 10, late, early, recorded_by, id, 'recount', counter_max
+    from public.production_reading where id = pg_temp.id('c_s1');
+select is((select app._rd_compute_summary(pg_temp.id('tx'), pg_temp.id('uax'), pg_temp.id('mr'), pg_temp.id('day'), date '2026-06-05', null) is not null), true, 'a correction made after the change appends a summary');
+select results_eq($$ select movement_units, rollover, needs_review, counter_max from public.production_summary where machine_id = pg_temp.id('mr') and shift_date = date '2026-06-05' order by recorded_at desc, id desc limit 1 $$,
+  $$ values (220::bigint, true, false, 999999::bigint) $$, 'S1: the corrected summary still rolls over with 999999 (movement 220), not with the new maximum 5000');
 
 -- Append-only and tenancy -------------------------------------------------------------------------------------------------------------------------------------------
 select throws_ok($$ update public.production_summary set good = 0 $$, 'P0001', null, 'a summary cannot be changed');

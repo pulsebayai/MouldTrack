@@ -48,6 +48,15 @@ Batch B with 07 (**07 merges first**). Locks: schema — 06's share (production_
   - **R7 Opening time + Late on the readings list (I-7 part):** readings screen shows the opening time in plant time and "Late" for opening_done / closing_due. (The separate-screen deviation itself goes to the owner.)
   - **R8 Nits:** N-1 default product by occurrence order; N-5 null product → validation; N-6 retired machine/shift checks in closing/correct; N-7 photos only on current readings, 3-photo cap re-checked at commit; N-8 clear draft once saved; N-10 counter unit lock mapped to the field + chips disabled when readings exist; N-11 Maestro pinned to a specific machine/occurrence and fails if no step ran; N-12 list extra files.
   - Proof: CI green on PR #18.
+- [x] 8b. **Final-review fixes (Opus, 2026-11-18).** Dev already has `20261117400000_readings.sql`, so every DB change is in the NEW additive migration `20261117410000_readings_review_fixes.sql` (new column, index, backfill, `create or replace`); the first file is untouched. Tests first.
+  - **S1** the counter maximum in force is stored on each closing (`production_reading.counter_max`, backfilled from the machine's current maximum for existing closings, carried through corrections) and the summary rolls over from the stored value; tests 051 (rd_closing → max change → rd_correct) and 052.
+  - **S2** `reading_detail.allowed.can_close` / `can_correct` also require an active machine and shift (053).
+  - **N2** photos only while the caller could still correct the reading (`rd_correct`'s window and role rule) in begin AND commit (054; the 054 fixture readings moved to today's plant date because a supervisor's window closes when the next shift starts).
+  - **N4** Today uses only the summary's own target once a summary exists (053). **N5** non-partial index `production_reading_current_idx (tenant_id, machine_id, shift_id, shift_date, kind)` and `tenant_id` in the current-reading lookups (050). **N1** `opening_missed` text "Opening overdue – will be flagged Late". **N7** CorrectForm starts with no product when the original is retired and shows "Choose the product". **N3** Maestro final assert targets FX-MA1's `reading-state-…` testID. **N6** documented only (spec AC-6 clarification, architecture).
+  - Docs: S3, S4, S6, the `_rd_authorise` line (architecture), spec AC-11 / plan wording.
+  - Test edits (06's own): 052 helper `run()` stores the machine's maximum on the closing (as `rd_closing` now does); 054 fixture dates moved to today (N2). `supabase/seed.sql` and `scripts/fixtures-reset.ts` store `counter_max` on the fixture closings. No 01-05/07/006 test changed.
+  - N8 files outside the Files list: `src/test/shift-fixtures.ts` (06 fixtures, appended in step 7), `supabase/migrations/20261117410000_readings_review_fixes.sql`.
+  - Proof: PR CI on the final head; no new hosted proof (deploy-dev applies the migration at merge, the nightly covers it).
 - [x] 9. **Hosted proof (dev)** after 07's merge + step 8; then **docs** (architecture.md with the lock: readings model, versioned summary, counter semantics) — proof: run URLs, docs diff
 - [ ] 10. **Review + PR.** sdlc-reviewer, fixes, AC table. — proof: PR CI green
 
@@ -101,7 +110,7 @@ AC-1–16 → tests (spec table); full suite green after rebase on 07; dev regre
 - Not done by design: step 9 (hosted proof, architecture docs) and step 10. Maestro `opening-closing.yaml` is written but only runs nightly/release (not on PRs).
 
 ### 2026-11-18 (Opus)
-- Owner accepted the separate /readings screen for R1 (spec AC-11 note) and approved R4 (late opening) and R5 (early closing flag). Flag for roadmap (main, after R1): re-scope 05's Home RPC-count test; move readings onto My shift; UA alerts on native. 08 must not rely on adding RPC calls to Home (put its entry on the Readings/handover screen).
+- Owner accepted the separate /readings screen for R1 (spec AC-11 note) and approved R4 (late opening) and R5 (early closing flag). 05's Home RPC-count test was re-scoped in PR #20, so readings can move onto My shift after R1 (owner choice: a separate screen for R1); 08 may add a Home call.
 
 ### 2026-11-18 (Sonnet, step 8a)
 - Done: R1 (RecordForm context from `reading_detail`, gated on `allowed`; Record opening/closing buttons on the occurrence view; web e2e: Unit Admin records on behalf and the history says "Entered by a Unit Admin"), R2 (photo on closing), R3 (Today: movement, reject, unaccounted, "Not closed yet", "Not due yet", assumed target shown separately), R4 (late opening until end + 12 h), R5 (Early flag, capture rule), R6, R7 (opening time in plant time + Late on `/readings`), R8 N-1, N-5, N-6, N-7, N-8, N-10, N-11, N-12.

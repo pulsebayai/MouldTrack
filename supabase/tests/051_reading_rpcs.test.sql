@@ -6,7 +6,7 @@
 -- shift times live on, so the tests do not depend on the time of day.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(151);
+select plan(157);
 
 create temp table ids (k text primary key, v uuid);
 create temp table dates (k text primary key, d date);
@@ -128,6 +128,7 @@ select pg_temp.mk('nearend', -450, 8, 's1');
 select pg_temp.mk('retc', -30, 8, 's1', true);
 select pg_temp.mk('retsh', -30, 8, 's1');
 select pg_temp.mk('retcorr', -30, 8, 's1');
+select pg_temp.mk('s1roll', -30, 8, 's1');
 insert into public.assignment_cover (tenant_id, shift_id, shift_date, machine_id, supervisor_id, reason, recorded_by) values
   (pg_temp.id('tx'), pg_temp.id('sh_cover'), pg_temp.d('cover'), pg_temp.id('m_cover'), pg_temp.id('s2'), 'sick', pg_temp.id('uax')),
   (pg_temp.id('tx'), pg_temp.id('sh_uncov'), pg_temp.d('uncov'), pg_temp.id('m_uncov'), null, 'nobody', pg_temp.id('uax'));
@@ -378,6 +379,20 @@ select is(pg_temp.err(format($q$ select public.rd_correct(pg_temp.rq(210), %L, 1
 -- Append-only: the RPCs never changed or removed a reading
 select is((select count(*)::int from public.production_reading where id in (pg_temp.id('o_run'), pg_temp.id('c_run')) and counter_value in (1000, 1250)), 2, 'the first readings are unchanged after all the corrections');
 select is((select count(*)::int from public.production_reading where supersedes_id is not null), 7, 'seven corrections exist in total (3 on run, 1 late, 1 corr, 2 long)');
+
+-- 8b S1: the counter maximum in force at submit time is stored with the closing and carried through corrections ---------------------------------------------
+update public.machine set counter_max = 999999 where id = pg_temp.id('m_s1roll');
+select pg_temp.put_open('s1roll', 999900);
+select pg_temp.as_user('s1');
+select is(public.rd_closing(pg_temp.rq(220), pg_temp.id('m_s1roll'), pg_temp.id('sh_s1roll'), pg_temp.d('s1roll'), 100, 150, 10) ->> 'ok', 'true', 'S1: a rollover closing is recorded');
+select results_eq($$ select counter_max, kind from public.production_reading where machine_id = pg_temp.id('m_s1roll') and kind = 'closing' $$, $$ values (999999::bigint, 'closing'::text) $$, 'S1: the maximum in force is stored with the closing');
+select pg_temp.as_user('uax');
+select is(public.rd_set_machine_counter(pg_temp.rq(221), pg_temp.id('m_s1roll'), 'pieces', 5000) ->> 'ok', 'true', 'S1: the Unit Admin changes the maximum afterwards');
+select pg_temp.as_user('s1');
+select is(public.rd_correct(pg_temp.rq(222), (select id from public.production_reading where machine_id = pg_temp.id('m_s1roll') and kind = 'closing'), 120, null, 160, 10, null, 'recount') ->> 'ok', 'true', 'S1: the supervisor corrects the closing');
+select results_eq($$ select movement_units, rollover, counter_max from public.production_summary where machine_id = pg_temp.id('m_s1roll') order by recorded_at desc, id desc limit 1 $$,
+  $$ values (220::bigint, true, 999999::bigint) $$, 'S1: the corrected summary rolls over with the stored 999999 (movement 220), not the new 5000');
+select is((select count(*)::int from public.production_reading where machine_id = pg_temp.id('m_s1roll') and kind = 'closing' and counter_max = 999999), 2, 'S1: the correction carries the stored maximum');
 
 -- Privileges
 select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace

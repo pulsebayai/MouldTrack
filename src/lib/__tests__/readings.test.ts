@@ -1,5 +1,5 @@
 import {
-  attainmentText, closingStatusText, openingNote, formatCount, formatPct, parseWhole, readingApi, validateCavities, validateClosing, validateMax, validateOpening, validateReason, validateRemarks, MSG,
+  attainmentText, closingStatusText, openingNote, STATE_LABEL, formatCount, formatPct, parseWhole, readingApi, validateCavities, validateClosing, validateMax, validateOpening, validateReason, validateRemarks, MSG,
 } from '@/lib/readings';
 
 describe('readings: parsing and validation (mirrors the server messages)', () => {
@@ -86,5 +86,11 @@ describe('8a labels (R3, R5, R7)', () => {
   it('opening note: plant time, Late only when flagged', () => {
     expect(openingNote({ recorded_at: 'x', late: true }, () => '08:30')).toBe('Opening recorded 08:30 · Late');
     expect(openingNote({ recorded_at: 'x', late: false }, () => '08:30')).toBe('Opening recorded 08:30');
+  });
+});
+
+describe('8b N1 label', () => {
+  it('an opening that was not recorded is overdue and will be flagged Late, not lost (late openings are accepted)', () => {
+    expect(STATE_LABEL.opening_missed).toBe('Opening overdue – will be flagged Late');
   });
 });

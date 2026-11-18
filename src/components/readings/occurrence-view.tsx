@@ -8,7 +8,7 @@ import { downloadPhoto } from '@/lib/photos';
 import { PlantError, RequestIds, fetchActiveProducts, formatPlantDate, timeWindow } from '@/lib/plant';
 import { fetchPlantTimezone, formatPlantDateTime } from '@/lib/plant-time';
 import {
-  UNIT_LABEL, fetchReadingDetail, formatCount, readingApi, validateClosing, validateOpening, validateReason, type ReadingDetail, type ReadingEntry, type ReadingPhoto,
+  MSG, UNIT_LABEL, fetchReadingDetail, formatCount, readingApi, validateClosing, validateOpening, validateReason, type ReadingDetail, type ReadingEntry, type ReadingPhoto,
 } from '@/lib/readings';
 import { useSession } from '@/lib/session-provider';
 import { useLoad } from '@/lib/use-load';
@@ -44,7 +44,11 @@ function PhotoThumb({ photo }: { photo: ReadingPhoto }) {
 function CorrectForm({ d, entry, onDone, onCancel }: { d: ReadingDetail; entry: ReadingEntry; onDone: () => void; onCancel: () => void }) {
   const { client } = useSession();
   const products = useLoad(() => fetchActiveProducts(client), [], entry.kind === 'opening');
-  const [productId, setProductId] = useState<string | null>(entry.product_id);
+  const [picked, setPicked] = useState<string | null>(null);
+  // N7: the original product stays selected only while it is still active; a retired one starts with nothing chosen and the usual validation message.
+  const originalActive = !!entry.product_id && (products.data ?? []).some((p) => p.id === entry.product_id);
+  const productId = picked ?? (originalActive ? entry.product_id : null);
+  const retiredOriginal = entry.kind === 'opening' && products.state === 'ready' && !originalActive && picked === null;
   const [counter, setCounter] = useState(String(entry.counter));
   const [good, setGood] = useState(entry.good === null ? '' : String(entry.good));
   const [reject, setReject] = useState(entry.reject === null ? '' : String(entry.reject));
@@ -85,10 +89,10 @@ function CorrectForm({ d, entry, onDone, onCancel }: { d: ReadingDetail; entry: 
           <Text style={{ fontSize: 15, fontWeight: '600', color: colors.text }}>Product</Text>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
             {(products.data ?? []).map((p) => (
-              <Chip key={p.id} testID={`correct-product-${p.id}`} label={`${p.code} · ${p.description}`} selected={productId === p.id} onPress={() => setProductId(p.id)} />
+              <Chip key={p.id} testID={`correct-product-${p.id}`} label={`${p.code} · ${p.description}`} selected={productId === p.id} onPress={() => setPicked(p.id)} />
             ))}
           </View>
-          {errors.product_id ? <ErrorText testID="correct-product-error">{errors.product_id}</ErrorText> : null}
+          {errors.product_id || retiredOriginal ? <ErrorText testID="correct-product-error">{errors.product_id ?? MSG.product}</ErrorText> : null}
         </View>
       ) : null}
       <Field label={`Counter reading (${UNIT_LABEL[d.machine.counter_unit].toLowerCase()})`} testID="correct-counter" value={counter} onChangeText={setCounter} keyboardType="number-pad" inputMode="numeric" error={errors.counter} />

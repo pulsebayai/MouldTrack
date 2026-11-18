@@ -3,7 +3,7 @@
 -- Self-contained; rolled back. Plant dates are offsets from today's plant date so the test is date-independent.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(126);
+select plan(127);
 
 create temp table ids (k text primary key, v uuid);
 create function pg_temp.id(k text) returns uuid language sql as $$ select v from ids where k = $1 $$;
@@ -303,6 +303,10 @@ select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.
             where n.nspname = 'public' and p.proname ~ '^rd_' and has_function_privilege('authenticated', p.oid, 'execute') and not has_function_privilege('anon', p.oid, 'execute')),
           (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname ~ '^rd_'),
   'every public rd_* RPC is executable by authenticated and not by anon');
+
+-- 8b N5: a non-partial index serves every current-reading lookup
+select is((select count(*)::int from pg_indexes where schemaname = 'public' and tablename = 'production_reading' and indexname = 'production_reading_current_idx'
+             and indexdef like '%(tenant_id, machine_id, shift_id, shift_date, kind)%' and indexdef not like '%WHERE%'), 1, 'N5: production_reading has a non-partial (tenant_id, machine_id, shift_id, shift_date, kind) index');
 
 select * from finish();
 rollback;

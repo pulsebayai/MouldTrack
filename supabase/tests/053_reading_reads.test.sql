@@ -5,7 +5,7 @@
 -- on fixed past dates (the readings are fixtures inserted as the table owner). Self-contained; rolled back.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(130);
+select plan(137);
 
 create temp table ids (k text primary key, v uuid);
 create function pg_temp.id(k text) returns uuid language sql as $$ select v from ids where k = $1 $$;
@@ -145,6 +145,9 @@ select pg_temp.as_user('uax');
 select pg_temp.summ('m1', 'day', date '2026-03-10');
 select pg_temp.summ('m3', 'day', date '2026-03-24');
 select pg_temp.summ('m8', 'day', date '2026-03-24');
+-- N4: m8's summary was calculated with no target; a target that is effective afterwards must not be shown for that closed occurrence
+insert into public.target_version (tenant_id, machine_id, product_id, effective_from, pieces_per_shift, recorded_by)
+  values (pg_temp.id('tx'), pg_temp.id('m8'), pg_temp.id('p1'), date '2026-03-24', 777, pg_temp.id('uax'));
 select pg_temp.summ('m1', 'night', date '2026-03-09');
 
 -- Pins to 05 ---------------------------------------------------------------------------------------------------------------------------------------------
@@ -316,6 +319,21 @@ select is((select count(*)::int from jsonb_array_elements(app.today_board_at(pg_
   'the board looks back two occurrences per shift (the night of the 8th is the previous one)');
 select pg_temp.as_user('uay');
 select is(jsonb_array_length(app.today_board_at(pg_temp.ts(date '2026-03-10', '15:00')) -> 'occurrences'), 0, 'another tenant''s Unit Admin sees none of it');
+
+-- 8b N4: with a summary, the board shows the summary's own target only
+select pg_temp.as_user('uax');
+select is(app.effective_target(pg_temp.id('m8'), pg_temp.id('p1'), pg_temp.id('day'), date '2026-03-24'), 777, 'N4 setup: the effective target of M8 on the 24th is 777 now');
+select is(pg_temp.bm(pg_temp.ts(date '2026-03-24', '15:00'), 'day', date '2026-03-24', 'M8') ->> 'target', null, 'N4: M8''s closed occurrence shows the summary''s target (none), not today''s effective 777');
+-- 8b S2: reading_detail.allowed follows the same retired checks as rd_closing and rd_correct
+insert into public.shift (id, tenant_id, site_id, name, start_time, end_time, retired_at) values
+  ('55000000-0000-4000-c653-0000000000a9', pg_temp.id('tx'), '51000000-0000-4000-c653-00000000000a', 'Retired shift', '06:00', '14:00', now());
+insert into ids values ('shret', '55000000-0000-4000-c653-0000000000a9');
+select pg_temp.po('o1_ret', 'm1', 'shret', date '2026-03-15', 5, 'p1', pg_temp.ts(date '2026-03-15', '06:05'));
+select is((app.reading_detail_at(pg_temp.id('m5'), pg_temp.id('day'), date '2026-03-10', pg_temp.ts(date '2026-03-10', '10:00')) -> 'allowed' ->> 'can_close')::boolean, false, 'S2: a retired machine (M5) with an opening cannot be closed');
+select is((app.reading_detail_at(pg_temp.id('m5'), pg_temp.id('day'), date '2026-03-10', pg_temp.ts(date '2026-03-10', '10:00')) -> 'allowed' ->> 'can_correct')::boolean, false, 'S2: nor corrected');
+select is((app.reading_detail_at(pg_temp.id('m1'), pg_temp.id('shret'), date '2026-03-15', pg_temp.ts(date '2026-03-15', '10:00')) -> 'allowed' ->> 'can_close')::boolean, false, 'S2: a retired shift cannot be closed');
+select is((app.reading_detail_at(pg_temp.id('m1'), pg_temp.id('shret'), date '2026-03-15', pg_temp.ts(date '2026-03-15', '10:00')) -> 'allowed' ->> 'can_correct')::boolean, false, 'S2: nor corrected');
+select is((app.reading_detail_at(pg_temp.id('m1'), pg_temp.id('day'), date '2026-03-10', pg_temp.ts(date '2026-03-10', '10:00')) -> 'allowed' ->> 'can_correct')::boolean, true, 'S2: an active machine and shift are unaffected');
 
 -- Volume: 300 machines x 3 shifts, two occurrences each ------------------------------------------------------------------------------------------------------
 insert into public.shift (id, tenant_id, site_id, name, start_time, end_time)

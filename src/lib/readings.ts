@@ -55,7 +55,7 @@ export type TodayBoard = { ok: true; as_of: string; occurrences: BoardOccurrence
 
 // ---- Labels (status is always text, never colour alone) ----------------------------------------------------------------------------------
 export const STATE_LABEL: Record<ReadingStateCode, string> = {
-  opening_due: 'Opening reading due', opening_done: 'Opening recorded, closing due at the end', closing_due: 'Closing reading due', closed: 'Both readings recorded', opening_missed: 'Opening was not recorded',
+  opening_due: 'Opening reading due', opening_done: 'Opening recorded, closing due at the end', closing_due: 'Closing reading due', closed: 'Both readings recorded', opening_missed: 'Opening overdue – will be flagged Late',
 };
 export const STATUS_LABEL = { missing: 'Missing', late: 'Late', early: 'Early', on_time: 'On time' } as const;
 export const FLAG_LABEL: Record<ReadingFlag, string> = {
