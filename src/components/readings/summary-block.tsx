@@ -14,10 +14,11 @@ export function FlagList({ flags, testID }: { flags: ReadingFlag[]; testID?: str
   );
 }
 
-export function summaryFlags(s: Pick<SummaryInfo, 'rollover' | 'needs_review' | 'over_reported'>, late: { opening?: boolean; closing?: boolean } = {}): ReadingFlag[] {
+export function summaryFlags(s: Pick<SummaryInfo, 'rollover' | 'needs_review' | 'over_reported'>, late: { opening?: boolean; closing?: boolean; early?: boolean } = {}): ReadingFlag[] {
   const out: ReadingFlag[] = [];
   if (late.opening) out.push('late_opening');
   if (late.closing) out.push('late_closing');
+  if (late.early) out.push('early_closing');
   if (s.rollover) out.push('rollover');
   if (s.needs_review) out.push('needs_review');
   if (s.over_reported) out.push('over_reported');
@@ -25,7 +26,7 @@ export function summaryFlags(s: Pick<SummaryInfo, 'rollover' | 'needs_review' | 
 }
 
 /** The production summary of one machine-occurrence: movement, good, reject, unaccounted, target and attainment, always together with the target. */
-export function SummaryBlock({ s, testID, late }: { s: SummaryInfo; testID: string; late?: { opening?: boolean; closing?: boolean } }) {
+export function SummaryBlock({ s, testID, late }: { s: SummaryInfo; testID: string; late?: { opening?: boolean; closing?: boolean; early?: boolean } }) {
   const row = { fontSize: 15, color: colors.text } as const;
   return (
     <View testID={testID} style={{ gap: 4 }}>

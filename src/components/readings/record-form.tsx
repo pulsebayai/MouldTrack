@@ -8,9 +8,7 @@ import { toUserMessage } from '@/lib/errors';
 import { PhotoError, pickPhoto, uploadReadingPhoto, type Photo } from '@/lib/photos';
 import { PlantError, RequestIds, fetchActiveProducts, formatPlantDate, timeWindow } from '@/lib/plant';
 import { clearReadingDraft, loadReadingDraft, readingDraftKey, saveReadingDraft } from '@/lib/reading-draft';
-import {
-  UNIT_LABEL, fetchReadingState, readingApi, validateClosing, validateOpening, type StateMachine,
-} from '@/lib/readings';
+import { UNIT_LABEL, fetchReadingDetail, readingApi, validateClosing, validateOpening } from '@/lib/readings';
 import { useSession } from '@/lib/session-provider';
 import { useLoad } from '@/lib/use-load';
 
@@ -22,7 +20,9 @@ type Props = { machineId: string; shiftId: string; shiftDate: string; kind: 'ope
  */
 export function RecordForm({ machineId, shiftId, shiftDate, kind }: Props) {
   const { client } = useSession();
-  const state = useLoad(() => fetchReadingState(client), [machineId, shiftId, shiftDate]);
+  // The form's context (machine, unit, default product, what may be recorded) comes from reading_detail, so it also works for a Unit Admin who
+  // records on behalf of a supervisor (reading_state lists only the caller's own machines).
+  const detail = useLoad(() => fetchReadingDetail(client, machineId, shiftId, shiftDate), [machineId, shiftId, shiftDate]);
   const products = useLoad(() => fetchActiveProducts(client), [], kind === 'opening');
   const [productId, setProductId] = useState<string | null>(null);
   const [counter, setCounter] = useState('');
@@ -41,8 +41,8 @@ export function RecordForm({ machineId, shiftId, shiftDate, kind }: Props) {
   const [recorded, setRecorded] = useState(false);
   const draftKey = readingDraftKey(machineId, shiftId, shiftDate, kind);
 
-  const occ = state.latest?.occurrences.find((o) => o.shift.id === shiftId && o.shift_date === shiftDate);
-  const m: StateMachine | undefined = occ?.machines.find((x) => x.machine_id === machineId);
+  const d = detail.data ?? detail.latest;
+  const allowed = d ? (kind === 'opening' ? d.allowed.can_open : d.allowed.can_close) : false;
 
   useEffect(() => {
     loadReadingDraft(draftKey).then((d) => {
@@ -60,7 +60,7 @@ export function RecordForm({ machineId, shiftId, shiftDate, kind }: Props) {
     if (restored) saveReadingDraft(draftKey, { productId, counter, good, reject, remarks });
   }, [draftKey, restored, productId, counter, good, reject, remarks]);
   // The default product (the latest opening's) is shown as chosen until the person picks another (derived, not copied into state).
-  const chosen = productId ?? (kind === 'opening' ? m?.default_product_id ?? null : null);
+  const chosen = productId ?? (kind === 'opening' ? d?.default_product_id ?? null : null);
 
   async function choosePhoto(source: 'camera' | 'library') {
     setPhotoError(null);
@@ -91,6 +91,7 @@ export function RecordForm({ machineId, shiftId, shiftDate, kind }: Props) {
           ids.current.succeeded(key);
           saved.current = r.id ?? null;
           setRecorded(true);
+          await clearReadingDraft(draftKey); // N-8: the reading is saved, so the draft is done even if the photo still has to be retried
         } catch (e) {
           ids.current.failed(key, e);
           throw e;
@@ -114,27 +115,29 @@ export function RecordForm({ machineId, shiftId, shiftDate, kind }: Props) {
     }
   }
 
-  const unit = m ? UNIT_LABEL[m.counter_unit].toLowerCase() : 'counter';
+  const unit = d ? UNIT_LABEL[d.machine.counter_unit].toLowerCase() : 'counter';
   const title = kind === 'opening' ? 'Opening reading' : 'Closing reading';
   return (
     <ScrollView testID={`record-${kind}-screen`} contentContainerStyle={{ alignItems: 'center', padding: 24 }}>
       <View style={{ width: '100%', maxWidth: 560, gap: 16 }}>
         <Text accessibilityRole="header" style={{ fontSize: 24, fontWeight: '700', color: colors.text }}>{title}</Text>
-        {state.state === 'loading' && !state.latest ? <Loading testID="record-loading" label="Loading" /> : null}
-        {state.state === 'error' ? <LoadError testID="record-load-error" onRetry={state.reload} error={state.error} /> : null}
-        {occ && m ? (
+        {detail.state === 'loading' && !d ? <Loading testID="record-loading" label="Loading" /> : null}
+        {detail.state === 'error' ? <LoadError testID="record-load-error" onRetry={detail.reload} error={detail.error} /> : null}
+        {d ? (
           <View style={{ gap: 4 }}>
-            <Text testID="record-machine" style={{ fontSize: 17, fontWeight: '700', color: colors.text }}>{m.code} · {m.name}</Text>
+            <Text testID="record-machine" style={{ fontSize: 17, fontWeight: '700', color: colors.text }}>{d.machine.code} · {d.machine.name}</Text>
             <Text testID="record-shift" style={{ fontSize: 15, color: colors.text }}>
-              {occ.shift.name} · {timeWindow(occ.shift.start_time, occ.shift.end_time)} · {formatPlantDate(occ.shift_date)}
+              {d.shift.name} · {timeWindow(d.shift.start_time, d.shift.end_time)} · {formatPlantDate(d.shift_date)}
             </Text>
-            <Text testID="record-unit" style={{ fontSize: 15, color: colors.text }}>Counter counts: {UNIT_LABEL[m.counter_unit]}</Text>
+            <Text testID="record-unit" style={{ fontSize: 15, color: colors.text }}>Counter counts: {UNIT_LABEL[d.machine.counter_unit]}</Text>
           </View>
         ) : null}
-        {state.state === 'ready' && !m ? (
-          <Text testID="record-gone" accessibilityRole="alert" style={{ fontSize: 16, color: colors.error }}>This machine is no longer in your list for this shift.</Text>
+        {d && !allowed && !recorded ? (
+          <Text testID="record-not-allowed" accessibilityRole="alert" style={{ fontSize: 16, color: colors.error }}>
+            The {kind} reading cannot be recorded for this machine right now. Go back to the readings to see what is open.
+          </Text>
         ) : null}
-        {m ? (
+        {d && (allowed || recorded) ? (
           <>
             {kind === 'opening' ? (
               <View style={{ gap: 8 }}>
@@ -157,8 +160,7 @@ export function RecordForm({ machineId, shiftId, shiftDate, kind }: Props) {
               </>
             ) : null}
             <Field label="Remarks (optional)" testID="record-remarks" value={remarks} onChangeText={setRemarks} multiline maxLength={500} error={errors.remarks} />
-            {kind === 'opening' ? (
-              <View style={{ gap: 8 }}>
+            <View style={{ gap: 8 }}>
                 <Text style={{ fontSize: 15, fontWeight: '600', color: colors.text }}>Photo of the counter (optional)</Text>
                 {photo ? <Text testID="record-photo-ready" accessibilityLiveRegion="polite" style={{ fontSize: 15, color: colors.text }}>Photo ready ({Math.round(photo.bytes.length / 1024)} KB)</Text> : null}
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
@@ -167,8 +169,7 @@ export function RecordForm({ machineId, shiftId, shiftDate, kind }: Props) {
                   {photo ? <Button title="Remove photo" variant="secondary" testID="record-photo-remove" onPress={() => setPhoto(null)} disabled={busy} /> : null}
                 </View>
                 {photoError ? <ErrorText testID="record-photo-error">{photoError}</ErrorText> : null}
-              </View>
-            ) : null}
+            </View>
             {error ? <ErrorText testID="record-error">{error}</ErrorText> : null}
             <Button title={recorded ? 'Try again' : `Save ${kind} reading`} testID="record-submit" onPress={submit} busy={busy} disabled={busy} />
           </>

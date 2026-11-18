@@ -4,13 +4,13 @@ import { call, readRpc, type RpcClient } from './plant';
 // ---- Types (the shapes returned by reading_state / reading_detail / today_board) -----------------------------------------------------------
 export type CounterUnit = 'pieces' | 'shots';
 export type ReadingStateCode = 'opening_due' | 'opening_done' | 'closing_due' | 'closed' | 'opening_missed';
-export type ReadingFlag = 'late_opening' | 'late_closing' | 'rollover' | 'needs_review' | 'over_reported' | 'entered_by_ua';
+export type ReadingFlag = 'late_opening' | 'late_closing' | 'early_closing' | 'rollover' | 'needs_review' | 'over_reported' | 'entered_by_ua';
 
 export type OpeningInfo = { id: string; counter: number; product_id: string; product_code: string | null; recorded_at: string; late: boolean; entered_by_ua: boolean; remarks: string | null };
-export type ClosingInfo = { id: string; counter: number; good: number; reject: number; recorded_at: string; late: boolean; entered_by_ua: boolean; remarks: string | null };
+export type ClosingInfo = { id: string; counter: number; good: number; reject: number; recorded_at: string; late: boolean; early?: boolean; entered_by_ua: boolean; remarks: string | null };
 export type SummaryInfo = {
   id: string; target: number | null; movement_pieces: number | null; good: number; reject: number; unaccounted: number | null; attainment_pct: number | null;
-  rollover: boolean; needs_review: boolean; over_reported: boolean;
+  rollover: boolean; needs_review: boolean; over_reported: boolean; early_closing?: boolean;
 };
 export type StateMachine = {
   machine_id: string; code: string; name: string; line: string | null; counter_unit: CounterUnit; counter_max: number | null; state: ReadingStateCode;
@@ -24,42 +24,42 @@ export type ReadingState = { ok: true; state: 'no_shifts' | 'none' | 'active'; o
 
 export type ReadingEntry = {
   id: string; kind: 'opening' | 'closing'; counter: number; product_id: string | null; product_code: string | null; good: number | null; reject: number | null;
-  remarks: string | null; late: boolean; entered_by_ua: boolean; supersedes_id: string | null; correction_reason: string | null;
+  remarks: string | null; late: boolean; early?: boolean; entered_by_ua: boolean; supersedes_id: string | null; correction_reason: string | null;
   recorded_by: string; recorded_by_name: string | null; recorded_at: string; current: boolean;
 };
 export type SummaryFull = SummaryInfo & {
   calc_version: number; product_id: string; counter_unit: CounterUnit; cavities: number; counter_max: number | null; opening_counter: number; closing_counter: number; reject: number;
-  movement_units: number | null; late_opening: boolean; late_closing: boolean; entered_by_ua: boolean; recorded_at: string;
+  movement_units: number | null; late_opening: boolean; late_closing: boolean; early_closing?: boolean; entered_by_ua: boolean; recorded_at: string;
 };
 export type ReadingPhoto = { id: string; reading_id: string; path: string; mime: string; ready_at: string };
 export type ReadingDetail = {
   ok: true;
   machine: { id: string; code: string; name: string; counter_unit: CounterUnit; counter_max: number | null };
   shift: { id: string; name: string; start_time: string; end_time: string };
-  shift_date: string; starts_at: string; ends_at: string; owner_id: string | null; owner_name: string | null;
+  shift_date: string; starts_at: string; ends_at: string; owner_id: string | null; owner_name: string | null; default_product_id?: string | null;
   readings: ReadingEntry[]; opening: ReadingEntry | null; closing: ReadingEntry | null; summary: SummaryFull | null; summary_count: number; photos: ReadingPhoto[];
   allowed: { can_open: boolean; can_close: boolean; can_correct: boolean };
 };
 
 export type BoardMachine = {
   machine_id: string; code: string; name: string; counter_unit: CounterUnit; owner_id: string; owner_name: string | null; product_id: string | null; product_code: string | null;
-  target: number | null; target_assumed: boolean; opening_status: 'missing' | 'late' | 'on_time'; closing_status: 'missing' | 'late' | 'on_time';
+  target: number | null; target_assumed: boolean; opening_status: 'missing' | 'late' | 'on_time'; closing_status: 'missing' | 'late' | 'early' | 'on_time';
   opening_counter: number | null; closing_counter: number | null; movement_pieces: number | null; good: number | null; reject: number | null; unaccounted: number | null;
   attainment_pct: number | null; flags: ReadingFlag[];
 };
 export type BoardTotals = {
   machines_expected: number; openings_on_time: number; closings_on_time: number; both_on_time: number; target: number; target_closed: number; good: number; attainment_pct: number | null;
 };
-export type BoardOccurrence = Occurrence<BoardMachine> & { current: boolean; totals: BoardTotals };
+export type BoardOccurrence = Occurrence<BoardMachine> & { current: boolean; totals: BoardTotals; assumed_target?: number };
 export type TodayBoard = { ok: true; as_of: string; occurrences: BoardOccurrence[] };
 
 // ---- Labels (status is always text, never colour alone) ----------------------------------------------------------------------------------
 export const STATE_LABEL: Record<ReadingStateCode, string> = {
   opening_due: 'Opening reading due', opening_done: 'Opening recorded, closing due at the end', closing_due: 'Closing reading due', closed: 'Both readings recorded', opening_missed: 'Opening was not recorded',
 };
-export const STATUS_LABEL = { missing: 'Missing', late: 'Late', on_time: 'On time' } as const;
+export const STATUS_LABEL = { missing: 'Missing', late: 'Late', early: 'Early', on_time: 'On time' } as const;
 export const FLAG_LABEL: Record<ReadingFlag, string> = {
-  late_opening: 'Late opening', late_closing: 'Late closing', rollover: 'Counter rolled over', needs_review: 'Needs review',
+  late_opening: 'Late opening', late_closing: 'Late closing', early_closing: 'Early closing (before the last 30 minutes of the shift)', rollover: 'Counter rolled over', needs_review: 'Needs review',
   over_reported: 'Good + reject is more than the counter movement', entered_by_ua: 'Entered by a Unit Admin',
 };
 export const UNIT_LABEL: Record<CounterUnit, string> = { pieces: 'Pieces', shots: 'Shots / cycles' };
@@ -151,6 +151,12 @@ export async function fetchCavityVersions(client: Pick<SupabaseClient, 'from'>, 
   if (error) throw error;
   return (data ?? []) as CavityRow[];
 }
+/** True when the machine has any reading (the unit is then locked by the server; the panel disables the unit chips). One row at most is read. */
+export async function fetchMachineHasReadings(client: Pick<SupabaseClient, 'from'>, machineId: string): Promise<boolean> {
+  const { data, error } = await client.from('production_reading').select('id').eq('machine_id', machineId).range(0, 0);
+  if (error) throw error;
+  return (data ?? []).length > 0;
+}
 export type MachineCounter = { counter_unit: CounterUnit; counter_max: number | null };
 export async function fetchMachineCounter(client: Pick<SupabaseClient, 'from'>, machineId: string): Promise<MachineCounter | null> {
   const { data, error } = await client.from('machine').select('counter_unit, counter_max').eq('id', machineId).maybeSingle();
@@ -183,3 +189,17 @@ export const readingApi = {
   endCavities: (c: RpcClient, machineId: string, productId: string, from: string, rid: string) =>
     call(c, 'rd_end_cavities', { p_request_id: rid, p_machine_id: machineId, p_product_id: productId, p_effective_from: from }),
 };
+
+/** Opening time in plant time for the readings list; "Late" is the server's flag (R7). */
+export const openingNote = (o: { recorded_at: string; late: boolean }, when: (iso: string) => string): string => `Opening recorded ${when(o.recorded_at)}${o.late ? ' · Late' : ''}`;
+
+/** Attainment text for a Today row (R3): "No target set" only when there is no target; "Not closed yet" while the closing is missing. */
+export function attainmentText(m: { target: number | null; closing_status: string; attainment_pct: number | null }): string {
+  if (m.target === null) return 'No target set';
+  if (m.closing_status === 'missing') return 'Not closed yet';
+  return formatPct(m.attainment_pct);
+}
+/** Closing status text: a closing that is missing while the occurrence still runs is "Not due yet", not a gap (N-3). */
+export function closingStatusText(status: BoardMachine['closing_status'], running: boolean): string {
+  return status === 'missing' && running ? 'Not due yet' : STATUS_LABEL[status];
+}

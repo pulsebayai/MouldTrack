@@ -4,7 +4,7 @@ import { AppState, ScrollView, Text, View } from 'react-native';
 import { Loading, LoadError } from '@/components/plant/common';
 import { Button, colors } from '@/components/ui';
 import { formatPlantDate, timeWindow } from '@/lib/plant';
-import { STATUS_LABEL, fetchTodayBoard, formatCount, formatPct, type TodayBoard } from '@/lib/readings';
+import { STATUS_LABEL, attainmentText, closingStatusText, fetchTodayBoard, formatCount, formatPct, type TodayBoard } from '@/lib/readings';
 import { useSession } from '@/lib/session-provider';
 import { useLoad } from '@/lib/use-load';
 import { useRefreshOnFocus } from '@/lib/use-refresh';
@@ -45,16 +45,20 @@ export function TodayBoardView() {
                 {o.shift.name} · {timeWindow(o.shift.start_time, o.shift.end_time)} · {formatPlantDate(o.shift_date)}{o.running ? ' · Running now' : o.current ? ' · Latest' : ' · Previous'}
               </Text>
               <Text testID={`today-totals-${k}`} style={text}>
-                {o.totals.machines_expected} machines · opening on time {o.totals.openings_on_time} · closing on time {o.totals.closings_on_time} · target {formatCount(o.totals.target)} · good (closed) {formatCount(o.totals.good)} · attainment {formatPct(o.totals.attainment_pct)}
+                {o.totals.machines_expected} machines · opening on time {o.totals.openings_on_time} · closing on time {o.totals.closings_on_time} · {(o.assumed_target ?? 0) > 0 ? 'target set' : 'target'} {formatCount(o.totals.target - (o.assumed_target ?? 0))}
+                {(o.assumed_target ?? 0) > 0 ? ` · assumed from the default product (no opening yet) ${formatCount(o.assumed_target)}` : ''} · good (closed) {formatCount(o.totals.good)} · attainment {formatPct(o.totals.attainment_pct)}
               </Text>
               {o.machines.map((m) => (
                 <View key={m.machine_id} testID={`today-machine-${k}-${m.machine_id}`} style={{ gap: 2, paddingVertical: 6, borderTopWidth: 1, borderTopColor: '#E6EAEE' }}>
                   <Text style={{ fontSize: 16, fontWeight: '700', color: colors.text }}>{m.code} · {m.name} · {m.owner_name ?? 'Unknown supervisor'}</Text>
                   <Text style={text}>
-                    Opening: {STATUS_LABEL[m.opening_status]} · Closing: {STATUS_LABEL[m.closing_status]}{m.product_code ? ` · ${m.product_code}` : ''}
+                    Opening: {STATUS_LABEL[m.opening_status]} · Closing: {closingStatusText(m.closing_status, o.running)}{m.product_code ? ` · ${m.product_code}` : ''}
                   </Text>
                   <Text testID={`today-target-${k}-${m.machine_id}`} style={text}>
-                    Target: {m.target === null ? 'No target set' : `${formatCount(m.target)}${m.target_assumed ? ' (default product)' : ''}`} · Good: {formatCount(m.good)} · Attainment: {formatPct(m.attainment_pct)}
+                    Target: {m.target === null ? 'No target set' : `${formatCount(m.target)}${m.target_assumed ? ' (default product)' : ''}`} · Good: {formatCount(m.good)} · Attainment: {attainmentText(m)}
+                  </Text>
+                  <Text testID={`today-movement-${k}-${m.machine_id}`} style={text}>
+                    Counter movement: {m.movement_pieces === null ? '-' : `${formatCount(m.movement_pieces)} pieces`} · Reject: {formatCount(m.reject)} · Unaccounted: {formatCount(m.unaccounted)}
                   </Text>
                   <FlagList testID={`today-flags-${k}-${m.machine_id}`} flags={m.flags} />
                   <Button title={`Open ${m.code}`} variant="secondary" testID={`today-open-${k}-${m.machine_id}`}

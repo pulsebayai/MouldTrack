@@ -6,7 +6,7 @@ import {
   PlantError, RequestIds, fetchActiveProducts, fetchPlantToday, fetchProductsByIds, formatPlantDate, isValidDate,
 } from '@/lib/plant';
 import {
-  UNIT_LABEL, fetchCavityVersions, fetchMachineCounter, readingApi, validateCavities, validateMax, formatCount, type CounterUnit,
+  UNIT_LABEL, fetchCavityVersions, fetchMachineCounter, fetchMachineHasReadings, readingApi, validateCavities, validateMax, formatCount, type CounterUnit,
 } from '@/lib/readings';
 import { useSession } from '@/lib/session-provider';
 import { useLoad } from '@/lib/use-load';
@@ -20,11 +20,12 @@ export function CounterPanel({ machineId, retired }: { machineId: string; retire
   const { client } = useSession();
   const data = useLoad(
     async () => {
-      const [counter, today, active, versions] = await Promise.all([
+      const [counter, today, active, versions, hasReadings] = await Promise.all([
         fetchMachineCounter(client, machineId), fetchPlantToday(client), retired ? Promise.resolve([]) : fetchActiveProducts(client), fetchCavityVersions(client, machineId),
+        fetchMachineHasReadings(client, machineId),
       ]);
       const products = await fetchProductsByIds(client, versions.map((v) => v.product_id));
-      return { counter, today, active, versions, products: new Map([...products, ...active].map((p) => [p.id, p])) };
+      return { counter, today, active, versions, hasReadings, products: new Map([...products, ...active].map((p) => [p.id, p])) };
     },
     [machineId, retired],
   );
@@ -58,6 +59,7 @@ export function CounterPanel({ machineId, retired }: { machineId: string; retire
     } catch (err) {
       ids.current.failed(key, err);
       if (err instanceof PlantError && (err.field === 'counter_max' || err.field === 'counter_unit')) setErrors({ [err.field]: err.message });
+      else if (err instanceof PlantError && err.field === 'counter_unit_locked') setErrors({ counter_unit: err.message });
       else setError(err instanceof PlantError ? err.message : toUserMessage(err));
     } finally {
       setBusy(false);
@@ -74,9 +76,10 @@ export function CounterPanel({ machineId, retired }: { machineId: string; retire
           <Text style={{ fontSize: 15, color: colors.text }}>What does the counter on the machine count?</Text>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
             {(['pieces', 'shots'] as const).map((u) => (
-              <Chip key={u} testID={`counter-unit-${u}`} label={UNIT_LABEL[u]} selected={shownUnit === u} disabled={retired} onPress={() => setUnit(u)} />
+              <Chip key={u} testID={`counter-unit-${u}`} label={UNIT_LABEL[u]} selected={shownUnit === u} disabled={retired || d.hasReadings} onPress={() => setUnit(u)} />
             ))}
           </View>
+          {d.hasReadings ? <Text testID="counter-unit-locked" style={{ fontSize: 14, color: colors.text }}>Readings already use this unit, so it can no longer be changed. The rollover value can.</Text> : null}
           {errors.counter_unit ? <ErrorText testID="counter-unit-error">{errors.counter_unit}</ErrorText> : null}
           <Field label="Counter rolls over after (optional)" testID="counter-max" value={shownMax} onChangeText={setMax} keyboardType="number-pad" inputMode="numeric" editable={!retired} error={errors.counter_max} />
           {error ? <ErrorText testID="counter-save-error">{error}</ErrorText> : null}

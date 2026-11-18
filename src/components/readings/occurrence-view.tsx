@@ -116,6 +116,7 @@ export function OccurrenceView({ machineId, shiftId, shiftDate }: { machineId: s
   const [correcting, setCorrecting] = useState<'opening' | 'closing' | null>(null);
   const d = detail.data ?? detail.latest;
   const when = (iso: string) => formatPlantDateTime(iso, tz);
+  const record = (kind: 'opening' | 'closing') => router.push({ pathname: '/readings/record' as never, params: { machineId, shiftId, date: shiftDate, kind } });
   const text = { fontSize: 15, color: colors.text } as const;
   return (
     <ScrollView testID="occurrence-screen" contentContainerStyle={{ alignItems: 'center', padding: 24 }}>
@@ -133,7 +134,8 @@ export function OccurrenceView({ machineId, shiftId, shiftDate }: { machineId: s
             {d.summary ? (
               <View style={{ gap: 4 }}>
                 <Text style={{ fontSize: 18, fontWeight: '700', color: colors.text }}>Summary</Text>
-                <SummaryBlock s={d.summary} testID="occurrence-summary" late={{ opening: d.summary.late_opening, closing: d.summary.late_closing }} />
+                <Text testID="occurrence-counters" style={text}>Counters: opening {formatCount(d.summary.opening_counter)} · closing {formatCount(d.summary.closing_counter)}</Text>
+                <SummaryBlock s={d.summary} testID="occurrence-summary" late={{ opening: d.summary.late_opening, closing: d.summary.late_closing, early: d.summary.early_closing }} />
                 {d.summary_count > 1 ? <Text testID="occurrence-summary-count" style={text}>Recalculated {d.summary_count - 1} time(s) after corrections.</Text> : null}
               </View>
             ) : <Text testID="occurrence-no-summary" style={text}>The summary appears once the closing reading is recorded.</Text>}
@@ -146,7 +148,7 @@ export function OccurrenceView({ machineId, shiftId, shiftDate }: { machineId: s
                   </Text>
                   <Text style={text}>Counter: {formatCount(r.counter)}{r.product_code ? ` · Product: ${r.product_code}` : ''}</Text>
                   {r.kind === 'closing' ? <Text style={text}>Good: {formatCount(r.good)} · Reject: {formatCount(r.reject)}</Text> : null}
-                  <Text style={text}>{r.recorded_by_name ?? 'Unknown'} · {when(r.recorded_at)}{r.late ? ' · Late' : ''}{r.entered_by_ua ? ' · Entered by a Unit Admin' : ''}</Text>
+                  <Text style={text}>{r.recorded_by_name ?? 'Unknown'} · {when(r.recorded_at)}{r.late ? ' · Late' : ''}{r.early ? ' · Early' : ''}{r.entered_by_ua ? ' · Entered by a Unit Admin' : ''}</Text>
                   {r.remarks ? <Text style={text}>Remarks: {r.remarks}</Text> : null}
                   {r.correction_reason ? <Text style={text}>Reason: {r.correction_reason}</Text> : null}
                 </View>
@@ -156,6 +158,12 @@ export function OccurrenceView({ machineId, shiftId, shiftDate }: { machineId: s
               <View style={{ gap: 8 }}>
                 <Text style={{ fontSize: 18, fontWeight: '700', color: colors.text }}>Photos</Text>
                 {d.photos.map((p) => <PhotoThumb key={p.id} photo={p} />)}
+              </View>
+            ) : null}
+            {(d.allowed.can_open || d.allowed.can_close) && correcting === null ? (
+              <View style={{ gap: 8 }}>
+                {d.allowed.can_open ? <Button title="Record opening" testID="occurrence-record-opening" onPress={() => record('opening')} /> : null}
+                {d.allowed.can_close ? <Button title="Record closing" testID="occurrence-record-closing" onPress={() => record('closing')} /> : null}
               </View>
             ) : null}
             {d.allowed.can_correct && correcting === null ? (

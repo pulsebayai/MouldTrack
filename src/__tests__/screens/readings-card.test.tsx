@@ -36,6 +36,18 @@ describe('Readings card (AC-11)', () => {
     expect(router.push).toHaveBeenLastCalledWith({ pathname: '/readings/occurrence', params: { machineId: 'm-1', shiftId: 'sh-1', date: '2026-11-18' } });
   });
 
+  it('R7: shows the opening time in plant time and Late while the closing is still due', async () => {
+    const opening = { id: 'r-1', counter: 10, product_id: 'p-1', product_code: 'P-1', recorded_at: '2026-11-18T03:00:00Z', late: true, entered_by_ua: false, remarks: null };
+    await render(readingState([stateMachine({ state: 'opening_done', can_open: false, can_close: true, opening })])).ui;
+    expect(await screen.findByTestId(`reading-opening-time-${key}`)).toHaveTextContent(/Opening recorded 18 Nov 2026 08:30 · Late/);
+  });
+
+  it('R7: the opening time without Late when it was on time, also while the closing is overdue', async () => {
+    const opening = { id: 'r-1', counter: 10, product_id: 'p-1', product_code: 'P-1', recorded_at: '2026-11-18T00:40:00Z', late: false, entered_by_ua: false, remarks: null };
+    await render(readingState([stateMachine({ state: 'closing_due', can_open: false, can_close: true, opening })])).ui;
+    expect(await screen.findByTestId(`reading-opening-time-${key}`)).toHaveTextContent(/^Opening recorded 18 Nov 2026 06:10$/);
+  });
+
   it('shows the summary with the target next to the numbers and the flags as text', async () => {
     const summary = { id: 's', target: 1200, movement_pieces: 1000, good: 950, reject: 30, unaccounted: 20, attainment_pct: 79.17, rollover: true, needs_review: false, over_reported: false };
     await render(readingState([stateMachine({ state: 'closed', can_open: false, summary })])).ui;

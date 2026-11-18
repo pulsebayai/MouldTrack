@@ -1,7 +1,8 @@
 # 06 (Android): a supervisor records the opening and the closing reading of the machine they own in the running shift, without a photo (D8 of 07:
 # emulator camera/gallery automation is unreliable; the photo path is proven by the API and web e2e and on a real phone at the R1 gate).
 # Fixture org A: supA owns FX-MA1 on both fixture shifts, so one occurrence is always running. Readings are append-only history, so a re-run on
-# the same day finds them done: each step runs only when the server offers it (the screens render what reading_state allows).
+# the same day finds them done: each step runs only while the server offers it for the PINNED machine FX-MA1 (matched by its button text, at most
+# 3 occurrences per kind), and the flow fails unless FX-MA1 ends with an occurrence that has both readings (N-11: it cannot pass by doing nothing).
 appId: com.pulsebayai.mouldtrack
 name: opening-closing
 ---
@@ -15,13 +16,15 @@ name: opening-closing
 - extendedWaitUntil: { visible: { id: "readings-link" }, timeout: 15000 }
 - tapOn: { id: "readings-link" }
 - extendedWaitUntil: { visible: { id: "readings" }, timeout: 15000 }
-- extendedWaitUntil: { visible: { id: "reading-state-.*" }, timeout: 15000 }
-- runFlow:
-    when: { visible: { id: "reading-open-.*" } }
+- extendedWaitUntil: { visible: "Opening reading due|Opening recorded.*|Closing reading due|Both readings recorded|Opening was not recorded", timeout: 15000 }
+- repeat:
+    while: { visible: "Record opening for FX-MA1" }
+    times: 3
     commands:
-      - tapOn: { id: "reading-open-.*" }
+      - tapOn: "Record opening for FX-MA1"
       - extendedWaitUntil: { visible: { id: "record-opening-screen" }, timeout: 15000 }
       - extendedWaitUntil: { visible: { id: "record-counter" }, timeout: 15000 }
+      - assertVisible: "FX-MA1 · Fixture Machine A1"
       - tapOn: { id: "record-product-.*" }
       - tapOn: { id: "record-counter" }
       - inputText: "1000"
@@ -29,11 +32,13 @@ name: opening-closing
       - scrollUntilVisible: { element: { id: "record-submit" } }
       - tapOn: { id: "record-submit" }
       - extendedWaitUntil: { visible: { id: "readings" }, timeout: 15000 }
-- runFlow:
-    when: { visible: { id: "reading-close-.*" } }
+- repeat:
+    while: { visible: "Record closing for FX-MA1" }
+    times: 3
     commands:
-      - tapOn: { id: "reading-close-.*" }
+      - tapOn: "Record closing for FX-MA1"
       - extendedWaitUntil: { visible: { id: "record-closing-screen" }, timeout: 15000 }
+      - assertVisible: "FX-MA1 · Fixture Machine A1"
       - tapOn: { id: "record-counter" }
       - inputText: "1250"
       - tapOn: { id: "record-good" }
@@ -44,4 +49,6 @@ name: opening-closing
       - scrollUntilVisible: { element: { id: "record-submit" } }
       - tapOn: { id: "record-submit" }
       - extendedWaitUntil: { visible: { id: "readings" }, timeout: 15000 }
-- assertVisible: "Both readings recorded"
+- scrollUntilVisible: { element: "Both readings recorded", timeout: 15000 }
+- scrollUntilVisible: { element: "Details for FX-MA1", timeout: 15000 }
+- assertNotVisible: "Record closing for FX-MA1"

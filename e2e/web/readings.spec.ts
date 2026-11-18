@@ -4,7 +4,7 @@
 // (07's clock-derived world); every code is unique per run because the dev database persists between runs.
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
-import { TINY_PNG, customOrg, requireApi, setupIssueWorld, teardownIssueWorld, uuid, type IssueWorld } from '../api/helpers';
+import { TINY_PNG, customOrg, requireApi, service, setupIssueWorld, teardownIssueWorld, uuid, type IssueWorld } from '../api/helpers';
 import { FIXTURE_PASSWORD, signIn } from './fixtures';
 
 const ORG = customOrg('20000000-0000-4000-a000-0000000000ba', 'e2e web org readings', ['+919000077751', '+919000077752', '+919000077753', '+919000077754']);
@@ -21,6 +21,7 @@ const prefix = (page: Page, p: string) => page.locator(`[data-testid^="${p}"]:vi
 
 let w: IssueWorld;
 let productId: string;
+let machine2: { id: string; code: string };
 const run = Math.random().toString(36).slice(2, 8).toUpperCase();
 const productCode = `E2E-${run}`;
 
@@ -33,6 +34,15 @@ test.beforeAll(async () => {
   productId = p.data.id;
   const t = await w.ua.client.rpc('pm_set_target', { p_request_id: uuid(), p_machine_id: w.machine.id, p_product_id: productId, p_pieces: 1000, p_effective_from: w.today });
   expect(t.data).toMatchObject({ ok: true });
+  // A second machine owned by the running supervisor with no reading yet: the Unit Admin records its opening on their behalf (R1).
+  const code2 = `E2E-${Math.random().toString(36).slice(2, 10).toUpperCase()}`;
+  const mk = await w.ua.client.rpc('pm_save_machine', { p_request_id: uuid(), p_id: null, p_code: code2, p_name: 'E2E on-behalf machine', p_asset_tag: '', p_make: '', p_model: '', p_controller: '', p_line_id: null, p_status: 'active' });
+  expect(mk.data).toMatchObject({ ok: true });
+  machine2 = { id: mk.data.id, code: code2 };
+  w.cleanup.push(machine2.id);
+  const runningShift = w.running.session === w.sup2 ? w.shiftPm : w.shiftAm;
+  const plan = await service().from('assignment_version').insert({ tenant_id: w.org.id, shift_id: runningShift, machine_id: machine2.id, supervisor_id: w.running.session.userId, effective_from: w.today, recorded_by: w.ua.userId }).select('id');
+  expect(plan.error).toBeNull();
 });
 test.afterAll(() => teardownIssueWorld(w));
 
@@ -113,7 +123,30 @@ test('the Unit Admin sees the machine on the Today board and reads its occurrenc
   await expect(tid(page, 'correct-opening')).toBeVisible(); // a Unit Admin may correct at any time
 });
 
-test('the Counter panel: a locked unit is refused, rollover value and cavities follow the unit (D3)', async ({ page }) => {
+test('a Unit Admin records an opening on behalf of the supervisor from the occurrence view (R1)', async ({ page }) => {
+  test.setTimeout(180_000);
+  await signIn(page, w.org.users.ua1.phone, FIXTURE_PASSWORD);
+  await tid(page, 'today-link').click();
+  const runningShift = w.running.session === w.sup2 ? w.shiftPm : w.shiftAm;
+  await tid(page, `today-open-${runningShift}-${w.today}-${machine2.id}`).click();
+  await expect(tid(page, 'occurrence-screen')).toBeVisible();
+  await tid(page, 'occurrence-record-opening').click();
+  await expect(tid(page, 'record-opening-screen')).toBeVisible();
+  await expect(tid(page, 'record-machine')).toContainText(machine2.code);
+  await prefix(page, 'record-product-').filter({ hasText: productCode }).click();
+  await tid(page, 'record-counter').fill('50');
+  await tid(page, 'record-submit').click();
+  await expect(tid(page, 'readings')).toBeVisible();
+  // The history names who entered it.
+  await page.goto('/home');
+  await tid(page, 'today-link').click();
+  await tid(page, `today-open-${runningShift}-${w.today}-${machine2.id}`).click();
+  await expect(prefix(page, 'reading-entry-').first()).toContainText('Entered by a Unit Admin');
+  await expect(tid(page, 'occurrence-record-opening')).toHaveCount(0); // recorded: only the closing is offered now
+  await expect(tid(page, 'occurrence-record-closing')).toBeVisible();
+});
+
+test('the Counter panel: a locked unit is disabled and explained, rollover value and cavities follow the unit (D3, N-10)', async ({ page }) => {
   test.setTimeout(180_000);
   await signIn(page, w.org.users.ua1.phone, FIXTURE_PASSWORD);
   await tid(page, 'plant-link').click();
@@ -127,8 +160,8 @@ test('the Counter panel: a locked unit is refused, rollover value and cavities f
   await tid(page, 'counter-max').fill('999999');
   await tid(page, 'counter-save').click();
   await expect(tid(page, 'counter-saved')).toBeVisible();
-  await tid(page, 'counter-unit-shots').click();
-  await tid(page, 'counter-save').click();
-  await expect(tid(page, 'counter-save-error')).toContainText('Readings already use this unit');
+  // N-10: readings exist, so the unit chips are disabled and the reason is shown (the server's counter_unit_locked refusal stays covered by pgTAP and Jest)
+  await expect(tid(page, 'counter-unit-locked')).toContainText('Readings already use this unit');
+  await expect(tid(page, 'counter-unit-shots')).toHaveAttribute('aria-disabled', 'true');
   await expectNoSeriousViolations(page);
 });

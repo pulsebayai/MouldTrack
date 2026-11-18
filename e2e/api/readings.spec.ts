@@ -159,7 +159,7 @@ test.describe('Today board (AC-12)', () => {
     const b = await w.ua.client.rpc('today_board', {});
     expect(b.error).toBeNull();
     const row = b.data.occurrences.flatMap((o: { shift: { id: string }; machines: { machine_id: string }[] }) => (o.shift.id === shiftId ? o.machines : [])).find((m: { machine_id: string }) => m.machine_id === w.machine.id);
-    expect(row).toMatchObject({ code: w.machine.code, target: 1000, good: 950, closing_status: expect.stringMatching(/on_time|late/) });
+    expect(row).toMatchObject({ code: w.machine.code, target: 1000, good: 950, closing_status: expect.stringMatching(/on_time|late|early/) });
     expect(Number(row.attainment_pct)).toBe(95);
     expect(b.data.occurrences.length).toBeLessThanOrEqual(4);
     expect((await w.running.session.client.rpc('today_board', {})).data).toEqual(DENIED);
@@ -217,5 +217,34 @@ test.describe('Photos on a reading (AC-14)', () => {
     const none = await w.running.session.client.rpc('rd_attachment_begin', { p_request_id: uuid(), p_reading_id: cur, p_mime: 'image/jpeg', p_size: 100, p_sha256: sha256Hex(Buffer.from('y')) });
     const miss = await w.running.session.client.rpc('rd_attachment_commit', { p_request_id: uuid(), p_attachment_id: none.data.id });
     expect(miss.error?.code).toBe('P0001');
+  });
+});
+
+test.describe('8a: late opening and early closing are accepted and flagged (R4, R5)', () => {
+  test('a Unit Admin records a late opening after the shift ended, flagged Late and entered by a Unit Admin (R4)', async () => {
+    // The shift that is not running: its latest occurrence ended less than 12 hours ago (the AM shift in the afternoon, yesterday's PM shift in the morning).
+    const pm = w.running.session === w.sup2;
+    const idleShift = pm ? w.shiftAm : w.shiftPm;
+    const d = new Date(`${w.today}T00:00:00Z`);
+    if (!pm) d.setUTCDate(d.getUTCDate() - 1);
+    const idleDate = d.toISOString().slice(0, 10);
+    const r = await w.ua.client.rpc('rd_opening', { p_request_id: uuid(), p_machine_id: w.machine.id, p_shift_id: idleShift, p_shift_date: idleDate, p_product_id: productId, p_counter: 77, p_remarks: null });
+    expect(r.error).toBeNull();
+    expect(r.data).toMatchObject({ ok: true, late: true, entered_by_ua: true });
+    const det = await w.ua.client.rpc('reading_detail', { p_machine_id: w.machine.id, p_shift_id: idleShift, p_shift_date: idleDate });
+    expect(det.data.opening).toMatchObject({ late: true, entered_by_ua: true });
+    expect(det.data.default_product_id).toBe(productId);
+  });
+
+  test('the running occurrence\'s closing carries an early flag (true unless it was recorded in the last 30 minutes of the shift)', async () => {
+    const d = await detail(w.running.session);
+    expect(typeof d.data.closing.early).toBe('boolean');
+    expect(typeof d.data.summary.early_closing).toBe('boolean');
+  });
+
+  test('a missing product is a validation error with the field (N-5)', async () => {
+    const r = await opening(w.ua, { p_product_id: null, p_machine_id: w.machine.id });
+    expect(r.error?.code).toBe('P0001');
+    expect(JSON.parse(r.error!.details!).field).toBe('product_id');
   });
 });

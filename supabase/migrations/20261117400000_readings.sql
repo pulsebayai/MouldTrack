@@ -1037,6 +1037,10 @@ begin
     'machine', jsonb_build_object('id', m.id, 'code', m.code, 'name', m.name, 'counter_unit', m.counter_unit, 'counter_max', m.counter_max),
     'shift', jsonb_build_object('id', s.id, 'name', s.name, 'start_time', to_char(s.start_time, 'HH24:MI'), 'end_time', to_char(s.end_time, 'HH24:MI')),
     'shift_date', p_date, 'starts_at', lower(v_w), 'ends_at', upper(v_w),
+    'default_product_id', (select r.product_id from public.production_reading r join public.product dp on dp.id = r.product_id and dp.retired_at is null
+                             join public.shift hs on hs.id = r.shift_id
+                            where r.machine_id = p_machine and r.kind = 'opening' and not exists (select 1 from public.production_reading n where n.supersedes_id = r.id)
+                            order by r.shift_date desc, hs.start_time desc, r.recorded_at desc, r.id desc limit 1),
     'owner_id', v_owner, 'owner_name', (select mem.full_name from public.membership mem where mem.user_id = v_owner and mem.tenant_id = v_tenant),
     'readings', v_hist,
     'opening', case when o.id is null then null else v_hist -> (select (i - 1)::int from jsonb_array_elements(v_hist) with ordinality as e(x, i) where (e.x ->> 'id')::uuid = o.id) end,

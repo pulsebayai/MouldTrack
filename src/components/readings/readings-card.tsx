@@ -4,7 +4,8 @@ import { AppState, Text, View } from 'react-native';
 import { Button, colors } from '@/components/ui';
 import { toUserMessage } from '@/lib/errors';
 import { formatPlantDate, timeWindow } from '@/lib/plant';
-import { STATE_LABEL, fetchReadingState, type ReadingState } from '@/lib/readings';
+import { fetchPlantTimezone, formatPlantDateTime } from '@/lib/plant-time';
+import { STATE_LABEL, fetchReadingState, openingNote, type ReadingState } from '@/lib/readings';
 import { useSession } from '@/lib/session-provider';
 import { useLoad } from '@/lib/use-load';
 import { SummaryBlock } from './summary-block';
@@ -16,6 +17,7 @@ export function ReadingsCard() {
   const { client } = useSession();
   const st = useLoad<ReadingState>(() => fetchReadingState(client), []);
   const { reload } = st;
+  const tz = useLoad(() => fetchPlantTimezone(client), []).data ?? 'Asia/Kolkata';
   useEffect(() => {
     const timer = setInterval(reload, REFRESH_MS);
     const sub = AppState.addEventListener('change', (s) => {
@@ -48,7 +50,10 @@ export function ReadingsCard() {
               <View key={m.machine_id} testID={`reading-machine-${key}`} style={{ gap: 6 }}>
                 <Text style={text}>{m.code} · {m.name}</Text>
                 <Text testID={`reading-state-${key}`} style={{ fontSize: 15, fontWeight: '700', color: colors.text }}>{STATE_LABEL[m.state]}</Text>
-                {m.summary ? <SummaryBlock s={m.summary} testID={`reading-summary-${key}`} late={{ opening: m.opening?.late, closing: m.closing?.late }} /> : null}
+                {m.opening && (m.state === 'opening_done' || m.state === 'closing_due') ? (
+                  <Text testID={`reading-opening-time-${key}`} style={text}>{openingNote(m.opening, (iso) => formatPlantDateTime(iso, tz))}</Text>
+                ) : null}
+                {m.summary ? <SummaryBlock s={m.summary} testID={`reading-summary-${key}`} late={{ opening: m.opening?.late, closing: m.closing?.late, early: m.closing?.early }} /> : null}
                 {m.can_open ? <Button title={`Record opening for ${m.code}`} testID={`reading-open-${key}`} onPress={() => go('/readings/record', { kind: 'opening' })} /> : null}
                 {m.can_close ? <Button title={`Record closing for ${m.code}`} testID={`reading-close-${key}`} onPress={() => go('/readings/record', { kind: 'closing' })} /> : null}
                 {m.opening || m.closing ? <Button title={`Details for ${m.code}`} variant="secondary" testID={`reading-details-${key}`} onPress={() => go('/readings/occurrence')} /> : null}

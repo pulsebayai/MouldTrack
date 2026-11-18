@@ -88,3 +88,4 @@ Rework, downtime, scrap reasons, product change mid-shift, OCR/PLC, dashboards/e
 - AC-3: the opening may be recorded until **12 h after the occurrence ends** (Late after start + 30 min), by the owner or a UA — the owner's rule "late readings are accepted and flagged"; a missed opening no longer makes the occurrence impossible to complete.
 - AC-4/AC-13: a closing submitted **more than 30 min before the end** is accepted and flagged **Early**; for metric 1 a closing is on time only within 30 min either side of the end, and an occurrence is counted once its end + 30 min has passed.
 - AC-12: attainment shows "Not closed yet" when a target exists but no closing; assumed targets are labelled.
+- AC-11 (owner, 2026-11-18): readings live on a separate **Readings** screen reached from Home (one extra tap) for R1, because 05's `my-shift.test.tsx` pins Home's RPC calls. Re-scoping that test and moving readings onto My shift is a roadmap item after R1.

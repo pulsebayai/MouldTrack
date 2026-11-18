@@ -42,7 +42,19 @@ describe('Counter panel (D3)', () => {
     await ui;
     await fireEvent.press(await screen.findByTestId('counter-unit-shots'));
     await fireEvent.press(screen.getByTestId('counter-save'));
-    expect(await screen.findByTestId('counter-save-error')).toHaveTextContent('Readings already use this unit');
+    // N-10: the refusal is shown next to the unit field (it was a general error before)
+    expect(await screen.findByTestId('counter-unit-error')).toHaveTextContent('Readings already use this unit');
+  });
+
+  it('N-10: the unit chips are disabled once readings exist (the rollover value stays editable)', async () => {
+    const t = shiftClient(
+      { machine: ok({ counter_unit: 'pieces', counter_max: null }), product: ok([product(1)]), cavity_version: ok([]), plant_today: ok({ plant_date: '2026-11-18' }), production_reading: ok([{ id: 'r-1' }]) },
+      {},
+    );
+    await renderWithSession(<CounterPanel machineId="m-1" retired={false} />, { ctx: admin, client: t.client });
+    expect(await screen.findByTestId('counter-unit-locked')).toHaveTextContent(/Readings already use this unit/);
+    expect(screen.getByTestId('counter-unit-shots').props.accessibilityState?.disabled).toBe(true);
+    expect(screen.getByTestId('counter-max').props.editable).not.toBe(false);
   });
 
   it('shows cavities only for a shot counter, with the history, and sets them', async () => {

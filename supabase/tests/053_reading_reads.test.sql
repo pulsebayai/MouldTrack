@@ -5,7 +5,7 @@
 -- on fixed past dates (the readings are fixtures inserted as the table owner). Self-contained; rolled back.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(129);
+select plan(130);
 
 create temp table ids (k text primary key, v uuid);
 create function pg_temp.id(k text) returns uuid language sql as $$ select v from ids where k = $1 $$;
@@ -186,6 +186,7 @@ select is(pg_temp.ms(pg_temp.ts(date '2026-03-10', '14:10'), 'day', date '2026-0
 select is((pg_temp.ms(pg_temp.ts(date '2026-03-10', '14:10'), 'day', date '2026-03-10', 'M2') ->> 'can_open')::boolean, true, 'R4: but it can still be opened (Late) until 12 hours after the end');
 select is((pg_temp.ms(pg_temp.ts(date '2026-03-11', '02:00'), 'day', date '2026-03-10', 'M2') ->> 'can_open')::boolean, true, 'R4: exactly 12 hours after the end it can still be opened');
 select is((app.reading_detail_at(pg_temp.id('m2'), pg_temp.id('day'), date '2026-03-10', pg_temp.ts(date '2026-03-10', '14:10')) -> 'allowed' ->> 'can_open')::boolean, true, 'R4: the detail agrees after the end');
+select is(app.reading_detail_at(pg_temp.id('m2'), pg_temp.id('day'), date '2026-03-10', pg_temp.ts(date '2026-03-10', '14:10')) ->> 'default_product_id', pg_temp.id('p1')::text, 'R1: the detail carries the default product so the form needs no second read');
 select is((app.reading_detail_at(pg_temp.id('m2'), pg_temp.id('day'), date '2026-03-10', pg_temp.ts(date '2026-03-11', '02:00') + interval '1 second') -> 'allowed' ->> 'can_open')::boolean, false, 'R4: and not one second after the 12 hours');
 select pg_temp.as_user('s2');
 select is(pg_temp.codes(pg_temp.ts(date '2026-03-10', '08:00'), 'day', date '2026-03-10'), 'M3,M8', 'the other supervisor sees only their machines');

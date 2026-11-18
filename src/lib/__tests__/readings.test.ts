@@ -1,5 +1,5 @@
 import {
-  formatCount, formatPct, parseWhole, readingApi, validateCavities, validateClosing, validateMax, validateOpening, validateReason, validateRemarks, MSG,
+  attainmentText, closingStatusText, openingNote, formatCount, formatPct, parseWhole, readingApi, validateCavities, validateClosing, validateMax, validateOpening, validateReason, validateRemarks, MSG,
 } from '@/lib/readings';
 
 describe('readings: parsing and validation (mirrors the server messages)', () => {
@@ -69,5 +69,22 @@ describe('readings: RPC arguments', () => {
     expect(rpc).toHaveBeenLastCalledWith('rd_set_cavities', expect.objectContaining({ p_cavities: 4, p_effective_from: '2026-11-18' }));
     await readingApi.endCavities(client, 'm', 'p', '2026-11-18', 'd');
     expect(rpc).toHaveBeenLastCalledWith('rd_end_cavities', expect.objectContaining({ p_effective_from: '2026-11-18' }));
+  });
+});
+
+describe('8a labels (R3, R5, R7)', () => {
+  it('attainment text: No target set only without a target, Not closed yet without a closing', () => {
+    expect(attainmentText({ target: null, closing_status: 'missing', attainment_pct: null })).toBe('No target set');
+    expect(attainmentText({ target: 1000, closing_status: 'missing', attainment_pct: null })).toBe('Not closed yet');
+    expect(attainmentText({ target: 1000, closing_status: 'on_time', attainment_pct: 24 })).toBe('24.00%');
+  });
+  it('a missing closing is "Not due yet" while the occurrence runs and Missing afterwards; Early has its own label', () => {
+    expect(closingStatusText('missing', true)).toBe('Not due yet');
+    expect(closingStatusText('missing', false)).toBe('Missing');
+    expect(closingStatusText('early', true)).toBe('Early');
+  });
+  it('opening note: plant time, Late only when flagged', () => {
+    expect(openingNote({ recorded_at: 'x', late: true }, () => '08:30')).toBe('Opening recorded 08:30 · Late');
+    expect(openingNote({ recorded_at: 'x', late: false }, () => '08:30')).toBe('Opening recorded 08:30');
   });
 });
