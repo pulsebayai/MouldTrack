@@ -1,7 +1,7 @@
 // 02 AC-3, AC-4, AC-13 (web): forced change after a temporary password, expiry, empty sign-in fields, self-service change.
 // Users and Change-password screens must have 0 serious/critical accessibility violations (D11).
 import AxeBuilder from '@axe-core/playwright';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from '../diagnostics';
 import { FIXTURE_PASSWORD as API_PASSWORD, cleanupCreated, createUserVia, makeActiveUser, requireApi, service, signIn as apiSignIn } from '../api/helpers';
 import { USERS, expectOnSignIn, signIn } from './fixtures';
 

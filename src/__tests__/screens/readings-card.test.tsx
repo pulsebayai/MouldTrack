@@ -25,6 +25,13 @@ describe('Readings card (AC-11)', () => {
     expect(screen.queryByTestId(`reading-close-${key}`)).toBeNull();
   });
 
+  it('labels every state line with the machine code, so one machine can be addressed by its code (Maestro N3)', async () => {
+    await render(readingState([stateMachine()])).ui;
+    const state = await screen.findByTestId(`reading-state-${key}`);
+    expect(state.props.accessibilityLabel).toBe(`${stateMachine().code}: Opening reading due`);
+    expect(state).toHaveTextContent(/^Opening reading due$/);
+  });
+
   it('offers only what the server allows: closing after an opening', async () => {
     const opening = { id: 'r-1', counter: 10, product_id: 'p-1', product_code: 'P-1', recorded_at: '2026-11-18T00:40:00Z', late: false, entered_by_ua: false, remarks: null };
     await render(readingState([stateMachine({ state: 'opening_done', can_open: false, can_close: true, opening })])).ui;

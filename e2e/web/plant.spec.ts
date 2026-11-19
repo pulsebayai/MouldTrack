@@ -2,7 +2,7 @@
 // Mutating tests run in "e2e org U" (fixture plant) with throwaway E2E-<random> codes; the first-run site setup uses its own org
 // (e2e api org 9) that has no site. fixtures-reset removes or retires throwaway rows on dev.
 import AxeBuilder from '@axe-core/playwright';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from '../diagnostics';
 import { FIXTURE_PASSWORD as API_PASSWORD, orgDef, provisionOrg, requireApi, service } from '../api/helpers';
 import { PLANT_FIXTURE, USERS, signIn, throwawayPlantCode } from './fixtures';
 

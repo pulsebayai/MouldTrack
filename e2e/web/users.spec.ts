@@ -1,7 +1,7 @@
 // 02 AC-1, AC-5, AC-6, AC-7, AC-9, AC-14 (web): the Users screen for a Unit Admin; blocked for a Supervisor.
 // Throwaway users are created through the UI and removed afterwards (D2 phone block 90000 10000-99999).
 import AxeBuilder from '@axe-core/playwright';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from '../diagnostics';
 import { FIXTURE_PASSWORD as API_PASSWORD, created, cleanupCreated, requireApi, service, throwawayEmpId, throwawayPhone } from '../api/helpers';
 import { USERS, signIn } from './fixtures';
 

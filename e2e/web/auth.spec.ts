@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from '../diagnostics';
 import { USERS, expectOnSignIn, signIn } from './fixtures';
 
 test.describe('Sign-in (01-walking-skeleton)', () => {

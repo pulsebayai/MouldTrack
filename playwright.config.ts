@@ -11,8 +11,12 @@ export default defineConfig({
   retries: 0, // flaky tests get fixed, never retried into green
   workers: process.env.CI ? 2 : undefined,
   timeout: 30_000,
+  // Owner-approved 2026-11-19 (test-reliability): hosted targets wait up to 10 s per expectation (GitHub's US runners -> Mumbai
+  // adds ~0.4-0.9 s per call, so multi-call screens exceeded 5 s). Local/PR CI keeps the 5 s default, so slow screens still fail there.
+  expect: { timeout: isLocal ? 5_000 : 10_000 },
   reporter: [
     ['list'],
+    ['./e2e/failure-reporter.ts'],
     ['junit', { outputFile: 'test-results/junit-e2e.xml' }],
     ['json', { outputFile: 'test-results/e2e.json' }],
     ['html', { outputFolder: 'playwright-report', open: 'never' }],
