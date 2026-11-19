@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { AppEnv } from './env';
+import { resetPlantTimezone } from './plant-time';
 import { loadSessionContext, type SessionContext } from './session';
 
 export type SessionState = {
@@ -57,6 +58,7 @@ export function SessionProvider(props: { client: SessionState['client']; appEnv:
       try {
         fp = fingerprint((await client.auth.getSession()).data.session);
         runningFp.current = fp;
+        resetPlantTimezone(); // another user may be signed in now
         setCtx(await loadSessionContext(client));
         loadedFp.current = fp;
         setStatus('ready');

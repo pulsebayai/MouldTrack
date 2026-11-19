@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { useEffect } from 'react';
 import { Pressable, Text } from 'react-native';
 import { SessionProvider, useSession } from '@/lib/session-provider';
 
@@ -182,12 +183,15 @@ describe('SessionProvider (screen-speed: one membership read per sign-in)', () =
         }),
       }),
     };
-    let refresh: () => Promise<void> = async () => {};
+    const held: { refresh: () => Promise<void> } = { refresh: async () => {} };
     function Grab() {
-      refresh = useSession().refresh;
+      const { refresh } = useSession();
+      useEffect(() => {
+        held.refresh = refresh;
+      });
       return <Probe />;
     }
-    return { state, c, emit: (e: string, s?: unknown) => cb(e, s), refresh: () => refresh(), Grab };
+    return { state, c, emit: (e: string, s?: unknown) => cb(e, s), refresh: () => held.refresh(), Grab };
   }
 
   it('sign-in: the explicit refresh() and the SIGNED_IN event for the same session share one load (one membership read)', async () => {

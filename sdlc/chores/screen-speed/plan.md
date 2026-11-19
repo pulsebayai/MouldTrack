@@ -13,12 +13,12 @@ call counts / parallelism where practical). If a fix needs a new or changed SQL 
 `Blocked - needs Opus` — no migration without Opus.
 
 ## Steps
-- [ ] 1. Measure: from the hosted logs and the code, list per screen (session load, Home, Plant, Readings, Users, Today) every
+- [x] 1. Measure: from the hosted logs and the code, list per screen (session load, Home, Plant, Readings, Users, Today) every
   call in order and which wait on others. Fix the network summary truncation (it cuts after 4 lines) so all API calls print.
   Record the table in this plan.
-- [ ] 2. Session load: remove the duplicate membership fetch; run independent reads in parallel; one load per sign-in (keep the
+- [x] 2. Session load: remove the duplicate membership fetch; run independent reads in parallel; one load per sign-in (keep the
   coalescing from #23). Jest: call count per sign-in.
-- [ ] 3. Screens: start independent reads in parallel instead of chained awaits; don't refetch what the session already holds;
+- [x] 3. Screens: start independent reads in parallel instead of chained awaits; don't refetch what the session already holds;
   keep server-driven `allowed_actions`. RNTL tests per screen changed.
 - [ ] 4. PR CI green; then STOP for the Opus-run hosted proof: 3 consecutive dev runs + 3 PR CI runs green on first attempt.
 - [ ] 5. Docs (known debt if anything remains), PR body with before/after call counts.
@@ -30,3 +30,22 @@ call counts / parallelism where practical). If a fix needs a new or changed SQL 
 - AC-4 No test weakened, no timeout changed.
 
 ## Session log
+
+### Calls per screen (before from hosted run 44482609153 and the code; after from the new Jest tests)
+Depth = longest chain of calls that wait on each other, counted from a signed-in start. `tz` = plant timezone read (site, plus tenant when no site).
+| Screen / step | Before: calls (depth) | After: calls (depth) |
+|---|---|---|
+| Sign-in session load | token + membership x2 (3: refresh() and SIGNED_IN each loaded) | token + membership x1 (2) |
+| Repeated SIGNED_IN / TOKEN_REFRESHED, same session | one full load each | no load |
+| Unit Admin Home | tz x2 (site x2, +tenant x2 with no site) + issue_alerts + handover_alerts | tz x1 + 2 alerts |
+| Supervisor readings | tz asked by several cards, each its own site read | one shared site read per session |
+| Plant layout (site exists) | site -> plant_today (+ tenant when no site): 2 calls, depth 2 | site and plant_today together: 2 calls, depth 1 |
+| Plant layout (no site) | site -> plant_today + tenant: 3 calls, depth 2 | site + plant_today, then tenant: 3 calls, depth 2 (tenant is only needed then) |
+| Plant first visit (log, 15 calls) | membership x2, site x3, tenant x3, plant_today x2 ... | membership x1, site x2, tenant x2, plant_today x2 ... (-4 calls) |
+| Plant > Assignments | shift -> membership -> shift_board (depth 3) | shift + membership, then shift_board (depth 2) |
+| Users | session membership x2 + list x1 | session membership x1 + list x1 |
+| Today | unchanged (one read) | unchanged |
+Unchanged on purpose: `handover_checklist` (Home banner and readings card) because the read writes the session snapshot (architecture 08), and the plant tab loaders that depend on earlier answers.
+
+## Session log
+- 2026-11-19 Sonnet: steps 1-3 done. Step 1: the failing logs actually printed all API calls (13-15), so the real gap was the order (listed by finish time, no start time): `formatNetwork` now sorts by start and prints `+<ms>` start offsets (new test file, existing tests untouched). Step 2: sign-in cost two membership reads because `refresh()` and the SIGNED_IN event each loaded; the provider now skips an auth event whose session fingerprint equals the running or last loaded one (SIGNED_OUT never skipped; refresh() contract kept). Step 3: shared plant timezone (reset on every session load and after the site is saved), plant layout and assignments reads started together. Lint, typecheck and Jest (981) green locally. Next: step 4 (PR CI, then Opus-run hosted proof).
