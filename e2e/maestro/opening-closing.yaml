@@ -49,16 +49,9 @@ name: opening-closing
       - scrollUntilVisible: { element: { id: "record-submit" } }
       - tapOn: { id: "record-submit" }
       - extendedWaitUntil: { visible: { id: "readings" }, timeout: 15000 }
-# N3: the state line of FX-MA1 ITSELF, scoped to the machine block that contains the "FX-MA1 · Fixture Machine A1" line (testID reading-machine-<shift>-<machine id>-<date>).
-# The machine id is not pinned: on hosted dev fixtures-reset creates FX-MA1 with a generated id (seed.sql's 43000000-...-a1 exists only on the local stack; failure
-# context of regression 44331151688 showed id 4294277e-... on screen). The block is selected by FX-MA1's own code/name line, so another machine cannot satisfy it.
-- scrollUntilVisible:
-    element:
-      id: "reading-state-.*"
-      text: "Both readings recorded"
-      childOf:
-        id: "reading-machine-.*"
-        containsChild: "FX-MA1 · Fixture Machine A1"
-    timeout: 15000
+# N3: the state line of FX-MA1 ITSELF. The card gives every state line the accessibility label "<machine code>: <state>" (readings-card.tsx), so the
+# machine is identified by its code, not by a generated id (hosted dev creates FX-MA1 through fixtures-reset with a generated id; seed.sql's
+# 43000000-...-a1 exists only locally) and not by childOf/containsChild (Maestro found no parent on Android, regression 44461624399).
+- scrollUntilVisible: { element: { id: "reading-state-.*", text: "FX-MA1: Both readings recorded" }, timeout: 15000 }
 - scrollUntilVisible: { element: "Details for FX-MA1", timeout: 15000 }
 - assertNotVisible: "Record closing for FX-MA1"

@@ -67,7 +67,7 @@ export function ReadingsCard() {
             return (
               <View key={m.machine_id} testID={`reading-machine-${key}`} style={{ gap: 6 }}>
                 <Text style={text}>{m.code} · {m.name}</Text>
-                <Text testID={`reading-state-${key}`} style={{ fontSize: 15, fontWeight: '700', color: colors.text }}>{STATE_LABEL[m.state]}</Text>
+                <Text testID={`reading-state-${key}`} accessibilityLabel={`${m.code}: ${STATE_LABEL[m.state]}`} style={{ fontSize: 15, fontWeight: '700', color: colors.text }}>{STATE_LABEL[m.state]}</Text>
                 {m.opening && (m.state === 'opening_done' || m.state === 'closing_due') ? (
                   <Text testID={`reading-opening-time-${key}`} style={text}>{openingNote(m.opening, (iso) => formatPlantDateTime(iso, tz))}</Text>
                 ) : null}

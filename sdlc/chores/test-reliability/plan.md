@@ -81,3 +81,8 @@ Dev regression: drift, reset, hosted-checks green; web 1 failed / 162 passed (th
 - Preferred (no skip, covers every hour): in the three R1 asserts that pass `(select d from today)` for `runnow` (refuse, message, end refused), use the running occurrence's own start date `((now() at time zone 'Asia/Kolkata') - interval '1 hour')::date` instead. Assertions, texts and plan(97) unchanged.
 - Alternative (same pattern as 05's other skips, e.g. lines 264-267): wrap each of those asserts in `case when (now() at time zone 'Asia/Kolkata')::time >= time '01:00' then <original assert> else pass('R1 skipped: runnow started on the previous plant date before 01:00 IST') end;`.
 Not verified locally (no Supabase here).
+
+### 2026-11-19 (Sonnet) - after regression 44461624399
+- Hosted: web 180/181 (all earlier failures pass; smoke.spec.ts:23 chunk blip, watch), hosted-checks green. Android job cancelled at 45 min: one-flow-at-a-time was too slow.
+- `scripts/ci-maestro.sh` runs all flows in ONE `maestro test e2e/maestro` again (junit `test-results/junit-android.xml`). Only on failure: log tail, then each failed flow (from the junit) is re-run alone as a diagnostic and the screen dumped right after it (result ignored, exit code = first run).
+- Maestro `childOf` + `containsChild` found no parent on Android (hierarchy proved the app correct). The state line now has `accessibilityLabel="<code>: <state>"` (existing `reading-state-<key>` testIDs unchanged); opening-closing asserts text `FX-MA1: Both readings recorded` on `reading-state-.*`. RNTL test added in readings-card.test.tsx. Needs the next Android regression.
