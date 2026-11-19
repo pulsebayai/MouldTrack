@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { AppEnv } from './env';
+import { resetPlantTimezone } from './plant-time';
 import { loadSessionContext, type SessionContext } from './session';
 
 export type SessionState = {
@@ -33,6 +34,10 @@ export function routeFor(ctx: SessionContext | null): AppRoute {
   return '/home';
 }
 
+function fingerprint(session: { access_token?: string; user?: { id: string; updated_at?: string } } | null): string {
+  return session ? `${session.user?.id}|${session.access_token}|${session.user?.updated_at}` : 'none';
+}
+
 export function SessionProvider(props: { client: SessionState['client']; appEnv: AppEnv; children: ReactNode }) {
   const { client, appEnv, children } = props;
   const [status, setStatus] = useState<SessionState['status']>('loading');
@@ -43,16 +48,29 @@ export function SessionProvider(props: { client: SessionState['client']; appEnv:
   // arrives while it runs shares ONE trailing load that starts after it, so the last state always wins and no stale result is applied late.
   const running = useRef<Promise<void> | null>(null);
   const trailing = useRef<Promise<void> | null>(null);
+  // Fingerprint of the session the running load reads / the last successful load read. An auth event that carries the same session
+  // (sign-in: explicit refresh() plus the SIGNED_IN event; a repeated SIGNED_IN on tab focus) adds nothing and must not cost another load.
+  const runningFp = useRef<string | null>(null);
+  const loadedFp = useRef<string | null>(null);
   const start = useCallback((): Promise<void> => {
     const p: Promise<void> = (async () => {
+      let fp: string | null = null;
       try {
+        fp = fingerprint((await client.auth.getSession()).data.session);
+        runningFp.current = fp;
+        resetPlantTimezone(); // another user may be signed in now
         setCtx(await loadSessionContext(client));
+        loadedFp.current = fp;
         setStatus('ready');
       } catch {
+        loadedFp.current = null;
         setStatus('error');
       }
     })().finally(() => {
-      if (running.current === p) running.current = null;
+      if (running.current === p) {
+        running.current = null;
+        runningFp.current = null;
+      }
     });
     running.current = p;
     return p;
@@ -71,9 +89,15 @@ export function SessionProvider(props: { client: SessionState['client']; appEnv:
   useEffect(() => {
     // Supabase emits INITIAL_SESSION on subscribe, so this also performs the first load.
     // Defer the refresh: awaiting other Supabase calls inside this callback can deadlock the auth lock.
-    const { data } = client.auth.onAuthStateChange((event) => {
+    const { data } = client.auth.onAuthStateChange((event, session) => {
       if (['INITIAL_SESSION', 'SIGNED_IN', 'SIGNED_OUT', 'USER_UPDATED', 'TOKEN_REFRESHED'].includes(event)) {
-        setTimeout(() => void refresh(), 0);
+        setTimeout(() => {
+          // Decided when the timer fires, so an explicit refresh() made meanwhile (sign-in) counts. SIGNED_OUT always loads.
+          const fp = session === undefined ? null : fingerprint(session);
+          const same = running.current ? runningFp.current === fp : loadedFp.current === fp;
+          if (event !== 'SIGNED_OUT' && fp !== null && same) return;
+          void refresh();
+        }, 0);
       }
     });
     return () => data.subscription.unsubscribe();

@@ -3,11 +3,30 @@ import { fetchSite, fetchTenantTimezone } from './plant';
 
 export const FALLBACK_TIMEZONE = 'Asia/Kolkata';
 
-/** The plant's IANA timezone: the site's, else the tenant's default, else India (the only market in R1). */
-export async function fetchPlantTimezone(client: Pick<SupabaseClient, 'from'>): Promise<string> {
-  const site = await fetchSite(client);
-  if (site?.timezone) return site.timezone;
-  return (await fetchTenantTimezone(client)) ?? FALLBACK_TIMEZONE;
+let cache = new WeakMap<object, Promise<string>>();
+
+/** Forget the shared answer: on every session load (another user may now be signed in) and after the site is saved. */
+export function resetPlantTimezone(): void {
+  cache = new WeakMap();
+}
+
+/**
+ * The plant's IANA timezone: the site's, else the tenant's default, else India (the only market in R1).
+ * Several cards on one screen ask for it; the answer (and the request in flight) is shared per client until `resetPlantTimezone`.
+ */
+export function fetchPlantTimezone(client: Pick<SupabaseClient, 'from'>): Promise<string> {
+  const hit = cache.get(client);
+  if (hit) return hit;
+  const p = (async () => {
+    const site = await fetchSite(client);
+    if (site?.timezone) return site.timezone;
+    return (await fetchTenantTimezone(client)) ?? FALLBACK_TIMEZONE;
+  })();
+  cache.set(client, p);
+  p.catch(() => {
+    if (cache.get(client) === p) cache.delete(client);
+  });
+  return p;
 }
 
 function parts(iso: string, timeZone: string): Record<string, string> | null {
