@@ -1,12 +1,33 @@
 /**
- * Connectivity (architecture, cross-cutting): an idempotent read with no response after 6 s is aborted and retried ONCE; a second
- * stall surfaces the normal network error. Writes are never retried or timed out here: POST/PATCH/DELETE, rpc calls (all POST, and some
- * read RPCs write a snapshot, e.g. handover_checklist), auth and Edge Function calls keep the platform default.
+ * Connectivity (architecture, cross-cutting): an idempotent read (GET/HEAD, or an allowlisted read RPC) with no response after 6 s is aborted and retried ONCE; a second
+ * stall surfaces the normal network error. Writes are never retried or timed out here: POST/PATCH/DELETE, every rpc not on the allowlist
+ * below, auth and Edge Function calls keep the platform default.
  */
 export const READ_TIMEOUT_MS = 6000;
 
 type FetchFn = typeof fetch;
 const READ_PATH = /\/(rest\/v1\/(?!rpc\/)|storage\/v1\/object\/)/;
+const RPC_PATH = /\/rest\/v1\/rpc\/([a-z_0-9]+)(?:$|\?)/;
+
+/**
+ * D3: read-only RPCs that are safe to repeat (checked against the migrations: no insert/update/delete except `handover_checklist`, whose
+ * only write is the `handover_session` snapshot, `insert ... on conflict do nothing`, so a repeat is a no-op). Explicit allowlist, default deny:
+ * every other rpc (pm_*, sh_*, iss_*, rd_*, ho_*, psvc_*, svc_*, anything new) is never retried. A denial may add one more `access.denied` audit row.
+ */
+export const READ_RPCS: readonly string[] = [
+  'my_shift', 'shift_board', 'reading_state', 'reading_detail', 'today_board', 'handover_checklist', 'handover_alerts',
+  'issue_alerts', 'issue_detail', 'issue_list', 'pa_audit', 'pa_super_admins', 'pa_tenant_summaries', 'pa_tenant_unit_admins',
+];
+const READ_RPC_SET = new Set(READ_RPCS);
+
+function isRetryable(method: string, url: string): boolean {
+  if (method === 'GET' || method === 'HEAD') return READ_PATH.test(url);
+  if (method === 'POST') {
+    const m = RPC_PATH.exec(url.split('#')[0] ?? '');
+    return !!m && READ_RPC_SET.has(m[1]!);
+  }
+  return false;
+}
 
 function urlOf(input: RequestInfo | URL): string {
   return typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
@@ -29,7 +50,7 @@ export function createRetryingFetch(base: FetchFn, opts: { timeoutMs?: number; o
   return (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = urlOf(input);
     const method = methodOf(input, init);
-    if ((method !== 'GET' && method !== 'HEAD') || !READ_PATH.test(url)) return base(input, init);
+    if (!isRetryable(method, url)) return base(input, init);
 
     const callerSignal = init?.signal ?? (typeof input === 'object' && 'signal' in input ? input.signal : undefined) ?? undefined;
     const attempt = async (): Promise<Response | 'stalled'> => {

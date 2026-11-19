@@ -1,4 +1,4 @@
-import { createRetryingFetch, READ_TIMEOUT_MS } from '@/lib/fetch-retry';
+import { createRetryingFetch, READ_RPCS, READ_TIMEOUT_MS } from '@/lib/fetch-retry';
 
 const READ = 'https://x.supabase.co/rest/v1/membership?select=role&user_id=eq.secret';
 const ok = () => new Response('{}', { status: 200 });
@@ -57,7 +57,8 @@ describe('retrying fetch (D1: stalled reads retry once, writes never)', () => {
     expect(b.calls).toHaveLength(2);
   });
   it.each([
-    ['rpc POST (even a read RPC)', 'https://x.supabase.co/rest/v1/rpc/handover_checklist', 'POST'],
+    ['a write rpc', 'https://x.supabase.co/rest/v1/rpc/rd_opening', 'POST'],
+    ['an unknown rpc (default deny)', 'https://x.supabase.co/rest/v1/rpc/brand_new_fn', 'POST'],
     ['PATCH', 'https://x.supabase.co/rest/v1/membership', 'PATCH'],
     ['DELETE', 'https://x.supabase.co/rest/v1/membership', 'DELETE'],
     ['auth token', 'https://x.supabase.co/auth/v1/token?grant_type=password', 'POST'],
@@ -91,5 +92,34 @@ describe('retrying fetch (D1: stalled reads retry once, writes never)', () => {
     ctl.abort();
     await expect(createRetryingFetch(b.fn as never)(READ, { signal: ctl.signal })).rejects.toMatchObject({ name: 'AbortError' });
     expect(b.calls.length).toBeLessThanOrEqual(1);
+  });
+});
+
+describe('read-only RPC allowlist (D3)', () => {
+  const rpc = (n: string) => `https://x.supabase.co/rest/v1/rpc/${n}`;
+  it.each(READ_RPCS)('%s is a read RPC: a stall is retried once', async (name) => {
+    const b = base((n) => n === 0);
+    const p = createRetryingFetch(b.fn as never)(rpc(name), { method: 'POST', body: '{}' });
+    await jest.advanceTimersByTimeAsync(READ_TIMEOUT_MS);
+    expect((await p).status).toBe(200);
+    expect(b.calls).toHaveLength(2);
+  });
+  it('a read rpc that stalls twice errors', async () => {
+    const b = base(() => true);
+    const p = createRetryingFetch(b.fn as never)(rpc('my_shift'), { method: 'POST' });
+    const a = expect(p).rejects.toThrow(/failed to fetch/i);
+    await jest.advanceTimersByTimeAsync(READ_TIMEOUT_MS * 2);
+    await a;
+    expect(b.calls).toHaveLength(2);
+  });
+  it.each(['pm_save_site', 'sh_assign', 'iss_report', 'rd_closing', 'ho_declare', 'psvc_tenant_create', 'svc_user_create'])('write rpc %s is never retried', async (name) => {
+    const b = base(() => true);
+    const p = createRetryingFetch(b.fn as never)(rpc(name), { method: 'POST' });
+    p.catch(() => {});
+    await jest.advanceTimersByTimeAsync(READ_TIMEOUT_MS * 3);
+    expect(b.calls).toHaveLength(1);
+  });
+  it('the allowlist holds no write-prefixed name', () => {
+    for (const n of READ_RPCS) expect(n).not.toMatch(/^(pm|sh|iss|rd|ho|psvc|svc)_/);
   });
 });
