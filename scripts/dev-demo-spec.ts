@@ -2,7 +2,7 @@
  * Demo tenant "Demo Plastics (fixture)" (dev-reset D9): a deterministic specification, pure functions only (no I/O).
  * `buildDemo(today)` returns every row the seed inserts; history is dated relative to `today` (the plant date of the reset), so the
  * row COUNTS are identical on every run while the dates move with the calendar. Everything here is invented fixture data:
- * invented names, phones only in the canonical block +91 90000 00001-00099 (00010-00012 were unused anywhere else), no real plant data.
+ * invented names, phones only in the canonical block +91 90000 00001-00099 (00010, 00018, 00019: outside orgDef(n)'s +91 90000 000n1-n4 and every fixture list; guarded by demo-phones.test.ts), no real plant data.
  *
  * The summary arithmetic mirrors app._rd_compute_summary (calc_version 1); scripts/demo-checks.sql proves the equality against the
  * server's own function in CI, so a drift between the two fails the build.
@@ -16,8 +16,8 @@ export type DemoUserKey = 'ua' | 's1' | 's2';
 export type DemoUser = { key: DemoUserKey; phone: string; name: string; employeeId: string; role: 'unit_admin' | 'supervisor' };
 export const DEMO_USERS: DemoUser[] = [
   { key: 'ua', phone: '+919000000010', name: 'Demo Admin', employeeId: 'DM-UA', role: 'unit_admin' },
-  { key: 's1', phone: '+919000000011', name: 'Demo Supervisor One', employeeId: 'DM-S1', role: 'supervisor' },
-  { key: 's2', phone: '+919000000012', name: 'Demo Supervisor Two', employeeId: 'DM-S2', role: 'supervisor' },
+  { key: 's1', phone: '+919000000018', name: 'Demo Supervisor One', employeeId: 'DM-S1', role: 'supervisor' },
+  { key: 's2', phone: '+919000000019', name: 'Demo Supervisor Two', employeeId: 'DM-S2', role: 'supervisor' },
 ];
 
 export const DEMO_LINES = ['Demo Line A', 'Demo Line B'];
