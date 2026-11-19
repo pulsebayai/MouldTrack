@@ -252,13 +252,14 @@ insert into public.shift (id, tenant_id, site_id, name, start_time, end_time) va
    date_trunc('hour', (now() at time zone 'Asia/Kolkata') - interval '1 hour')::time, date_trunc('hour', (now() at time zone 'Asia/Kolkata') + interval '2 hours')::time);
 insert into public.shift (id, tenant_id, site_id, name, start_time, end_time) values
   ('54000000-0000-4000-c620-0000000000aa', pg_temp.id('tx'), '51000000-0000-4000-c620-00000000000a', 'Early', '00:00', '00:15');
+-- owner-approved 2026-11-19 (test-reliability): the 'runnow' occurrence starts on the plant date of (now - 1 h), not always today; between 00:00 and 01:00 IST that is the previous date. Same assertions.
 insert into ids values ('runnow', '54000000-0000-4000-c620-0000000000a9'), ('early', '54000000-0000-4000-c620-0000000000aa');
-select is((pg_temp.err(format($$ select public.sh_set_target_override(gen_random_uuid(), %L, %L, %L, 5, %L) $$, pg_temp.id('m1'), pg_temp.id('p1'), pg_temp.id('runnow'), (select d from today))) - 'message'),
+select is((pg_temp.err(format($$ select public.sh_set_target_override(gen_random_uuid(), %L, %L, %L, 5, %L) $$, pg_temp.id('m1'), pg_temp.id('p1'), pg_temp.id('runnow'), ((now() at time zone 'Asia/Kolkata') - interval '1 hour')::date)) - 'message'),
   '{"code":"guard","field":"occurrence_started","sqlstate":"P0001"}'::jsonb, 'R1: an override from the date of a running occurrence is refused');
-select is((pg_temp.err(format($$ select public.sh_set_target_override(gen_random_uuid(), %L, %L, %L, 5, %L) $$, pg_temp.id('m1'), pg_temp.id('p1'), pg_temp.id('runnow'), (select d from today))))->>'message',
+select is((pg_temp.err(format($$ select public.sh_set_target_override(gen_random_uuid(), %L, %L, %L, 5, %L) $$, pg_temp.id('m1'), pg_temp.id('p1'), pg_temp.id('runnow'), ((now() at time zone 'Asia/Kolkata') - interval '1 hour')::date)))->>'message',
   'This shift has already started — use Cover for this shift', 'R1: the message points to Cover');
 select is((public.sh_set_target_override(gen_random_uuid(), pg_temp.id('m1'), pg_temp.id('p1'), pg_temp.id('runnow'), 5, (select d + 1 from today)))->>'ok', 'true', 'R1: from the next occurrence it is fine');
-select is((pg_temp.err(format($$ select public.sh_end_target_override(gen_random_uuid(), %L, %L, %L, %L) $$, pg_temp.id('m1'), pg_temp.id('p1'), pg_temp.id('runnow'), (select d from today))))->>'field',
+select is((pg_temp.err(format($$ select public.sh_end_target_override(gen_random_uuid(), %L, %L, %L, %L) $$, pg_temp.id('m1'), pg_temp.id('p1'), pg_temp.id('runnow'), ((now() at time zone 'Asia/Kolkata') - interval '1 hour')::date)))->>'field',
   'occurrence_started', 'R1: ending from the date of a running occurrence is refused too');
 select is((public.sh_end_target_override(gen_random_uuid(), pg_temp.id('m1'), pg_temp.id('p1'), pg_temp.id('runnow'), (select d + 3 from today)))->>'ok', 'true', 'R1: ending from a later date is fine');
 select case when (now() at time zone 'Asia/Kolkata')::time >= time '00:15' then
