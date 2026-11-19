@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { AppEnv } from './env';
 import { loadSessionContext, type SessionContext } from './session';
 
@@ -39,14 +39,34 @@ export function SessionProvider(props: { client: SessionState['client']; appEnv:
   const [ctx, setCtx] = useState<SessionContext | null>(null);
   const [notice, setNotice] = useState<SignInNotice | null>(null);
 
-  const refresh = useCallback(async () => {
-    try {
-      setCtx(await loadSessionContext(client));
-      setStatus('ready');
-    } catch {
-      setStatus('error');
-    }
+  // Auth events arrive in bursts (INITIAL_SESSION, SIGNED_IN, TOKEN_REFRESHED within milliseconds). One load runs at a time; any request that
+  // arrives while it runs shares ONE trailing load that starts after it, so the last state always wins and no stale result is applied late.
+  const running = useRef<Promise<void> | null>(null);
+  const trailing = useRef<Promise<void> | null>(null);
+  const start = useCallback((): Promise<void> => {
+    const p: Promise<void> = (async () => {
+      try {
+        setCtx(await loadSessionContext(client));
+        setStatus('ready');
+      } catch {
+        setStatus('error');
+      }
+    })().finally(() => {
+      if (running.current === p) running.current = null;
+    });
+    running.current = p;
+    return p;
   }, [client]);
+  const refresh = useCallback((): Promise<void> => {
+    if (!running.current) return start();
+    if (!trailing.current) {
+      trailing.current = running.current.then(() => {
+        trailing.current = null;
+        return start();
+      });
+    }
+    return trailing.current;
+  }, [start]);
 
   useEffect(() => {
     // Supabase emits INITIAL_SESSION on subscribe, so this also performs the first load.
