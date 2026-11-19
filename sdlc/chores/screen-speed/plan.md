@@ -20,6 +20,7 @@ call counts / parallelism where practical). If a fix needs a new or changed SQL 
   coalescing from #23). Jest: call count per sign-in.
 - [x] 3. Screens: start independent reads in parallel instead of chained awaits; don't refetch what the session already holds;
   keep server-driven `allowed_actions`. RNTL tests per screen changed.
+- [x] 3b. (D1, owner 2026-11-19, after hosted proof run 1: a read stalled 9.3 s on dev) Fetch wrapper on the Supabase client: reads (GET/HEAD to rest/v1 and Storage downloads) with no response after 6 s are aborted and retried once; never writes, rpc, auth or functions; caller's AbortSignal honoured; Sentry breadcrumb only. Jest with fake timers. Architecture note added.
 - [ ] 4. PR CI green; then STOP for the Opus-run hosted proof: 3 consecutive dev runs + 3 PR CI runs green on first attempt.
 - [ ] 5. Docs (known debt if anything remains), PR body with before/after call counts.
 
@@ -49,3 +50,4 @@ Unchanged on purpose: `handover_checklist` (Home banner and readings card) becau
 
 ## Session log
 - 2026-11-19 Sonnet: steps 1-3 done. Step 1: the failing logs actually printed all API calls (13-15), so the real gap was the order (listed by finish time, no start time): `formatNetwork` now sorts by start and prints `+<ms>` start offsets (new test file, existing tests untouched). Step 2: sign-in cost two membership reads because `refresh()` and the SIGNED_IN event each loaded; the provider now skips an auth event whose session fingerprint equals the running or last loaded one (SIGNED_OUT never skipped; refresh() contract kept). Step 3: shared plant timezone (reset on every session load and after the site is saved), plant layout and assignments reads started together. Lint, typecheck and Jest (981) green locally. Next: step 4 (PR CI, then Opus-run hosted proof).
+- 2026-11-19 Sonnet: step 3b done (`src/lib/fetch-retry.ts`, wired in `src/lib/supabase.ts`; tests `fetch-retry.test.ts`, `retry-breadcrumb.test.ts`; architecture Connectivity note). Maestro `my-shift` failure of run 44498408583: flow 1/9, failed after 19 s at `tapOn id: phone` right after `launchApp clearState`, i.e. the sign-in screen was not shown in time on the first flow after emulator boot (cold start); the diagnostic re-run showed a normal signed-in Home (handover banner, My shift, Readings), so sign-in and data were fine. With no session there is no membership read, so this is not a network stall; the failure screenshot is not readable from the log, so not fixed. Lint, typecheck, Jest (996) green.
