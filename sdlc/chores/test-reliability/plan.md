@@ -23,7 +23,7 @@ Maestro `opening-closing.yaml` ("Both readings recorded" on FX-MA1). Policy: fla
 - [x] 3. **The two consistent failures first** (readings correction list; Maestro opening-closing on FX-MA1): root cause, fix, tests.
 - [ ] 4. **The moving failures** (change-password, console, issues escalate, plant "No target set", shifts, Today board,
   Maestro my-shift): classify each as app refresh bug / test wait bug / hosted latency, fix per Rules.
-- [ ] 5. **Proof:** 3 consecutive dev regressions + 3 PR CI runs, each green on the first attempt (no re-runs). Record run ids.
+- [ ] 5. (NOT met — owner: merge, proof moves to chore/screen-speed) **Proof:** 3 consecutive dev regressions + 3 PR CI runs, each green on the first attempt (no re-runs). Record run ids.
 - [ ] 6. Docs (known debt if anything is accepted), Opus review, PR with the failure → cause → fix table, owner merge.
 
 ## Acceptance
@@ -86,3 +86,9 @@ Not verified locally (no Supabase here).
 - Hosted: web 180/181 (all earlier failures pass; smoke.spec.ts:23 chunk blip, watch), hosted-checks green. Android job cancelled at 45 min: one-flow-at-a-time was too slow.
 - `scripts/ci-maestro.sh` runs all flows in ONE `maestro test e2e/maestro` again (junit `test-results/junit-android.xml`). Only on failure: log tail, then each failed flow (from the junit) is re-run alone as a diagnostic and the screen dumped right after it (result ignored, exit code = first run).
 - Maestro `childOf` + `containsChild` found no parent on Android (hierarchy proved the app correct). The state line now has `accessibilityLabel="<code>: <state>"` (existing `reading-state-<key>` testIDs unchanged); opening-closing asserts text `FX-MA1: Both readings recorded` on `reading-state-.*`. RNTL test added in readings-card.test.tsx. Needs the next Android regression.
+
+### 2026-11-19 (Opus) — close-out
+- Hosted proofs: 44461624399 (web 180/181, smoke chunk blip; Android timed out from one-at-a-time flows → fixed), 44470382997 (web 180/181 plant 5 s; Android 9/9), **44476186670 fully green** (web 181/181, Android 9/9, hosted-checks), 44482609153 (web 175/178: plant, readings, users — screens > 10 s on dev; Android 9/9). PR CI on 4d4aa5f green twice (44475891391 attempts 1–2).
+- Owner-approved edits: 032 R1 date fix; hosted-only expect timeout 10 s (local/PR CI 5 s).
+- **AC-3 (3 + 3 consecutive first-attempt green) NOT met.** Owner decision 2026-11-19: merge now; follow-up `chore/screen-speed` (parallel/de-duplicated session and screen loads — membership is fetched twice per load; screens make 13–15 sequential calls at ~0.3–0.7 s each from US runners) must pass the 3-run proof before the R1 gate.
+- Open for R1 (Opus): deep-link 404 on directory routes (`/users`, `/plant`, …) on EAS Hosting.
