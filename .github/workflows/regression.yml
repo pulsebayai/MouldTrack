@@ -22,8 +22,9 @@ permissions:
   issues: write
 
 # One writer at a time on hosted dev (dev-reset D6): the dev regression (which rebuilds the database) and deploy-dev (which migrates it) share this group.
+# Staging (staging-setup D3): the staging regression (fixtures + test data) and deploy-staging share `staging-db`.
 concurrency:
-  group: ${{ (inputs.target || 'dev') == 'dev' && 'dev-db' || format('regression-{0}', inputs.target) }}
+  group: ${{ (inputs.target || 'dev') == 'dev' && 'dev-db' || (inputs.target == 'staging' && 'staging-db' || format('regression-{0}', inputs.target)) }}
   cancel-in-progress: false
 
 env:
@@ -120,20 +121,43 @@ jobs:
         uses: actions/upload-artifact@v4
         with: { name: 'regression-reset', path: test-results/, retention-days: 90, if-no-files-found: warn }
 
+  # staging-setup D2/D5: staging is never rebuilt (D1); its fixtures are (re)created in place, like the dev fixtures step but without the reset.
+  # Staging only: the guard in fixtures-reset refuses any project other than STAGING_SUPABASE_PROJECT_REF and always refuses the prod ref.
+  fixtures:
+    needs: setup
+    if: needs.setup.outputs.target == 'staging'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      APP_ENV: staging
+      SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
+      STAGING_SUPABASE_PROJECT_REF: ${{ secrets.STAGING_SUPABASE_PROJECT_REF }}
+      DEV_SUPABASE_PROJECT_REF: ${{ secrets.DEV_SUPABASE_PROJECT_REF }}
+      PROD_SUPABASE_PROJECT_REF: ${{ secrets.PROD_SUPABASE_PROJECT_REF }} # empty until prod exists
+      E2E_FIXTURE_PASSWORD: ${{ secrets.E2E_FIXTURE_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '${{ env.NODE_VERSION }}', cache: npm }
+      - run: npm ci
+      - name: Reset the fixture tenants on staging (in place; nothing else is touched)
+        run: npm run fixtures:reset
+
   web:
-    needs: [setup, reset]
-    # reset is skipped for staging/prod; on dev a failed or cancelled reset stops the run before anything touches the data
-    if: ${{ !cancelled() && needs.setup.result == 'success' && (needs.reset.result == 'success' || needs.reset.result == 'skipped') }}
+    needs: [setup, reset, fixtures]
+    # reset is skipped for staging/prod and fixtures for dev/prod; a failed or cancelled reset or fixtures job stops the run before any test touches the data
+    if: ${{ !cancelled() && needs.setup.result == 'success' && (needs.reset.result == 'success' || needs.reset.result == 'skipped') && (needs.fixtures.result == 'success' || needs.fixtures.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
       BASE_URL: ${{ needs.setup.outputs.base_url }}
       E2E_FIXTURE_PASSWORD: ${{ secrets.E2E_FIXTURE_PASSWORD }}
-      # API project (02 D10): Auth, PostgREST and the Edge Functions of the target project. Dev only; staging joins at the R1 release.
-      E2E_API_URL: ${{ needs.setup.outputs.target == 'dev' && secrets.DEV_SUPABASE_URL || '' }}
-      E2E_ANON_KEY: ${{ needs.setup.outputs.target == 'dev' && secrets.DEV_SUPABASE_ANON_KEY || '' }}
-      E2E_SERVICE_ROLE_KEY: ${{ needs.setup.outputs.target == 'dev' && secrets.DEV_SUPABASE_SERVICE_ROLE_KEY || '' }}
-      E2E_REQUIRE_API: ${{ needs.setup.outputs.target == 'dev' && '1' || '' }} # a missing API env on dev is a failure, never a skip (R9)
+      # API project (02 D10): Auth, PostgREST and the Edge Functions of the target project (dev, or staging since staging-setup D5; never prod).
+      E2E_API_URL: ${{ needs.setup.outputs.target == 'dev' && secrets.DEV_SUPABASE_URL || needs.setup.outputs.target == 'staging' && secrets.STAGING_SUPABASE_URL || '' }}
+      E2E_ANON_KEY: ${{ needs.setup.outputs.target == 'dev' && secrets.DEV_SUPABASE_ANON_KEY || needs.setup.outputs.target == 'staging' && secrets.STAGING_SUPABASE_ANON_KEY || '' }}
+      E2E_SERVICE_ROLE_KEY: ${{ needs.setup.outputs.target == 'dev' && secrets.DEV_SUPABASE_SERVICE_ROLE_KEY || needs.setup.outputs.target == 'staging' && secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY || '' }}
+      E2E_REQUIRE_API: ${{ (needs.setup.outputs.target == 'dev' || needs.setup.outputs.target == 'staging') && '1' || '' }} # a missing API env is a failure, never a skip (R9)
       CI: 'true'
     steps:
       - uses: actions/checkout@v4
@@ -156,9 +180,9 @@ jobs:
           if-no-files-found: warn
 
   hosted-checks:
-    needs: [setup, reset, web] # after reset (dev starts from the rebuilt database) and web (it checks the state the e2e run leaves behind)
-    # dev: all checks. staging: only the Auth config check (AC-15, R4); the rest stay dev-only. Never after a failed or cancelled reset on dev.
-    if: ${{ !cancelled() && (needs.setup.outputs.target == 'dev' || needs.setup.outputs.target == 'staging') && (needs.reset.result == 'success' || needs.reset.result == 'skipped') }}
+    needs: [setup, reset, fixtures, web] # after reset/fixtures (the target starts from known data) and web (it checks the state the e2e run leaves behind)
+    # dev and staging: the same ten checks, per target (staging-setup D5). Never after a failed or cancelled reset or fixtures job.
+    if: ${{ !cancelled() && (needs.setup.outputs.target == 'dev' || needs.setup.outputs.target == 'staging') && (needs.reset.result == 'success' || needs.reset.result == 'skipped') && (needs.fixtures.result == 'success' || needs.fixtures.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -166,24 +190,25 @@ jobs:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       DEV_SUPABASE_PROJECT_REF: ${{ secrets.DEV_SUPABASE_PROJECT_REF }}
       STAGING_SUPABASE_PROJECT_REF: ${{ secrets.STAGING_SUPABASE_PROJECT_REF }}
-      APP_ENV: development
-      SUPABASE_URL: ${{ secrets.DEV_SUPABASE_URL }}
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.DEV_SUPABASE_SERVICE_ROLE_KEY }}
+      PROD_SUPABASE_PROJECT_REF: ${{ secrets.PROD_SUPABASE_PROJECT_REF }} # empty until prod exists
+      APP_ENV: ${{ needs.setup.outputs.target == 'staging' && 'staging' || 'development' }}
+      SUPABASE_URL: ${{ needs.setup.outputs.target == 'staging' && secrets.STAGING_SUPABASE_URL || secrets.DEV_SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ needs.setup.outputs.target == 'staging' && secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY || secrets.DEV_SUPABASE_SERVICE_ROLE_KEY }}
       WEB_ORIGIN: ${{ needs.setup.outputs.base_url }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: '${{ env.NODE_VERSION }}', cache: npm }
       - run: npm ci
-      - name: Auth config, functions deployed, no orphan users, CORS (read-only)
+      - name: Auth config, functions, orphans, CORS, setup token, bucket, handover (read-only, per target)
         run: bash scripts/hosted-checks.sh
       - if: always()
         uses: actions/upload-artifact@v4
         with: { name: 'regression-hosted', path: test-results/, retention-days: 90, if-no-files-found: warn }
 
   android:
-    needs: [setup, reset, web] # on dev the reset job rebuilt the fixtures; the dev-only step below re-resets them for U4
-    if: ${{ !cancelled() && needs.setup.outputs.full == 'true' && needs.web.result != 'skipped' && (needs.reset.result == 'success' || needs.reset.result == 'skipped') }}
+    needs: [setup, reset, fixtures, web] # the dev/staging steps below re-reset the fixtures for U4
+    if: ${{ !cancelled() && needs.setup.outputs.full == 'true' && needs.web.result != 'skipped' && (needs.reset.result == 'success' || needs.reset.result == 'skipped') && (needs.fixtures.result == 'success' || needs.fixtures.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -204,6 +229,17 @@ jobs:
           SUPABASE_URL: ${{ secrets.DEV_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.DEV_SUPABASE_SERVICE_ROLE_KEY }}
           DEV_SUPABASE_PROJECT_REF: ${{ secrets.DEV_SUPABASE_PROJECT_REF }}
+          E2E_FIXTURE_PASSWORD: ${{ secrets.E2E_FIXTURE_PASSWORD }}
+        run: npm run fixtures:reset
+      - name: Reset fixtures again (staging; same reason, same guard)
+        if: needs.setup.outputs.target == 'staging'
+        env:
+          APP_ENV: staging
+          SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
+          STAGING_SUPABASE_PROJECT_REF: ${{ secrets.STAGING_SUPABASE_PROJECT_REF }}
+          DEV_SUPABASE_PROJECT_REF: ${{ secrets.DEV_SUPABASE_PROJECT_REF }}
+          PROD_SUPABASE_PROJECT_REF: ${{ secrets.PROD_SUPABASE_PROJECT_REF }}
           E2E_FIXTURE_PASSWORD: ${{ secrets.E2E_FIXTURE_PASSWORD }}
         run: npm run fixtures:reset
       - name: Build release APK on the runner (no EAS credits)
@@ -239,7 +275,7 @@ jobs:
         with: { name: 'regression-android', path: test-results/, retention-days: 90, if-no-files-found: warn }
 
   evidence:
-    needs: [setup, drift, reset, hosted-checks, web, android]
+    needs: [setup, drift, reset, fixtures, hosted-checks, web, android]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -258,7 +294,7 @@ jobs:
         with: { name: 'regression-evidence-${{ needs.setup.outputs.target }}', path: evidence/, retention-days: 90 }
       - name: Fail if any suite failed
         run: |
-          r='${{ needs.drift.result }} ${{ needs.reset.result }} ${{ needs['hosted-checks'].result }} ${{ needs.web.result }} ${{ needs.android.result }}'
+          r='${{ needs.drift.result }} ${{ needs.reset.result }} ${{ needs.fixtures.result }} ${{ needs['hosted-checks'].result }} ${{ needs.web.result }} ${{ needs.android.result }}'
           echo "results: $r"; ! echo "$r" | grep -Eq 'failure|cancelled'
 
   # S1 (dev-reset D6): deploy-dev and the dev regression share concurrency group dev-db, and GitHub keeps only ONE pending run per group (a newer

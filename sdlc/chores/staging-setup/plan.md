@@ -31,9 +31,9 @@ Secrets: `STAGING_SUPABASE_PROJECT_REF`, `STAGING_SUPABASE_DB_URL` (session pool
 `PROD_SUPABASE_PROJECT_REF` (once prod exists). `STAGING_SUPABASE_URL`/`_ANON_KEY` already exist (keep-alive).
 
 ## Steps (tests first)
-- [ ] 1. Guards: `fixtures-reset` staging mode + prod refusal; deploy-target guard script. Jest for every refusal.
-- [ ] 2. `deploy-staging.yml` (D3) + its setup-token check; dry-run-safe parts unit-tested.
-- [ ] 3. `regression.yml target=staging` (D5): fixtures step, hosted checks parameterised by target, Android staging build.
+- [x] 1. Guards: `fixtures-reset` staging mode + prod refusal; deploy-target guard script. Jest for every refusal.
+- [x] 2. `deploy-staging.yml` (D3) + its setup-token check; dry-run-safe parts unit-tested.
+- [x] 3. `regression.yml target=staging` (D5): fixtures step, hosted checks parameterised by target, Android staging build.
 - [ ] 4. Opus runs: deploy-staging → runbook first SA (D4, owner present for the one-time token) → staging regression. Record runs.
 - [ ] 5. Docs: architecture (staging rules D1–D6), releases README (procedure step 2 uses `deploy-staging.yml`), known debt.
 
@@ -46,3 +46,12 @@ Secrets: `STAGING_SUPABASE_PROJECT_REF`, `STAGING_SUPABASE_DB_URL` (session pool
 ## Session log
 ### 2026-11-24 (Opus) — plan drafted for owner approval.
 - Owner created the staging project (MouldTrack org, ap-south-1) and set the five STAGING_* secrets; plan approved.
+
+### 2026-11-24 (Sonnet) - steps 1-3 built (no hosted calls)
+- Step 1: `assertSafeTarget` (scripts/fixtures-reset.ts) now allows local, dev and staging (`APP_ENV=staging` only with the exact `STAGING_SUPABASE_PROJECT_REF` and a URL equal to that project);
+  the prod ref is refused in every mode (an empty `PROD_SUPABASE_PROJECT_REF` = no prod yet, not an error); dev == staging ref refused. `dev-reset`/demo seed untouched (already dev/local only; tests added).
+  New `scripts/deploy-target-guard.ts` (main only; staging ref exact; dev ref required and different; prod ref different when set; API and DB URLs belong to staging). Jest: `staging-guards.test.ts`, `staging-workflow.test.ts`, `staging-regression.test.ts`.
+  Behaviour change: assertSafeTarget now requires APP_ENV=development for the dev URL (previously any allowed APP_ENV); local URL still allowed for local/development.
+- Step 2: `.github/workflows/deploy-staging.yml` (dispatch only, main, group `staging-db`, repo secrets, no environment). Input `first_sa_in_progress` lets the setup-token check pass while the runbook token exists; otherwise a stray token FAILS the deploy (never auto-unset, unlike dev).
+- Step 3: `regression.yml`: staging group `staging-db`; new `fixtures` job (staging only); web API env, hosted-checks and the Android U4 re-reset work for staging; `hosted-checks.sh` takes TARGET dev|staging and runs all ten checks per target (checks the URL is the target's project).
+- Not run here: actionlint (unavailable; YAML parsed with PyYAML), local Supabase, hosted. Step 4 (Opus) pending.
