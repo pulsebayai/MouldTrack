@@ -11,9 +11,9 @@ Every release Rn follows architecture.md §Release & regression policy. Run on `
 6. After the prod deploy run the same **setup-token check** against prod (read-only), then run `regression.yml` with `target=prod` (**smoke only**, read-only) and append its summary. Pass → mark the release `released` in roadmap.md. Fail → roll back, record the incident, add a roadmap item.
 
 ## R1 pre-release items (open; each must be done or waived in `R1.md` before step 2)
-- [ ] **Separate Supabase token for prod.** Prod lives in its own Supabase organisation; create a dedicated access token there (secret `PROD_SUPABASE_ACCESS_TOKEN` or an environment-scoped secret). Never reuse the dev/staging token (`SUPABASE_ACCESS_TOKEN`, MouldTrack org, renewed 2026-11-24 with no expiry: delete and replace it if a leak is suspected).
-- [ ] **Secret `STAGING_SUPABASE_PROJECT_REF`** set (dev-reset guard S5 then refuses a dev URL that points at staging).
-- [ ] **Staging fixture tenants vs handover enforcement (08, OPEN).** Console-created staging tenants are enforced, so 06's e2e openings hit `handover_pending`; Opus decides the fix.
+- [ ] **Separate Supabase token for prod.** Prod lives in the MouldTrack org next to dev; create a dedicated token for prod deploys (secret `PROD_SUPABASE_ACCESS_TOKEN` or an environment-scoped secret). Never reuse the dev/staging token (`SUPABASE_ACCESS_TOKEN`, MouldTrack org, renewed 2026-11-24 with no expiry: delete and replace it if a leak is suspected).
+- [ ] **No staging for R1 (owner, 2026-11-24).** Pause or delete the staging project so prod fits in the MouldTrack org (Free = 2 projects). Set secret `PROD_SUPABASE_PROJECT_REF` and point the dev-reset guard at it (refuses a dev URL that points at prod).
+- [ ] **Pre-go-live full run on prod:** `regression.yml target=prod` gets a one-time full mode (fixture data only) before go-live, then prod is reset to migrations; record both runs in `R1.md`. The 08 handover item applies here: prod fixture tenants created via the Console are enforced, so 06's e2e openings would hit `handover_pending` (Opus decides the fix before this run).
 - [ ] **Deep links on EAS Hosting.** Opening `/users`, `/plant`, `/issues`, `/readings` or `/console` directly returns 404 (directory routes); in-app navigation works. Fix or waive.
 - [ ] **Seeded-volume speed check** (policy 2(b)): build or waive.
 - [ ] **Prod backups:** nightly encrypted `pg_dump` + Storage export, and one recorded restore drill.
