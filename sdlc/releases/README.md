@@ -12,8 +12,8 @@ Every release Rn follows architecture.md §Release & regression policy. Run on `
 
 ## R1 pre-release items (open; each must be done or waived in `R1.md` before step 2)
 - [ ] **Separate Supabase token for prod.** Prod lives in the **Pulsebay Ai** Pro org; create a dedicated token in that account (secret `PROD_SUPABASE_ACCESS_TOKEN`) (secret `PROD_SUPABASE_ACCESS_TOKEN` or an environment-scoped secret). Never reuse the dev/staging token (`SUPABASE_ACCESS_TOKEN`, MouldTrack org, renewed 2026-11-24 with no expiry: delete and replace it if a leak is suspected).
-- [ ] **No staging for R1 (owner, 2026-11-24).** Create prod in the Pulsebay Ai Pro org (region ap-south-1; staging stays unused, pause it). Set secret `PROD_SUPABASE_PROJECT_REF` and point the dev-reset guard at it (refuses a dev URL that points at prod).
-- [ ] **Pre-go-live full run on prod:** `regression.yml target=prod` gets a one-time full mode (fixture data only) before go-live, then prod is reset to migrations; record both runs in `R1.md`. The 08 handover item applies here: prod fixture tenants created via the Console are enforced, so 06's e2e openings would hit `handover_pending` (Opus decides the fix before this run).
+- [ ] **Three environments (owner, 2026-11-24):** dev + staging Free in the MouldTrack org, prod Pro in the Pulsebay Ai org (ap-south-1). Set secrets `STAGING_SUPABASE_PROJECT_REF` and `PROD_SUPABASE_PROJECT_REF` (the dev-reset guard refuses a dev URL pointing at either).
+- [ ] **Staging fixture tenants vs handover enforcement (08, OPEN).** Console-created staging tenants are enforced, so 06's e2e openings hit `handover_pending`; Opus decides the fix before the staging regression.
 - [ ] **Deep links on EAS Hosting.** Opening `/users`, `/plant`, `/issues`, `/readings` or `/console` directly returns 404 (directory routes); in-app navigation works. Fix or waive.
 - [ ] **Seeded-volume speed check** (policy 2(b)): build or waive.
 - [ ] **Prod backups:** confirm Pro daily backups are on; one recorded restore drill (daily backup → throwaway project → read-only smoke); a Storage export routine for photos (not covered by database backups).
