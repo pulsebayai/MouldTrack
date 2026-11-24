@@ -17,6 +17,7 @@ Every release Rn follows architecture.md §Release & regression policy. Run on `
 - [ ] **Deep links on EAS Hosting.** Opening `/users`, `/plant`, `/issues`, `/readings` or `/console` directly returns 404 (directory routes); in-app navigation works. Fix or waive.
 - [ ] **Seeded-volume speed check** (policy 2(b)): build or waive.
 - [ ] **Prod backups:** confirm Pro daily backups are on; one recorded restore drill (daily backup → throwaway project → read-only smoke); a Storage export routine for photos (not covered by database backups).
+- [ ] **Prod APK (no Play Store, owner 2026-11-24):** `eas.json` production profile builds an APK; signing keystore downloaded (`eas credentials`) and stored in the owner's password manager; install guide for supervisors ("install unknown apps", Play Protect warning); the download link is shared only with the pilot plant; record which app version each phone runs (Android build number) so old APKs can be chased.
 - [ ] **Token health:** a red nightly `hosted-checks` with `HTTP 401` / "Invalid access token" means the Supabase token expired or was revoked; renew it the same day.
 
 ## Runbook: first Super Admin on an environment (prod at R1; staging if it has no SA)
