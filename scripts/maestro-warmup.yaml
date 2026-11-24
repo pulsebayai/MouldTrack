@@ -1,0 +1,9 @@
+# CI harness only (not a test): first launch after the emulator boots can take longer than Maestro's default wait
+# (screen-speed run 44498408583: flow 1 failed at `tapOn: phone` 19 s after a cold launch). Launch once and wait for the
+# sign-in screen so every real flow starts on a warm app. Its result is ignored; the suite below decides.
+appId: com.pulsebayai.mouldtrack
+---
+- launchApp: { clearState: true }
+- extendedWaitUntil:
+    visible: { id: "phone" }
+    timeout: 120000

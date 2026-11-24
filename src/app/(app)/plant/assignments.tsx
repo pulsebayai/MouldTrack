@@ -24,7 +24,10 @@ export default function AssignmentsTab() {
   const [selected, setSelected] = useState<string[]>([]);
   const [action, setAction] = useState<Action>(null);
 
-  const base = useLoad(async () => ({ shifts: await fetchShifts(client), supervisors: await fetchActiveSupervisors(client) }), []);
+  const base = useLoad(async () => {
+    const [shifts, supervisors] = await Promise.all([fetchShifts(client), fetchActiveSupervisors(client)]);
+    return { shifts, supervisors };
+  }, []);
   const shifts = base.data?.shifts ?? [];
   const activeShiftId = shiftId ?? shifts[0]?.id ?? null;
   const dateOk = date === null || isValidDate(date.trim());

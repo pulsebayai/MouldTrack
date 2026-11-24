@@ -19,9 +19,9 @@ export default function PlantLayout() {
   const allowed = isMember(ctx) && ctx.role === 'unit_admin';
   const base = useLoad(
     async () => {
-      const site = await fetchSite(client);
-      const [today, tz] = await Promise.all([fetchPlantToday(client), site ? Promise.resolve(null) : fetchTenantTimezone(client)]);
-      return { site, today, tenantTimezone: tz };
+      // Independent reads start together; the tenant default is needed (and read) only when there is no site.
+      const [site, today] = await Promise.all([fetchSite(client), fetchPlantToday(client)]);
+      return { site, today, tenantTimezone: site ? null : await fetchTenantTimezone(client) };
     },
     [],
     allowed,

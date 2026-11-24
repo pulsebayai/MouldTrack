@@ -226,6 +226,11 @@ jobs:
           arch: x86_64
           disable-animations: true
           emulator-boot-timeout: 600
+          # Cold `launchApp clearState` occasionally exceeded Maestro's wait on the default 2-core / 2 GB emulator (screen-speed
+          # proof 45362690722: sign-out flow, sign-in screen appeared later). Runner has 4 vCPU / 16 GB.
+          cores: 4
+          ram-size: 4096M
+          heap-size: 576M
           script: |
             adb install -r android/app/build/outputs/apk/release/app-release.apk
             bash scripts/ci-maestro.sh

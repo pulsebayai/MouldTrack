@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { useEffect } from 'react';
 import { Pressable, Text } from 'react-native';
 import { SessionProvider, useSession } from '@/lib/session-provider';
 
@@ -154,5 +155,100 @@ describe('SessionProvider (test-reliability: overlapping auth events)', () => {
       await calls[0];
     });
     expect(screen.getByTestId('probe')).toHaveTextContent('ready:after');
+  });
+});
+
+describe('SessionProvider (screen-speed: one membership read per sign-in)', () => {
+  const session = (token: string) => ({ access_token: token, user: { id: 'u', email: 'e', updated_at: '2026-11-19T00:00:00Z' } });
+  function setup() {
+    const state = { memberships: 0, current: session('t1') as ReturnType<typeof session> | null };
+    let cb: (e: string, s?: unknown) => void = () => {};
+    const c = {
+      auth: {
+        getSession: async () => ({ data: { session: state.current } }),
+        onAuthStateChange: (fn: (e: string, s?: unknown) => void) => {
+          cb = fn;
+          return { data: { subscription: { unsubscribe: jest.fn() } } };
+        },
+      },
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            maybeSingle: async () => {
+              state.memberships += 1;
+              await new Promise((r) => setTimeout(r, 5));
+              return { data: { role: 'supervisor', status: 'active', tenant: { name: 'e2e org A', status: 'active' } }, error: null };
+            },
+          }),
+        }),
+      }),
+    };
+    const held: { refresh: () => Promise<void> } = { refresh: async () => {} };
+    function Grab() {
+      const { refresh } = useSession();
+      useEffect(() => {
+        held.refresh = refresh;
+      });
+      return <Probe />;
+    }
+    return { state, c, emit: (e: string, s?: unknown) => cb(e, s), refresh: () => held.refresh(), Grab };
+  }
+
+  it('sign-in: the explicit refresh() and the SIGNED_IN event for the same session share one load (one membership read)', async () => {
+    const t = setup();
+    await render(
+      <SessionProvider client={t.c as never} appEnv="local">
+        <t.Grab />
+      </SessionProvider>,
+    );
+    await act(async () => {
+      const p = t.refresh(); // sign-in.tsx: refresh() right after signInWithPassword resolves
+      t.emit('SIGNED_IN', t.state.current); // the event arrives (deferred) afterwards
+      await new Promise((r) => setTimeout(r, 0));
+      await p;
+    });
+    await waitFor(() => expect(screen.getByTestId('probe')).toHaveTextContent('ready:e2e org A'));
+    expect(t.state.memberships).toBe(1);
+  });
+
+  it('a repeated SIGNED_IN / TOKEN_REFRESHED for the already loaded session does not reload; a new token does', async () => {
+    const t = setup();
+    await render(
+      <SessionProvider client={t.c as never} appEnv="local">
+        <t.Grab />
+      </SessionProvider>,
+    );
+    await act(async () => {
+      await t.refresh();
+    });
+    expect(t.state.memberships).toBe(1);
+    await act(async () => {
+      t.emit('SIGNED_IN', t.state.current);
+      t.emit('INITIAL_SESSION', t.state.current);
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(t.state.memberships).toBe(1);
+    await act(async () => {
+      t.state.current = session('t2');
+      t.emit('TOKEN_REFRESHED', t.state.current);
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    expect(t.state.memberships).toBe(2);
+  });
+
+  it('SIGNED_OUT always loads', async () => {
+    const t = setup();
+    await render(
+      <SessionProvider client={t.c as never} appEnv="local">
+        <t.Grab />
+      </SessionProvider>,
+    );
+    await act(async () => {
+      await t.refresh();
+      t.state.current = null;
+      t.emit('SIGNED_OUT', null);
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    await waitFor(() => expect(screen.getByTestId('probe')).toHaveTextContent('ready:none'));
   });
 });

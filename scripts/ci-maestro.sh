@@ -6,6 +6,7 @@ set -uo pipefail
 mkdir -p test-results
 dbg="test-results/maestro-debug"
 mkdir -p "$dbg"
+maestro test scripts/maestro-warmup.yaml >/dev/null 2>&1 || echo "maestro warm-up did not see the sign-in screen (suite continues)"
 maestro test e2e/maestro --env PASSWORD="${PASSWORD:-}" --format junit --output test-results/junit-android.xml --debug-output "$dbg"
 code=$?
 if [ "$code" -ne 0 ]; then

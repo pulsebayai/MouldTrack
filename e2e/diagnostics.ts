@@ -14,19 +14,21 @@ export const test = base.extend<{ _diagnostics: void }>({
       const calls: NetCall[] = [];
       const errors: string[] = [];
       const started = new Map<unknown, number>();
+      let first = 0;
       const inflight = new Set<Request>();
       context.on('request', (r) => {
         started.set(r, Date.now());
+        first ||= Date.now();
         inflight.add(r);
       });
       context.on('requestfinished', async (r) => {
         inflight.delete(r);
         const res = await r.response().catch(() => null);
-        calls.push({ method: r.method(), path: pathOf(r.url()), status: res ? res.status() : 'failed', ms: Date.now() - (started.get(r) ?? Date.now()) });
+        calls.push({ method: r.method(), path: pathOf(r.url()), status: res ? res.status() : 'failed', ms: Date.now() - (started.get(r) ?? Date.now()), at: (started.get(r) ?? first) - first });
       });
       context.on('requestfailed', (r) => {
         inflight.delete(r);
-        calls.push({ method: r.method(), path: pathOf(r.url()), status: 'failed', ms: Date.now() - (started.get(r) ?? Date.now()) });
+        calls.push({ method: r.method(), path: pathOf(r.url()), status: 'failed', ms: Date.now() - (started.get(r) ?? Date.now()), at: (started.get(r) ?? first) - first });
       });
       context.on('console', (m) => {
         if (m.type() === 'error') errors.push(`console.error: ${m.text()}`);

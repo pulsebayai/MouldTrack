@@ -28,7 +28,8 @@ export function redact(text: string, keepLong = false): string {
   return keepLong ? out : out.replace(LONG_TOKEN, '[token]');
 }
 
-export type NetCall = { method: string; path: string; status: number | 'failed'; ms: number };
+/** `at` = start offset in ms from the first recorded request: with it a reader can tell parallel calls from sequential ones. */
+export type NetCall = { method: string; path: string; status: number | 'failed'; ms: number; at?: number };
 
 /** Path only: the query string (which can hold tokens, phones, filters) is dropped. */
 export function pathOf(url: string): string {
@@ -49,10 +50,12 @@ const bad = (c: NetCall) => c.status === 'failed' || c.status >= 400;
  */
 export function formatNetwork(calls: NetCall[], limit = 40): string {
   if (calls.length === 0) return '(no network calls recorded)';
+  // Listed in start order (calls are recorded when they finish), so parallel and chained calls read correctly.
+  calls = [...calls].sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
   const shown = calls.filter((c) => API_PATH.test(c.path) || bad(c));
   const collapsed = calls.length - shown.length;
   const last = shown.slice(-limit);
-  const lines = last.map((c) => redact(`${c.method.padEnd(6)} ${String(c.status).padEnd(6)} ${String(c.ms).padStart(5)} ms  ${c.path}`));
+  const lines = last.map((c) => redact(`${c.at === undefined ? '' : `+${String(c.at).padStart(5)} `}${c.method.padEnd(6)} ${String(c.status).padEnd(6)} ${String(c.ms).padStart(5)} ms  ${c.path}`));
   const head = `${calls.length} calls: ${shown.length} API or failed${shown.length > limit ? ` (last ${limit} shown)` : ''}, ${collapsed} static/document collapsed`;
   return `${head}\n${lines.join('\n') || '(no API calls)'}`;
 }
