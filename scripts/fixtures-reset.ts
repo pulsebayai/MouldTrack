@@ -1,14 +1,14 @@
 /**
- * Idempotently (re)creates the e2e fixture tenants, users and memberships on a HOSTED DEV project
- * (or local). Refuses to run anywhere else. Uses the service-role key; never logs secrets.
+ * Idempotently (re)creates the e2e fixture tenants, users and memberships on the HOSTED DEV or STAGING project
+ * (or local). Refuses to run anywhere else, and always refuses the prod project. Uses the service-role key; never logs secrets.
  *
  * Identities (02-tenancy-and-roles, D2/D3): sign-in is by phone. Canonical fixtures use the phone block
  * +91 90000 00001-00099 and a non-deliverable Auth address `<10 digits>@phone.mouldtrack.invalid`. Throwaway users
  * created by tests use +91 90000 10000-99999; this script deletes them (and anything else living in a fixture
  * tenant that is not canonical) so every run starts clean.
  *
- * Env: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, E2E_FIXTURE_PASSWORD, APP_ENV (local|development),
- *      DEV_SUPABASE_PROJECT_REF (required for hosted).
+ * Env: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, E2E_FIXTURE_PASSWORD, APP_ENV (local|development|staging),
+ *      DEV_SUPABASE_PROJECT_REF / STAGING_SUPABASE_PROJECT_REF (required for that hosted target); PROD_SUPABASE_PROJECT_REF is always refused.
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { closeAsUnitAdmin } from './close-throwaway-issues';
@@ -247,14 +247,28 @@ export const isCanonicalPhone = (phone: string): boolean => /^\+9190000000(0[1-9
 export const isFixtureAuthEmail = (email: string): boolean => /^90000000(0[1-9]|[1-9][0-9])@phone\.mouldtrack\.invalid$/.test(email);
 export const isThrowawayAuthEmail = (email: string): boolean => /^90000[1-9][0-9]{4}@phone\.mouldtrack\.invalid$/.test(email);
 
+const REF_RE = /^[a-z0-9]{20}$/;
+
+/**
+ * Allows exactly three targets: the local stack (APP_ENV=local), the configured dev project (APP_ENV=development, DEV_SUPABASE_PROJECT_REF)
+ * and the configured staging project (APP_ENV=staging, STAGING_SUPABASE_PROJECT_REF; staging-setup D2). The prod project is refused in every
+ * mode (D6); an empty PROD_SUPABASE_PROJECT_REF means "no prod yet". Messages never contain a URL or ref.
+ */
 export function assertSafeTarget(env: Record<string, string | undefined>, users: Fixture[] = USERS): void {
-  const url = env.SUPABASE_URL ?? '';
+  const url = (env.SUPABASE_URL ?? '').replace(/\/$/, '');
   const appEnv = env.APP_ENV ?? '';
-  if (!['local', 'development'].includes(appEnv)) throw new Error(`Refusing: APP_ENV must be local or development (got "${appEnv}")`);
-  const isLocal = /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\/?$/.test(url);
-  const ref = env.DEV_SUPABASE_PROJECT_REF ?? '';
-  const isDev = !!ref && url.replace(/\/$/, '') === `https://${ref}.supabase.co`;
-  if (!isLocal && !isDev) throw new Error('Refusing: SUPABASE_URL is neither local nor the configured dev project');
+  if (!['local', 'development', 'staging'].includes(appEnv)) throw new Error(`Refusing: APP_ENV must be local, development or staging (got "${appEnv}")`);
+  const dev = env.DEV_SUPABASE_PROJECT_REF ?? '';
+  const staging = env.STAGING_SUPABASE_PROJECT_REF ?? '';
+  const prod = env.PROD_SUPABASE_PROJECT_REF ?? '';
+  if (prod && url === `https://${prod}.supabase.co`) throw new Error('Refusing: SUPABASE_URL is the prod project');
+  if (dev && staging && dev === staging) throw new Error('Refusing: the dev and staging project refs are equal');
+  for (const [name, ref] of [['dev', dev], ['staging', staging]] as const)
+    if (prod && ref && ref === prod) throw new Error(`Refusing: the ${name} project ref equals the prod project ref`);
+  const isLocal = appEnv !== 'staging' && /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(url);
+  const isDev = appEnv === 'development' && REF_RE.test(dev) && url === `https://${dev}.supabase.co`;
+  const isStaging = appEnv === 'staging' && REF_RE.test(staging) && url === `https://${staging}.supabase.co`;
+  if (!isLocal && !isDev && !isStaging) throw new Error(`Refusing: SUPABASE_URL is not the ${appEnv === 'staging' ? 'configured staging' : 'local or the configured dev'} project`);
   if (!users.every((u) => u.email.endsWith(`@${AUTH_DOMAIN}`))) throw new Error('Refusing: fixture email must use the reserved .invalid domain');
   if (!users.every((u) => isCanonicalPhone(u.phone))) throw new Error('Refusing: fixture phone outside the canonical block +91 90000 00001-00099');
   if (!users.every((u) => u.email === `${u.phone.slice(3)}@${AUTH_DOMAIN}`)) throw new Error('Refusing: fixture email does not match its phone');

@@ -1,0 +1,99 @@
+# Deploys main to STAGING (staging-setup D3): migrations, Edge Functions, CORS origin, hosted Auth config, web on EAS Hosting alias "staging",
+# then the setup-token check. Manual dispatch only, from main. Never touches dev or prod: scripts/deploy-target-guard.ts runs first and refuses
+# any project other than STAGING_SUPABASE_PROJECT_REF (and that ref must differ from the dev and prod refs).
+# Staging is never wiped (D1): migrations apply to the long-lived database exactly as they will on prod.
+name: deploy-staging
+
+on:
+  workflow_dispatch:
+    inputs:
+      first_sa_in_progress:
+        description: 'The first-Super-Admin runbook is in progress (a PLATFORM_SETUP_TOKEN secret is allowed to exist)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# One writer at a time on staging: shared with the staging regression, which writes fixtures and test data.
+concurrency:
+  group: staging-db
+  cancel-in-progress: false
+
+env:
+  EAS_CLI: eas-cli@27.10.0
+  STAGING_WEB_ORIGIN: https://mouldtrack--staging.expo.app
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      STAGING_SUPABASE_PROJECT_REF: ${{ secrets.STAGING_SUPABASE_PROJECT_REF }}
+      STAGING_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+      STAGING_SUPABASE_DB_URL: ${{ secrets.STAGING_SUPABASE_DB_URL }}
+      DEV_SUPABASE_PROJECT_REF: ${{ secrets.DEV_SUPABASE_PROJECT_REF }}
+      PROD_SUPABASE_PROJECT_REF: ${{ secrets.PROD_SUPABASE_PROJECT_REF }} # empty until prod exists (R1 release)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22', cache: npm }
+      - run: npm ci
+
+      - name: Guard - this is main and the target is exactly the staging project (never dev or prod)
+        run: npx tsx scripts/deploy-target-guard.ts
+
+      - name: Apply migrations to staging
+        run: |
+          set -o pipefail
+          npx supabase db push --db-url "$STAGING_SUPABASE_DB_URL" --include-all --yes 2>&1 | sed -E 's#postgres(ql)?://[^ ]*#<redacted>#g'
+
+      - name: Deploy Edge Functions to staging
+        run: npx supabase functions deploy user-admin account platform platform-setup --project-ref "$STAGING_SUPABASE_PROJECT_REF" --use-api --yes
+
+      - name: Set function secrets (CORS origin of the staging web app)
+        run: npx supabase secrets set ALLOWED_ORIGINS="$STAGING_WEB_ORIGIN" --project-ref "$STAGING_SUPABASE_PROJECT_REF" --yes
+
+      - name: Apply hosted Auth config to staging
+        run: node scripts/auth-config.mjs --apply --ref staging
+
+      - name: Build web (staging)
+        env:
+          EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+          EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+          EXPO_PUBLIC_APP_ENV: staging
+          EXPO_PUBLIC_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+        run: npx expo export -p web --output-dir dist
+
+      - name: Deploy to EAS Hosting (alias staging)
+        id: deploy
+        run: |
+          npx --yes $EAS_CLI deploy --non-interactive --export-dir dist --alias staging --json > deploy.json 2> deploy.err || { cat deploy.err; exit 1; }
+          echo "--- deploy.json"; cat deploy.json; echo "--- deploy.err (tail)"; tail -5 deploy.err
+          echo "### Staging web: $STAGING_WEB_ORIGIN" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: The staging web origin answers 200
+        run: |
+          for i in $(seq 1 12); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "$STAGING_WEB_ORIGIN"); [ "$code" = "200" ] && break; sleep 5
+          done
+          echo "HTTP $code"
+          [ "$code" = "200" ]
+
+      # Setup-token check (releases README procedure step 2): staging holds no PLATFORM_SETUP_TOKEN unless the first-Super-Admin runbook is in
+      # progress. Never unsets it automatically (that would break a runbook in progress): a stray token fails the deploy for investigation.
+      # Only the secret names are listed, never values.
+      - name: Setup-token check (no PLATFORM_SETUP_TOKEN unless the runbook is in progress)
+        env:
+          RUNBOOK_IN_PROGRESS: ${{ inputs.first_sa_in_progress }}
+        run: |
+          out="$(npx supabase secrets list --project-ref "$STAGING_SUPABASE_PROJECT_REF" -o json 2>/dev/null)" || { echo "could not list secrets"; exit 1; }
+          present="$(echo "$out" | jq -r '[.[] | select(.name == "PLATFORM_SETUP_TOKEN")] | length')"
+          echo "PLATFORM_SETUP_TOKEN secrets on staging: $present (runbook in progress: $RUNBOOK_IN_PROGRESS)"
+          if [ "$present" != 0 ] && [ "$RUNBOOK_IN_PROGRESS" != true ]; then
+            echo "PLATFORM_SETUP_TOKEN exists on staging and no first-Super-Admin runbook is in progress: unset it and investigate who set it"
+            exit 1
+          fi
