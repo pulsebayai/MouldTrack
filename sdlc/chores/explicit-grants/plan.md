@@ -22,11 +22,11 @@ existing projects from 2026-10-30, changelog 45329). dev (older) still has the o
 - **D5 Carry the small staging fixes** already on this branch (fixtures-reset error fields; 5-minute wait for a new web alias).
 
 ## Steps (tests first)
-- [ ] 1. Snapshot query + a temporary CI step that prints the privilege set from the current (old-defaults) stack. Commit the
+- [x] 1. Snapshot query + a temporary CI step that prints the privilege set from the current (old-defaults) stack. Commit the
   printed set as the D4 expected snapshot.
-- [ ] 2. D4 test (fails on a stack without implicit grants until step 3) + D3 config flip.
-- [ ] 3. The D2 migration; PR CI green with D3 on (db, e2e, reset-roundtrip).
-- [ ] 4. Docs: architecture rule "every new public object states its grants in its migration; the privilege contract test is the
+- [x] 2. D4 test (fails on a stack without implicit grants until step 3) + D3 config flip.
+- [x] 3. The D2 migration; PR CI green with D3 on (db, e2e, reset-roundtrip).
+- [x] 4. Docs: architecture rule "every new public object states its grants in its migration; the privilege contract test is the
   extension point"; known debt; decision log.
 - [ ] 5. Opus: merge → deploy-staging → staging regression; dev nightly unaffected (no-op).
 
@@ -38,3 +38,9 @@ existing projects from 2026-10-30, changelog 45329). dev (older) still has the o
 
 ## Session log
 ### 2026-11-24 (Opus) — plan written after the staging 42501.
+### 2026-11-24 (Sonnet) — steps 1-4 built; PR #30 (draft).
+- Step 1: `scripts/privilege-snapshot.sql`; temp CI step printed 307 lines from the old-defaults stack (run 45422929077): 7 schema, 108 table, 2 view, 190 function, 0 sequence/column lines. No objects owned by anything but postgres in scope; no extension-owned objects. Temp step removed in step 2.
+- Step 2: `070_privilege_contract.test.sql` + `auto_expose_new_tables = false` (CLI 3.1.0 accepts it). Run 45423947943 with the migration absent: only 070 test 1 failed (62 missing: service_role SELECT/INSERT/UPDATE/DELETE on tenant and membership, service_role EXECUTE on 54 public RPCs); reset-roundtrip failed too. All other pgTAP files passed.
+- Step 3: `20261124900000_explicit_grants.sql` (190 grant statements, generated from the snapshot; `grant all` for service_role on tenant/membership).
+- Surprises: (1) tenant/membership give service_role the FULL set incl. TRUNCATE (old default); kept for parity, listed as debt. (2) Local D3 stack still left service_role TRUNCATE/REFERENCES/TRIGGER/MAINTAIN on tenant/membership, so it is not byte-identical to a hosted new project; the SELECT/INSERT/UPDATE/DELETE gap (the staging error) is reproduced. (3) `all` on tenant/membership renders MAINTAIN on PG17 only (config major_version = 17).
+- Step 5 (Opus): merge, deploy-staging, staging regression.
