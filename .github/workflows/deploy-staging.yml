@@ -77,8 +77,9 @@ jobs:
 
       - name: The staging web origin answers 200
         run: |
-          for i in $(seq 1 12); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' "$STAGING_WEB_ORIGIN"); [ "$code" = "200" ] && break; sleep 5
+          # A brand-new alias took > 60 s to answer on the first deploy (run 45414681878): wait up to 5 min.
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "$STAGING_WEB_ORIGIN"); [ "$code" = "200" ] && break; sleep 10
           done
           echo "HTTP $code"
           [ "$code" = "200" ]
