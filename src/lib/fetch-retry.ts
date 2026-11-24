@@ -1,9 +1,9 @@
 /**
- * Connectivity (architecture, cross-cutting): an idempotent read (GET/HEAD, or an allowlisted read RPC) with no response after 6 s is aborted and retried ONCE; a second
+ * Connectivity (architecture, cross-cutting): an idempotent read (GET/HEAD, or an allowlisted read RPC) with no response after 4 s is aborted and retried ONCE; a second
  * stall surfaces the normal network error. Writes are never retried or timed out here: POST/PATCH/DELETE, every rpc not on the allowlist
  * below, auth and Edge Function calls keep the platform default.
  */
-export const READ_TIMEOUT_MS = 6000;
+export const READ_TIMEOUT_MS = 4000;
 
 type FetchFn = typeof fetch;
 const READ_PATH = /\/(rest\/v1\/(?!rpc\/)|storage\/v1\/object\/)/;

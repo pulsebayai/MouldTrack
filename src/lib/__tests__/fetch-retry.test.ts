@@ -22,7 +22,7 @@ beforeEach(() => jest.useFakeTimers());
 afterEach(() => jest.useRealTimers());
 
 describe('retrying fetch (D1: stalled reads retry once, writes never)', () => {
-  it('a read that stalls is aborted after 6 s and retried once, and resolves', async () => {
+  it('a read that stalls is aborted after READ_TIMEOUT_MS (4 s) and retried once, and resolves', async () => {
     const b = base((n) => n === 0);
     const onRetry = jest.fn();
     const f = createRetryingFetch(b.fn as never, { onRetry });
