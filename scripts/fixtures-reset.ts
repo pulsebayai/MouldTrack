@@ -670,7 +670,9 @@ async function main() {
 
 if (require.main === module) {
   main().catch((e) => {
-    console.error(`fixtures-reset failed: ${e instanceof Error ? e.message : String(e)}`);
+    const o = (e ?? {}) as { message?: string; code?: string; details?: string; hint?: string; status?: number };
+    // PostgREST/Auth errors are plain objects: print their fields (no secrets in them), never "[object Object]".
+    console.error(`fixtures-reset failed: ${e instanceof Error ? e.message : [o.code, o.status, o.message, o.details, o.hint].filter(Boolean).join(' | ') || JSON.stringify(e)}`);
     process.exit(1);
   });
 }
