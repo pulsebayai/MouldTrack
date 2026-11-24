@@ -69,3 +69,9 @@ export function resetSentryForTests(): void {
 export function sendTestError(): void {
   Sentry.captureException(new Error('MouldTrack dev test error (AC-13)'));
 }
+
+/** D1: a stalled read was retried. Breadcrumb only (no event); the path has no query string and nothing about the user. */
+export function addRetryBreadcrumb(path: string): void {
+  if (!initialised) return;
+  Sentry.addBreadcrumb({ category: 'network', level: 'warning', message: 'read stalled, retried once', data: { path } });
+}

@@ -1,3 +1,4 @@
+import { resetPlantTimezone } from '@/lib/plant-time';
 import { useRef, useState } from 'react';
 import { Text, View } from 'react-native';
 import { Button, Chip, ErrorText, Field, colors } from '@/components/ui';
@@ -33,6 +34,7 @@ export function SiteForm({ site, defaultTimezone, onSaved, timezoneLocked = fals
     try {
       await plantApi.saveSite(client, { name: n, timezone }, ids.current.get(key));
       ids.current.succeeded(key);
+      resetPlantTimezone();
       setSaved(true);
       onSaved();
     } catch (e) {

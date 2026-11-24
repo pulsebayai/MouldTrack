@@ -5,7 +5,7 @@
 // clock-derived world: the running shift's supervisor owns the machine). A last, read-only test checks the enforced fixture tenant "e2e org H" as its
 // Unit Admin (the supervisors of org H belong to the Android flow, which consumes their checklist).
 import AxeBuilder from '@axe-core/playwright';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from '../diagnostics';
 import { customOrg, enforceHandover, requireApi, seedInheritedIssue, service, setupIssueWorld, teardownIssueWorld, type IssueWorld } from '../api/helpers';
 import { FIXTURE_PASSWORD, signIn } from './fixtures';
 
