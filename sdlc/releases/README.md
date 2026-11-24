@@ -10,6 +10,15 @@ Every release Rn follows architecture.md §Release & regression policy. Run on `
 5. **Owner sign-off in chat (Sidambara Raja).** Only then promote to prod (the production-gate hook blocks it until the owner runs/approves it).
 6. After the prod deploy run the same **setup-token check** against prod (read-only), then run `regression.yml` with `target=prod` (**smoke only**, read-only) and append its summary. Pass → mark the release `released` in roadmap.md. Fail → roll back, record the incident, add a roadmap item.
 
+## R1 pre-release items (open; each must be done or waived in `R1.md` before step 2)
+- [ ] **Separate Supabase token for prod.** Prod lives in its own Supabase organisation; create a dedicated access token there (secret `PROD_SUPABASE_ACCESS_TOKEN` or an environment-scoped secret). Never reuse the dev/staging token (`SUPABASE_ACCESS_TOKEN`, MouldTrack org, renewed 2026-11-24 with no expiry: delete and replace it if a leak is suspected).
+- [ ] **Secret `STAGING_SUPABASE_PROJECT_REF`** set (dev-reset guard S5 then refuses a dev URL that points at staging).
+- [ ] **Staging fixture tenants vs handover enforcement (08, OPEN).** Console-created staging tenants are enforced, so 06's e2e openings hit `handover_pending`; Opus decides the fix.
+- [ ] **Deep links on EAS Hosting.** Opening `/users`, `/plant`, `/issues`, `/readings` or `/console` directly returns 404 (directory routes); in-app navigation works. Fix or waive.
+- [ ] **Seeded-volume speed check** (policy 2(b)): build or waive.
+- [ ] **Prod backups:** nightly encrypted `pg_dump` + Storage export, and one recorded restore drill.
+- [ ] **Token health:** a red nightly `hosted-checks` with `HTTP 401` / "Invalid access token" means the Supabase token expired or was revoked; renew it the same day.
+
 ## Runbook: first Super Admin on an environment (prod at R1; staging if it has no SA)
 Run from the **owner's own terminal**, never from CI (the repo and its logs are public). Needs the Supabase CLI logged in (`supabase login`). In zsh, `setopt HIST_IGNORE_SPACE` and start the sensitive lines with a space so they stay out of shell history.
 1. ` TOKEN=$(openssl rand -hex 32)` (≥ 32 characters; the endpoint refuses short tokens and the public local literal).
