@@ -1,5 +1,5 @@
 # Plan: chore/staging-setup — staging becomes a real release rehearsal
-Status: draft · Author: Opus · Executor: Sonnet · Starts building after PR #27 (screen-speed) merges
+Status: approved 2026-11-24 (owner) · Author: Opus · Executor: Sonnet · Starts building after PR #27 (screen-speed) merges
 Holds: architecture lock (docs). No migrations.
 
 ## Why
@@ -45,3 +45,4 @@ Secrets: `STAGING_SUPABASE_PROJECT_REF`, `STAGING_SUPABASE_DB_URL` (session pool
 
 ## Session log
 ### 2026-11-24 (Opus) — plan drafted for owner approval.
+- Owner created the staging project (MouldTrack org, ap-south-1) and set the five STAGING_* secrets; plan approved.
