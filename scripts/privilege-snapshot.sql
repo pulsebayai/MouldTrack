@@ -22,7 +22,7 @@ with grantees(oid, name) as (
          || '|' || s.nspname || '.' || c.relname || '|' || g.name || '|' || a.privilege_type
   from pg_class c
   join scope s on s.oid = c.relnamespace
-  cross join lateral aclexplode(coalesce(c.relacl, acldefault(case when c.relkind = 'S' then 's' else 'r' end, c.relowner))) a
+  cross join lateral aclexplode(coalesce(c.relacl, acldefault((case when c.relkind = 'S' then 's' else 'r' end)::"char", c.relowner))) a
   join grantees g on g.oid = a.grantee
   where c.relkind in ('r', 'p', 'v', 'm', 'S', 'f')
     and not exists (select 1 from pg_depend d where d.classid = 'pg_class'::regclass and d.objid = c.oid and d.deptype = 'e')
