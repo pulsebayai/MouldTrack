@@ -21,7 +21,9 @@ max_rows = 1000
 # `postgres` are reachable through the Data API roles (`anon`, `authenticated`, `service_role`)
 # without explicit GRANTs, matching the cloud default. Set to `false` to require explicit GRANTs
 # instead. Left unset, a fresh project falls back to `true`.
-# auto_expose_new_tables = true
+# chore/explicit-grants D3: behave like a new Supabase project (no implicit grants on new public objects). Every privilege
+# our objects need is written in a migration (20261124900000_explicit_grants.sql), checked by tests/070_privilege_contract.
+auto_expose_new_tables = false
 
 [api.tls]
 # Enable HTTPS endpoints locally using a self-signed certificate.
