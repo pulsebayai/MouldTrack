@@ -23,7 +23,7 @@ No migrations.
 - **D5 Owner prerequisites recorded** in `sdlc/releases/README.md` (prod project in Pulsebay Ai, secrets list, environment reviewer).
 
 ## Steps (tests first)
-- [ ] 1. D3 helper + tests; wire into deploy-dev and deploy-staging (+ smoke curls).
+- [x] 1. D3 helper + tests; wire into deploy-dev and deploy-staging (+ smoke curls).
 - [ ] 2. D1/D2: eas.json production apk; `build-android-eas.yml`.
 - [ ] 3. D4: guard (extend deploy-target-guard for prod, tests), `deploy-prod.yml`.
 - [ ] 4. Docs: architecture (deploy paths), releases README (owner prerequisites, how to install the staging APK).
