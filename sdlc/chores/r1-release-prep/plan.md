@@ -26,8 +26,14 @@ No migrations.
 - [x] 1. D3 helper + tests; wire into deploy-dev and deploy-staging (+ smoke curls).
 - [x] 2. D1/D2: eas.json production apk; `build-android-eas.yml`.
 - [x] 3. D4: guard (extend deploy-target-guard for prod, tests), `deploy-prod.yml`.
-- [ ] 4. Docs: architecture (deploy paths), releases README (owner prerequisites, how to install the staging APK).
+- [x] 4. Docs: architecture (deploy paths), releases README (owner prerequisites, how to install the staging APK).
 - [ ] 5. Opus: merge → deploy-staging (deep links proven) → EAS preview build → APK link to the owner.
 
 ## Session log
 ### 2026-11-25 (Opus) — plan written.
+
+### 2026-11-25 (Sonnet) — steps 1-4 built, one commit per step.
+- Step 1: `scripts/web-deep-links.ts` (+ tests), wired into deploy-dev/staging with 5-route curl smoke.
+- Step 2: `eas.json` production APK + explicit `environment` per profile; `build-android-eas.yml` (preview / production jobs), `eas-build-guard.ts`, `eas-env-set.sh` (`eas env:set`; `env:create` is deprecated in 27.10), `eas-build.sh`.
+- Step 3: `assertProdDeployTarget`, `deploy-prod.yml`, `auth-config.mjs --ref prod` only with `AUTH_CONFIG_ALLOW_PROD=1`; Jest pins regression target=prod smoke-only.
+- Unverified (need Expo/GitHub network): `eas env:set` + `eas build --json` output fields (`buildDetailsPageUrl`, `artifacts.buildUrl`), `eas deploy --prod --json` origin parsing, first-build keystore prompt, environment reviewer setup.
