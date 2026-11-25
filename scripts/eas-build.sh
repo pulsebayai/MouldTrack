@@ -6,9 +6,15 @@ set -uo pipefail
 EAS="npx --yes ${EAS_CLI:-eas-cli@27.10.0}"
 $EAS build -p android --profile "$EAS_PROFILE" --non-interactive --json > build.json 2> build.err || { tail -30 build.err; cat build.json; exit 1; }
 tail -3 build.err
-page=$(jq -r '.[0].buildDetailsPageUrl // empty' build.json)
-apk=$(jq -r '.[0].artifacts.buildUrl // empty' build.json)
-ver=$(jq -r '.[0].appBuildVersion // empty' build.json)
+# eas-cli --json may print an array or a single object; read either shape. Run 45641985004 built fine but this lookup came back empty.
+b='(if type == "array" then .[0] else . end)'
+page=$(jq -r "$b | .buildDetailsPageUrl // empty" build.json 2>/dev/null)
+apk=$(jq -r "$b | .artifacts.applicationArchiveUrl // .artifacts.buildUrl // empty" build.json 2>/dev/null)
+ver=$(jq -r "$b | .appBuildVersion // empty" build.json 2>/dev/null)
+id=$(jq -r "$b | .id // empty" build.json 2>/dev/null)
+[ -n "$page" ] || page=$(grep -Eo 'https://expo\.dev/accounts/[^ ]+/builds/[0-9a-f-]+' build.json build.err 2>/dev/null | head -1 | cut -d: -f2-)
+[ -n "$page" ] || { [ -n "$id" ] && page="https://expo.dev/accounts/mouldtrack/projects/mouldtrack/builds/$id"; }
+[ -n "$page" ] || { echo "no build page found; build.json shape:"; jq -c "$b | keys" build.json 2>/dev/null || head -c 300 build.json; }
 {
   echo "### EAS Android build ($EAS_PROFILE)"
   echo "- Build page (install link / QR): ${page:-unknown}"
