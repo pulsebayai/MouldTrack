@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 20, cache: npm }
+        with: { node-version: 22, cache: npm }
       - run: npm ci
       - name: Probe A - plain static variants
         run: |
@@ -28,18 +28,19 @@ jobs:
           for p in a a.html b b/ b/index c c/ c/x d d/ d.html zz; do
             r=$(curl -s -o body -w '%{http_code} %{redirect_url}' "$U/$p"); echo "A /$p -> $r [$(grep -o 'FILE:[a-z/]*' body || true)]"
           done
-      - name: Probe B - real app, server output
+      - name: Probe C - real static export + helper, unique URL (no alias)
         env:
           EXPO_PUBLIC_SUPABASE_URL: https://example.supabase.co
           EXPO_PUBLIC_SUPABASE_ANON_KEY: probe
           EXPO_PUBLIC_APP_ENV: development
         run: |
           set -e
-          jq '.expo.web.output = "server"' app.json > app2.json && mv app2.json app.json
-          npx expo export -p web --output-dir distb
-          ls distb; ls distb/server 2>/dev/null | head; cat distb/server/_expo/routes.json 2>/dev/null | head -c 1500; echo
-          npx --yes $EAS_CLI deploy --non-interactive --export-dir distb --json > b.json 2> b.err || { cat b.err; exit 1; }
-          U=$(jq -r '.deployment.url // .url' b.json); echo "URL=$U"; sleep 20
+          npx expo export -p web --output-dir distc
+          npx tsx scripts/web-deep-links.ts distc
+          npx --yes $EAS_CLI deploy --non-interactive --export-dir distc --json > c.json 2> c.err || { cat c.err; exit 1; }
+          U=$(jq -r '.deployment.url // .url' c.json); echo "URL=$U"; sleep 20
           for p in "" home users users/ users/new plant issues readings console zz; do
-            r=$(curl -s -D hdr -o body -w '%{http_code} %{redirect_url}' "$U/$p"); echo "B /$p -> $r csp=$(grep -ci content-security-policy hdr) title=$(grep -o '<title>[^<]*' body | head -1)"
+            r=$(curl -s -D hdr -o body -w '%{http_code}' "$U/$p"); echo "C /$p -> $r csp=$(grep -ci content-security-policy hdr)"
           done
+          echo "--- staging alias now:"
+          for p in users plant issues readings console; do echo "S /$p -> $(curl -s -o /dev/null -w '%{http_code}' https://mouldtrack--staging.expo.app/$p)"; done
