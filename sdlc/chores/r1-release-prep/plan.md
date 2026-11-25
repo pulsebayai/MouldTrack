@@ -25,7 +25,7 @@ No migrations.
 ## Steps (tests first)
 - [x] 1. D3 helper + tests; wire into deploy-dev and deploy-staging (+ smoke curls).
 - [x] 2. D1/D2: eas.json production apk; `build-android-eas.yml`.
-- [ ] 3. D4: guard (extend deploy-target-guard for prod, tests), `deploy-prod.yml`.
+- [x] 3. D4: guard (extend deploy-target-guard for prod, tests), `deploy-prod.yml`.
 - [ ] 4. Docs: architecture (deploy paths), releases README (owner prerequisites, how to install the staging APK).
 - [ ] 5. Opus: merge → deploy-staging (deep links proven) → EAS preview build → APK link to the owner.
 

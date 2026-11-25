@@ -15,7 +15,9 @@ const fail = (msg, code = 1) => {
 };
 
 if (!mode) fail('Usage: auth-config.mjs --check|--apply --ref dev|staging');
-const refVar = { dev: 'DEV_SUPABASE_PROJECT_REF', staging: 'STAGING_SUPABASE_PROJECT_REF' }[refArg];
+// `--ref prod` works only when deploy-prod.yml sets AUTH_CONFIG_ALLOW_PROD=1 (r1-release-prep D4); anywhere else it is refused as before.
+const refs = { dev: 'DEV_SUPABASE_PROJECT_REF', staging: 'STAGING_SUPABASE_PROJECT_REF', ...(process.env.AUTH_CONFIG_ALLOW_PROD === '1' ? { prod: 'PROD_SUPABASE_PROJECT_REF' } : {}) };
+const refVar = refs[refArg];
 if (!refVar) fail(`Refusing: --ref must be "dev" or "staging" (got "${refArg}")`);
 const ref = process.env[refVar];
 const token = process.env.SUPABASE_ACCESS_TOKEN;
