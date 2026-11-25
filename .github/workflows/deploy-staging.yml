@@ -68,6 +68,9 @@ jobs:
           EXPO_PUBLIC_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
         run: npx expo export -p web --output-dir dist
 
+      - name: Add deep-link files for EAS Hosting (D3)
+        run: npx tsx scripts/web-deep-links.ts dist
+
       - name: Deploy to EAS Hosting (alias staging)
         id: deploy
         run: |
@@ -83,6 +86,14 @@ jobs:
           done
           echo "HTTP $code"
           [ "$code" = "200" ]
+
+      - name: Deep links answer 200 (D3)
+        run: |
+          for p in users plant issues readings console; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "$STAGING_WEB_ORIGIN/$p"); echo "/$p -> $code"
+            [ "$code" = "200" ] || fail=1
+          done
+          [ -z "${fail:-}" ]
 
       # Setup-token check (releases README procedure step 2): staging holds no PLATFORM_SETUP_TOKEN unless the first-Super-Admin runbook is in
       # progress. Never unsets it automatically (that would break a runbook in progress): a stray token fails the deploy for investigation.

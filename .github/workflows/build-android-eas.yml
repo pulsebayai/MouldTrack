@@ -1,0 +1,76 @@
+# Distributable Android APK on EAS Build (r1-release-prep D1/D2). Manual dispatch from main only.
+#   preview    = staging backend, internal-distribution link (the APK for a real phone at the R1 gate)
+#   production = prod backend, signed APK for the pilot plant; behind GitHub environment `production` (required reviewer = the owner)
+# The CI APK from scripts/build-android-ci.sh is x86_64 + debug-signed (emulator only): never give it to a phone.
+# Supabase URL / anon key / Sentry DSN reach the build as EAS environment variables (plaintext: public by design), written here from GitHub
+# secrets at run time and never committed. scripts/eas-build-guard.ts refuses a URL that is not the profile's own project.
+name: build-android-eas
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: 'EAS build profile'
+        type: choice
+        options: [preview, production]
+        default: preview
+
+permissions:
+  contents: read
+
+env:
+  EAS_CLI: eas-cli@27.10.0
+
+jobs:
+  preview:
+    if: github.ref == 'refs/heads/main' && inputs.profile == 'preview'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    concurrency: { group: eas-build-preview, cancel-in-progress: false }
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      EAS_PROFILE: preview
+      DEV_SUPABASE_PROJECT_REF: ${{ secrets.DEV_SUPABASE_PROJECT_REF }}
+      STAGING_SUPABASE_PROJECT_REF: ${{ secrets.STAGING_SUPABASE_PROJECT_REF }}
+      PROD_SUPABASE_PROJECT_REF: ${{ secrets.PROD_SUPABASE_PROJECT_REF }}
+      SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+      SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22', cache: npm }
+      - run: npm ci
+      - name: Guard - main, and the API URL is the staging project
+        run: npx tsx scripts/eas-build-guard.ts
+      - name: Set EAS environment variables (preview = staging)
+        run: bash scripts/eas-env-set.sh
+      - name: EAS Build (preview APK)
+        run: bash scripts/eas-build.sh
+
+  production:
+    if: github.ref == 'refs/heads/main' && inputs.profile == 'production'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: production
+    concurrency: { group: eas-build-production, cancel-in-progress: false }
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      EAS_PROFILE: production
+      DEV_SUPABASE_PROJECT_REF: ${{ secrets.DEV_SUPABASE_PROJECT_REF }}
+      STAGING_SUPABASE_PROJECT_REF: ${{ secrets.STAGING_SUPABASE_PROJECT_REF }}
+      PROD_SUPABASE_PROJECT_REF: ${{ secrets.PROD_SUPABASE_PROJECT_REF }}
+      SUPABASE_URL: ${{ secrets.PROD_SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.PROD_SUPABASE_ANON_KEY }}
+      SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22', cache: npm }
+      - run: npm ci
+      - name: Guard - main, and the API URL is the prod project
+        run: npx tsx scripts/eas-build-guard.ts
+      - name: Set EAS environment variables (production = prod)
+        run: bash scripts/eas-env-set.sh
+      - name: EAS Build (production APK)
+        run: bash scripts/eas-build.sh

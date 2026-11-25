@@ -1,0 +1,130 @@
+# Deploys main to PROD (r1-release-prep D4): migrations, Edge Functions, CORS origin, hosted Auth config, web on EAS Hosting (production
+# deployment), then the setup-token check. Manual dispatch only, from main, behind the GitHub environment `production` (required reviewer = the
+# owner; see sdlc/releases/README.md). scripts/deploy-target-guard.ts (DEPLOY_TARGET=prod) runs first and refuses any project other than
+# PROD_SUPABASE_PROJECT_REF, which must differ from the dev and staging refs.
+# Never runs fixtures, resets or data-writing tests. After it succeeds, run regression.yml with target=prod (smoke only, read-only).
+# The Supabase access token is the prod one (Pulsebay Ai org): SUPABASE_ACCESS_TOKEN here is PROD_SUPABASE_ACCESS_TOKEN, never the dev token.
+name: deploy-prod
+
+on:
+  workflow_dispatch:
+    inputs:
+      first_sa_in_progress:
+        description: 'The first-Super-Admin runbook is in progress (a PLATFORM_SETUP_TOKEN secret is allowed to exist)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prod-db
+  cancel-in-progress: false
+
+env:
+  EAS_CLI: eas-cli@27.10.0
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.PROD_SUPABASE_ACCESS_TOKEN }}
+      PROD_SUPABASE_PROJECT_REF: ${{ secrets.PROD_SUPABASE_PROJECT_REF }}
+      PROD_SUPABASE_URL: ${{ secrets.PROD_SUPABASE_URL }}
+      PROD_SUPABASE_DB_URL: ${{ secrets.PROD_SUPABASE_DB_URL }}
+      DEV_SUPABASE_PROJECT_REF: ${{ secrets.DEV_SUPABASE_PROJECT_REF }}
+      STAGING_SUPABASE_PROJECT_REF: ${{ secrets.STAGING_SUPABASE_PROJECT_REF }}
+      PROD_WEB_ORIGIN: ${{ vars.PROD_WEB_ORIGIN }} # optional repo variable; empty = the origin printed by the first production deploy
+      AUTH_CONFIG_ALLOW_PROD: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22', cache: npm }
+      - run: npm ci
+
+      - name: Guard - this is main and the target is exactly the prod project (never dev or staging)
+        env:
+          DEPLOY_TARGET: prod
+        run: npx tsx scripts/deploy-target-guard.ts
+
+      - name: Apply migrations to prod
+        run: |
+          set -o pipefail
+          npx supabase db push --db-url "$PROD_SUPABASE_DB_URL" --include-all --yes 2>&1 | sed -E 's#postgres(ql)?://[^ ]*#<redacted>#g'
+
+      - name: Deploy Edge Functions to prod
+        run: npx supabase functions deploy user-admin account platform platform-setup --project-ref "$PROD_SUPABASE_PROJECT_REF" --use-api --yes
+
+      - name: Apply hosted Auth config to prod
+        run: node scripts/auth-config.mjs --apply --ref prod
+
+      - name: Build web (production)
+        env:
+          EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.PROD_SUPABASE_URL }}
+          EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.PROD_SUPABASE_ANON_KEY }}
+          EXPO_PUBLIC_APP_ENV: production
+          EXPO_PUBLIC_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+        run: npx expo export -p web --output-dir dist
+
+      - name: Add deep-link files for EAS Hosting (D3)
+        run: npx tsx scripts/web-deep-links.ts dist
+
+      - name: Deploy to EAS Hosting (production deployment)
+        id: deploy
+        run: |
+          npx --yes $EAS_CLI deploy --non-interactive --export-dir dist --prod --json > deploy.json 2> deploy.err || { cat deploy.err; exit 1; }
+          echo "--- deploy.json"; cat deploy.json; echo "--- deploy.err (tail)"; tail -5 deploy.err
+          origin="$PROD_WEB_ORIGIN"
+          if [ -z "$origin" ]; then
+            # Unverified until the first prod deploy: the production URL is read from the deploy output.
+            raw=$(jq -r '.aliases[0]?.url // .url // .deploymentUrl // empty' deploy.json 2>/dev/null)
+            [ -n "$raw" ] || raw=$(grep -Eo 'https://[a-z0-9.-]+\.expo\.app' deploy.json deploy.err | head -1 | cut -d: -f2-)
+            origin=$(echo "$raw" | grep -Eo '^https://[a-z0-9.-]+\.expo\.app')
+          fi
+          echo "$origin" | grep -Eq '^https://[a-z0-9.-]+\.expo\.app$' || { echo "could not determine the prod web origin: set the repo variable PROD_WEB_ORIGIN and rerun"; exit 1; }
+          case "$origin" in https://mouldtrack--dev.*|https://mouldtrack--staging.*) echo "origin is a dev or staging alias"; exit 1 ;; esac
+          echo "origin=$origin" >> "$GITHUB_OUTPUT"
+          echo "### Prod web: $origin" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Set function secrets (CORS origin of the prod web app)
+        env:
+          ORIGIN: ${{ steps.deploy.outputs.origin }}
+        run: npx supabase secrets set ALLOWED_ORIGINS="$ORIGIN" --project-ref "$PROD_SUPABASE_PROJECT_REF" --yes
+
+      - name: The prod web origin answers 200
+        env:
+          ORIGIN: ${{ steps.deploy.outputs.origin }}
+        run: |
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "$ORIGIN"); [ "$code" = "200" ] && break; sleep 10
+          done
+          echo "HTTP $code"
+          [ "$code" = "200" ]
+
+      - name: Deep links answer 200 (D3)
+        env:
+          ORIGIN: ${{ steps.deploy.outputs.origin }}
+        run: |
+          for p in users plant issues readings console; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "$ORIGIN/$p"); echo "/$p -> $code"
+            [ "$code" = "200" ] || fail=1
+          done
+          [ -z "${fail:-}" ]
+
+      # Setup-token check: prod holds no PLATFORM_SETUP_TOKEN unless the first-Super-Admin runbook is in progress. Never unsets it
+      # automatically. Only secret names are listed, never values.
+      - name: Setup-token check (no PLATFORM_SETUP_TOKEN unless the runbook is in progress)
+        env:
+          RUNBOOK_IN_PROGRESS: ${{ inputs.first_sa_in_progress }}
+        run: |
+          out="$(npx supabase secrets list --project-ref "$PROD_SUPABASE_PROJECT_REF" -o json 2>/dev/null)" || { echo "could not list secrets"; exit 1; }
+          present="$(echo "$out" | jq -r '[.[] | select(.name == "PLATFORM_SETUP_TOKEN")] | length')"
+          echo "PLATFORM_SETUP_TOKEN secrets on prod: $present (runbook in progress: $RUNBOOK_IN_PROGRESS)"
+          if [ "$present" != 0 ] && [ "$RUNBOOK_IN_PROGRESS" != true ]; then
+            echo "PLATFORM_SETUP_TOKEN exists on prod and no first-Super-Admin runbook is in progress: unset it and investigate who set it"
+            exit 1
+          fi

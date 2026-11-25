@@ -91,6 +91,9 @@ jobs:
           EXPO_PUBLIC_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
         run: npx expo export -p web --output-dir dist
 
+      - name: Add deep-link files for EAS Hosting (D3)
+        run: npx tsx scripts/web-deep-links.ts dist
+
       - name: Deploy to EAS Hosting (alias dev)
         id: deploy
         run: |
@@ -111,3 +114,11 @@ jobs:
           { echo '### Response headers (step 9 decision input)'; echo '```'; curl -sI "$url" | grep -iE '^(HTTP|content-security-policy|x-content-type-options|referrer-policy|strict-transport-security|x-frame-options|permissions-policy|server|cache-control)'; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           for p in / /sign-in /home /_expo/.routes.json; do echo "--- $p"; curl -sI "$url$p" | grep -viE '^(date|cf-ray|alt-svc|nel|report-to|set-cookie):'; done
           [ "$code" = "200" ]
+
+      - name: Deep links answer 200 (D3)
+        run: |
+          for p in users plant issues readings console; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "${{ steps.deploy.outputs.url }}/$p"); echo "/$p -> $code"
+            [ "$code" = "200" ] || fail=1
+          done
+          [ -z "${fail:-}" ]
