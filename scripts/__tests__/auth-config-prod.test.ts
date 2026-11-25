@@ -4,7 +4,7 @@ import { join } from 'node:path';
 const SCRIPT = join(__dirname, '..', 'auth-config.mjs');
 const run = (args: string[], env: Record<string, string>) =>
   new Promise<{ code: number; out: string }>((resolve) =>
-    execFile('node', [SCRIPT, ...args], { env: { PATH: process.env.PATH ?? '', SUPABASE_ACCESS_TOKEN: 't', SUPABASE_API_URL: 'http://127.0.0.1:1', ...env } }, (err: Error | null, so: string | Buffer, se: string | Buffer) =>
+    execFile('node', [SCRIPT, ...args], { env: { NODE_ENV: 'test', PATH: process.env.PATH ?? '', SUPABASE_ACCESS_TOKEN: 't', SUPABASE_API_URL: 'http://127.0.0.1:1', ...env } }, (err: Error | null, so: string | Buffer, se: string | Buffer) =>
       resolve({ code: err ? ((err as { code?: number }).code ?? 1) : 0, out: `${so}${se}` })));
 
 describe('auth-config --ref prod is opt-in (D4)', () => {
