@@ -117,8 +117,17 @@ jobs:
 
       - name: Deep links answer 200 (D3)
         run: |
-          for p in users plant issues readings console; do
-            code=$(curl -s -o /dev/null -w '%{http_code}' "${{ steps.deploy.outputs.url }}/$p"); echo "/$p -> $code"
-            [ "$code" = "200" ] || fail=1
-          done
-          [ -z "${fail:-}" ]
+          # The new deployment's own URL first (immutable, no alias propagation), then wait up to 5 min for the alias/origin to serve
+          # the same routes: the origin check above can pass on the previous deployment while the alias still propagates (run 45627207710).
+          check() {
+            fail=
+            for p in users plant issues readings console; do
+              code=$(curl -s -o /dev/null -w '%{http_code}' "$1/$p"); echo "$1/$p -> $code"
+              [ "$code" = "200" ] || fail=1
+            done
+            [ -z "$fail" ]
+          }
+          dep=$(jq -r '.deployment.url // empty' deploy.json)
+          if [ -n "$dep" ]; then check "$dep"; else echo "deploy.json has no deployment.url; checking the alias only"; fi
+          for i in $(seq 1 30); do check "${{ steps.deploy.outputs.url }}" && exit 0; sleep 10; done
+          exit 1
