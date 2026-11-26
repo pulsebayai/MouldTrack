@@ -9,6 +9,7 @@ import {
   Screen,
   colors,
 } from "@/components/ui";
+import { appVersionLabel } from "@/lib/app-version";
 import { toUserMessage } from "@/lib/errors";
 import { normalisePhone, phoneToAuthEmail } from "@/lib/identity";
 import { useSession } from "@/lib/session-provider";
@@ -18,6 +19,7 @@ export default function SignIn() {
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const version = appVersionLabel();
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<{
     phone?: string;
@@ -103,6 +105,11 @@ export default function SignIn() {
         disabled={submitting}
         busy={submitting}
       />
+      {version ? (
+        <Text testID="app-version" style={{ fontSize: 13, color: colors.muted }}>
+          {version}
+        </Text>
+      ) : null}
     </Screen>
   );
 }
