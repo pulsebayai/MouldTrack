@@ -40,6 +40,12 @@ Nothing below is created by CI. Names are exact.
 3. Same with channel `production` (needs the owner's approval in the `production` environment).
 4. Record the update group id and message in the release record.
 
+## Prod photo backup (S3, nightly)
+Supabase Pro backups cover the database, not Storage. `storage-export.yml` copies new objects of prod bucket `attachments` to S3 bucket (ap-south-1) every night at 01:47 IST: read-only on prod, add-only on S3, counts only in logs; a failed night opens the issue "Prod photo backup failing".
+- **One-time AWS setup (owner):** S3 bucket in `ap-south-1`, Block Public Access on, **Versioning on**, default encryption SSE-S3. IAM user `mouldtrack-photo-backup` with an inline policy allowing only `s3:ListBucket` on the bucket and `s3:PutObject` on `bucket/*` (no Get, no Delete); one access key.
+- **GitHub environment `prod-backup`** (deployment branches: `main`; no reviewer, so the nightly runs unattended) with secrets `PROD_SUPABASE_URL`, `PROD_SUPABASE_PROJECT_REF`, `DEV_SUPABASE_PROJECT_REF`, `STAGING_SUPABASE_PROJECT_REF`, `PROD_SUPABASE_SERVICE_ROLE_KEY` (prod dashboard → Project Settings → API keys), `BACKUP_S3_BUCKET`, `BACKUP_AWS_ACCESS_KEY_ID`, `BACKUP_AWS_SECRET_ACCESS_KEY`.
+- **Restore (only after a restore of the database):** with an AWS key that can read the bucket (the owner's own, not the backup key), download the objects and upload each to the target project's `attachments` bucket under the **same key** (the database rows point at those paths). Record it in the release record.
+
 ## Runbook: first Super Admin on an environment (prod at R1; staging if it has no SA)
 Run from the **owner's own terminal**, never from CI (the repo and its logs are public). Needs the Supabase CLI logged in (`supabase login`). In zsh, `setopt HIST_IGNORE_SPACE` and start the sensitive lines with a space so they stay out of shell history.
 1. ` TOKEN=$(openssl rand -hex 32)` (≥ 32 characters; the endpoint refuses short tokens and the public local literal).
