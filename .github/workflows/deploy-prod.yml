@@ -80,13 +80,13 @@ jobs:
           echo "--- deploy.json"; cat deploy.json; echo "--- deploy.err (tail)"; tail -5 deploy.err
           origin="$PROD_WEB_ORIGIN"
           if [ -z "$origin" ]; then
-            # Unverified until the first prod deploy: the production URL is read from the deploy output.
-            raw=$(jq -r '.aliases[0]?.url // .url // .deploymentUrl // empty' deploy.json 2>/dev/null)
-            [ -n "$raw" ] || raw=$(grep -Eo 'https://[a-z0-9.-]+\.expo\.app' deploy.json deploy.err | head -1 | cut -d: -f2-)
+            # The production URL (first prod deploy, run 45763315878: deploy.json .production.url = https://mouldtrack.expo.app;
+            # .url is the one-off deployment URL and must never become the CORS origin).
+            raw=$(jq -r '.production.url // empty' deploy.json 2>/dev/null)
             origin=$(echo "$raw" | grep -Eo '^https://[a-z0-9.-]+\.expo\.app')
           fi
           echo "$origin" | grep -Eq '^https://[a-z0-9.-]+\.expo\.app$' || { echo "could not determine the prod web origin: set the repo variable PROD_WEB_ORIGIN and rerun"; exit 1; }
-          case "$origin" in https://mouldtrack--dev.*|https://mouldtrack--staging.*) echo "origin is a dev or staging alias"; exit 1 ;; esac
+          case "$origin" in https://mouldtrack--*) echo "origin $origin is an alias or a one-off deployment URL, not the production URL"; exit 1 ;; esac
           echo "origin=$origin" >> "$GITHUB_OUTPUT"
           echo "### Prod web: $origin" >> "$GITHUB_STEP_SUMMARY"
 

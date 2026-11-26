@@ -54,7 +54,13 @@ if (!res.ok) {
   }
   fail(`BLOCKED: the Management API rejected the auth config on ${refArg}: HTTP ${res.status} ${message}`.trim(), 2);
 }
-cfg = await get();
-bad = diff(cfg);
+// The Management API can report the old values for a short while after a successful PATCH (first prod deploy, run
+// 45763315878, matched on the rerun): re-read for up to 60 s before calling it blocked.
+for (let i = 0; i < 12; i++) {
+  cfg = await get();
+  bad = diff(cfg);
+  if (bad.length === 0) break;
+  await new Promise((r) => setTimeout(r, 5000));
+}
 if (bad.length) fail(`BLOCKED: applied, but the API still reports:\n${show(bad, cfg)}`, 2);
 console.log(`auth config on ${refArg} applied and verified`);
