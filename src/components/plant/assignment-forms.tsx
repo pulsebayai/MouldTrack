@@ -81,7 +81,7 @@ export function AssignForm({ board, selected, supervisors, today, onDone, onCanc
           <Chip key={s.user_id} testID={`assign-sup-${s.user_id}`} label={`${s.full_name} · ${s.employee_id}`} selected={supervisorId === s.user_id} onPress={() => setSupervisorId(s.user_id)} />
         ))}
       </View>
-      {supervisors.length === 0 ? <Text testID="assign-no-supervisors" style={{ fontSize: 15, color: colors.text }}>No active supervisors — add one under Users first</Text> : null}
+      {supervisors.length === 0 ? <Text testID="assign-no-supervisors" style={{ fontSize: 15, color: colors.text }}>No supervisors ready yet. A supervisor appears here after their first sign-in and password change.</Text> : null}
       {errors.supervisor ? <ErrorText testID="assign-sup-error">{errors.supervisor}</ErrorText> : null}
       <Field label="From (YYYY-MM-DD)" testID="assign-from" value={from} onChangeText={setFrom} error={errors.from} placeholder="YYYY-MM-DD" autoCapitalize="none" autoComplete="off" />
       <Field label="Until (optional, YYYY-MM-DD)" testID="assign-until" value={until} onChangeText={setUntil} error={errors.until} placeholder="Until changed" autoCapitalize="none" autoComplete="off" />

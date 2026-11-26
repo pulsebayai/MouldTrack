@@ -31,7 +31,7 @@ Nothing below is created by CI. Names are exact.
 
 ## Installing the staging APK on a phone
 1. Owner: Actions > build-android-eas > Run workflow > profile `preview` (main). First time only, EAS may need an Android keystore: if the job fails asking for credentials, run `eas credentials -p android` once locally (profile preview) and rerun.
-2. Open the "Build page" link from the job summary on the phone (or scan its QR), download and install the APK ("install unknown apps" allowed for the browser). It talks to **staging** (fixture data only).
+2. The "Build page" (expo.dev) needs an Expo login, so never send it to a phone. On a signed-in laptop open the build page, copy the **APK download link** (`https://expo.dev/artifacts/eas/....apk`, no login) or download the `.apk`, and send the link or file to the phone (e.g. WhatsApp). Install it ("install unknown apps" allowed for the app that opens it). It talks to **staging** (fixture data only). Company-managed (MDM) phones may block sideloading.
 3. `profile: production` builds the prod APK (approval needed); same install steps, pilot plant only.
 
 ## Runbook: first Super Admin on an environment (prod at R1; staging if it has no SA)
