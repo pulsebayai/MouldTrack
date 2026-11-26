@@ -1,0 +1,89 @@
+# Over-the-air JS update (R1, owner 2026-11-26) for phones running the APK from build-android-eas.yml. Manual dispatch from main only.
+#   preview    = staging phones (channel preview)
+#   production = prod phones (channel production); behind GitHub environment `production` (required reviewer = the owner)
+# Same guard as the builds: scripts/eas-build-guard.ts refuses a Supabase URL that is not the profile's own project, so an update can never
+# point prod phones at staging or dev. A native change (new native module, permission, SDK) is not an update: bump expo.version and build an APK.
+name: eas-update
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: 'Channel'
+        type: choice
+        options: [preview, production]
+        default: preview
+      message:
+        description: 'What changed (shown on expo.dev)'
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  EAS_CLI: eas-cli@27.10.0
+
+jobs:
+  preview:
+    if: github.ref == 'refs/heads/main' && inputs.profile == 'preview'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency: { group: eas-update-preview, cancel-in-progress: false }
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      EAS_PROFILE: preview
+      UPDATE_MESSAGE: ${{ inputs.message }}
+      DEV_SUPABASE_PROJECT_REF: ${{ secrets.DEV_SUPABASE_PROJECT_REF }}
+      STAGING_SUPABASE_PROJECT_REF: ${{ secrets.STAGING_SUPABASE_PROJECT_REF }}
+      PROD_SUPABASE_PROJECT_REF: ${{ secrets.PROD_SUPABASE_PROJECT_REF }}
+      SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+      SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+      EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+      EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+      EXPO_PUBLIC_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+      EXPO_PUBLIC_APP_ENV: staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22', cache: npm }
+      - run: npm ci
+      - name: Guard - main, and the API URL is the staging project
+        run: npx tsx scripts/eas-build-guard.ts
+      - name: Set EAS environment variables (preview = staging)
+        run: bash scripts/eas-env-set.sh
+      - name: EAS Update (preview channel)
+        run: bash scripts/eas-update.sh
+
+  production:
+    if: github.ref == 'refs/heads/main' && inputs.profile == 'production'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    concurrency: { group: eas-update-production, cancel-in-progress: false }
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      EAS_PROFILE: production
+      UPDATE_MESSAGE: ${{ inputs.message }}
+      DEV_SUPABASE_PROJECT_REF: ${{ secrets.DEV_SUPABASE_PROJECT_REF }}
+      STAGING_SUPABASE_PROJECT_REF: ${{ secrets.STAGING_SUPABASE_PROJECT_REF }}
+      PROD_SUPABASE_PROJECT_REF: ${{ secrets.PROD_SUPABASE_PROJECT_REF }}
+      SUPABASE_URL: ${{ secrets.PROD_SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.PROD_SUPABASE_ANON_KEY }}
+      SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+      EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.PROD_SUPABASE_URL }}
+      EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.PROD_SUPABASE_ANON_KEY }}
+      EXPO_PUBLIC_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+      EXPO_PUBLIC_APP_ENV: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22', cache: npm }
+      - run: npm ci
+      - name: Guard - main, and the API URL is the prod project
+        run: npx tsx scripts/eas-build-guard.ts
+      - name: Set EAS environment variables (production = prod)
+        run: bash scripts/eas-env-set.sh
+      - name: EAS Update (production channel)
+        run: bash scripts/eas-update.sh

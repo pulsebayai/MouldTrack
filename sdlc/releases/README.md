@@ -34,6 +34,12 @@ Nothing below is created by CI. Names are exact.
 2. The "Build page" (expo.dev) needs an Expo login, so never send it to a phone. On a signed-in laptop open the build page, copy the **APK download link** (`https://expo.dev/artifacts/eas/....apk`, no login) or download the `.apk`, and send the link or file to the phone (e.g. WhatsApp). Install it ("install unknown apps" allowed for the app that opens it). It talks to **staging** (fixture data only). Company-managed (MDM) phones may block sideloading.
 3. `profile: production` builds the prod APK (approval needed); same install steps, pilot plant only.
 
+## Shipping a fix to phones (OTA update)
+1. Merge the fix to main (full CI green). JS/TS-only changes qualify; a new native module, permission or Expo SDK change does not: bump `expo.version` in app.json and build a new APK instead.
+2. Actions → **eas-update** → channel `preview` (staging phones) → message → run. Check on a staging phone: close and reopen the app twice; the sign-in screen shows `Version 1.0.0 · update <id>`.
+3. Same with channel `production` (needs the owner's approval in the `production` environment).
+4. Record the update group id and message in the release record.
+
 ## Runbook: first Super Admin on an environment (prod at R1; staging if it has no SA)
 Run from the **owner's own terminal**, never from CI (the repo and its logs are public). Needs the Supabase CLI logged in (`supabase login`). In zsh, `setopt HIST_IGNORE_SPACE` and start the sensitive lines with a space so they stay out of shell history.
 1. ` TOKEN=$(openssl rand -hex 32)` (≥ 32 characters; the endpoint refuses short tokens and the public local literal).
