@@ -3,6 +3,8 @@ appId: com.pulsebayai.mouldtrack
 name: relaunch
 ---
 - launchApp: { clearState: true }
+# Cold launch after clearState can exceed Maestro's ~17 s implicit wait on the software-GPU emulator (nightlies 45934867345, 46101637456).
+- extendedWaitUntil: { visible: { id: "phone" }, timeout: 60000 }
 - tapOn: { id: "phone" }
 - inputText: "9000000003"
 - tapOn: { id: "password" }
@@ -12,4 +14,4 @@ name: relaunch
 - assertVisible: { id: "home-tenant", text: "e2e org B" }
 - stopApp
 - launchApp: { clearState: false }
-- assertVisible: { id: "home-tenant", text: "e2e org B" }
+- extendedWaitUntil: { visible: { id: "home-tenant", text: "e2e org B" }, timeout: 60000 }
