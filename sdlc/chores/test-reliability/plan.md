@@ -92,3 +92,10 @@ Not verified locally (no Supabase here).
 - Owner-approved edits: 032 R1 date fix; hosted-only expect timeout 10 s (local/PR CI 5 s).
 - **AC-3 (3 + 3 consecutive first-attempt green) NOT met.** Owner decision 2026-11-19: merge now; follow-up `chore/screen-speed` (parallel/de-duplicated session and screen loads — membership is fetched twice per load; screens make 13–15 sequential calls at ~0.3–0.7 s each from US runners) must pass the 3-run proof before the R1 gate.
 - Open for R1 (Opus): deep-link 404 on directory routes (`/users`, `/plant`, …) on EAS Hosting.
+
+### 2026-11-28 (Opus) - nightly red 9 of 10 since 2026-11-19; Android cold-launch wait
+- Nightlies 45934867345 (27 Nov) and 46101637456 (28 Nov) ran the same head (bd69929, dev deployed at it). Android: one flow failed each night at its first step, `tapOn: phone` "Element not found" after ~19 s (my-shift, then sign-out); emulator logged `Failed to find ColorBuffer` just before; the diagnostic re-run found the sign-in screen with `phone` present. Cause [Likely]: a cold launch after `clearState` on the swiftshader emulator sometimes exceeds Maestro's implicit wait; the warm-up covers only the first launch.
+- Fix (owner-approved 2026-11-28, harness only, same assertions): every flow waits `extendedWaitUntil visible phone` (60 s) after `launchApp { clearState: true }`; relaunch.yaml's warm relaunch waits for the same `home-tenant` / "e2e org B" element (60 s) instead of an immediate `assertVisible`.
+- Web 27 Nov (not fixed here): `platform.spec:373` got **520** from the Edge Function (expected 401); `issues.spec:192` page failed to load a JS chunk after an EAS Hosting **429**. Next: confirm whether the 429 is EAS rate limiting of the suite, then choose fewer hosted requests per run or chunk-load retry in the app.
+- Diagnostics gap: on failure `ci-maestro.sh` prints the maestro.log tail of the last flow run, not of the failed flow.
+- Proof: 3 consecutive first-attempt green nightlies after merge (Android 9/9).

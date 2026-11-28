@@ -4,6 +4,8 @@ appId: com.pulsebayai.mouldtrack
 name: my-shift
 ---
 - launchApp: { clearState: true }
+# Cold launch after clearState can exceed Maestro's ~17 s implicit wait on the software-GPU emulator (nightlies 45934867345, 46101637456).
+- extendedWaitUntil: { visible: { id: "phone" }, timeout: 60000 }
 - tapOn: { id: "phone" }
 - inputText: "9000000002"
 - tapOn: { id: "password" }
